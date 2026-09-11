@@ -1,0 +1,33 @@
+# ===== 仓库结构：Go 网关源码在仓库根目录 =====
+# 本地工作区中的旧 Rust 版/前端/文档/脚本/备份均不入库
+
+# 旧版与前端（本地保留，不入库）
+/aqua-server/
+/aqua-frontend/
+/docs/
+/scripts/
+/node_modules/
+
+# 运维敏感目录（密钥/脚本/备份/文档）
+/private/
+
+# 本地临时与备份
+/.tmp/
+/.tools/
+/_del_tmp/
+/legacy-git-backup/
+/legacy-git-backup-2/
+*.log
+
+# 构建产物
+aqua-linux
+/bin/
+/dist/
+
+# 本地环境与数据
+.env
+config.toml
+/data/
+*.db
+*.db-shm
+*.db-wal
