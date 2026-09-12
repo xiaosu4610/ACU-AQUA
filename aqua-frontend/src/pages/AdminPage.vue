@@ -901,8 +901,14 @@ const streamModeLabel: Record<string, string> = {
       <!-- ▼ 系统更新 ▼ -->
       <div v-else-if="view === 'update'" class="adm-view">
         <p v-if="updateMsg" class="adm-msg" :class="{ ok: updateMsgOk, bad: !updateMsgOk }">{{ updateMsg }}</p>
-        <p v-if="!update" class="adm-msg bad">
-          无法连接更新源（上方为具体错误）。海外服务器访问 gitee 常被 CDN 拦截：请在网关 config [update] 配置 proxy 代理或 api_base 国内跳板，详见《管理后台与自动更新指南》2.4 节。
+        <!-- 检查中：加载动画（双源并发最长约 5 秒） -->
+        <div v-if="loadingUpdate" class="adm-loading" role="status" aria-live="polite">
+          <span class="spin" aria-hidden="true"></span>
+          <span>正在检查更新源：gitee 主仓库 + github 镜像双源并发，通常 1-5 秒…</span>
+        </div>
+        <!-- 检查失败（仅在请求异常时出现） -->
+        <p v-else-if="!update" class="adm-msg bad">
+          无法连接更新源（上方为具体错误）。请检查网络；海外服务器访问 gitee 常被 CDN 拦截，可按《管理后台与自动更新指南》2.4 节配置 proxy 或 api_base。
         </p>
         <p v-else-if="!update.update_enabled" class="adm-msg">
           在线更新未启用：需在网关配置 <code>[update]</code> 段设置 <code>repo</code> 并开启 <code>enabled = true</code>，详见《管理后台与自动更新指南》。
@@ -916,6 +922,10 @@ const streamModeLabel: Record<string, string> = {
               · github 镜像 {{ update.mirror_repo }}（{{ update.sources?.github?.ok ? '可达' : '不可达' }})
             </span>
             <span>附件 {{ update.asset_name }} · 发版方式：构建提交进仓库 assets/ 目录并打 tag push（gitee 自动同步 github）</span>
+            <div class="adm-card-foot">
+              <button class="mini-btn" :disabled="loadingUpdate" @click="loadUpdate">重新检查</button>
+              <span class="dim">刚发完版请等几分钟，github 镜像同步 tag 有延迟</span>
+            </div>
           </div>
         </div>
         <div class="adm-cards">
@@ -1124,7 +1134,9 @@ const streamModeLabel: Record<string, string> = {
 .adm-msg { font-size: 12.5px; margin: 8px 0; }
 .adm-msg.bad { color: #f87171; }
 .adm-msg.ok { color: #34d399; }
-.adm-loading { font-size: 12px; color: var(--muted, #8a94a6); background: none; border: none; }
+.adm-loading { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted, #8a94a6); background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 8px 0; }
+.adm-loading .spin { width: 16px; height: 16px; flex: none; border: 2.5px solid var(--border, rgba(128,140,160,.3)); border-top-color: var(--accent, #0b6cff); border-radius: 50%; animation: adm-spin .8s linear infinite; }
+@keyframes adm-spin { to { transform: rotate(360deg); } }
 
 /* 弹窗 */
 .adm-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }

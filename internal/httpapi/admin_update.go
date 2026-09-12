@@ -115,7 +115,7 @@ func (a *App) fetchGiteeReleases(repo, token string) []giteeRelease {
 	if token != "" {
 		u += "&access_token=" + token
 	}
-	resp, err := a.updateHTTPClient(8 * time.Second).Get(u)
+	resp, err := a.updateHTTPClient(4 * time.Second).Get(u) // 海外被拦时 TLS 挂死，4 秒足以断定
 	if err != nil {
 		return nil
 	}
@@ -190,8 +190,22 @@ func (a *App) handleAdminUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	hc := make(chan ghRes, 1)
 	go func() { rels := a.fetchGiteeReleases(repo, token); gc <- giteeRes{rels, rels != nil} }()
 	go func() { tags := a.fetchGithubTags(mirrorRepo); hc <- ghRes{tags, tags != nil} }()
-	gr := <-gc
-	hr := <-hc
+	// 双源并发，但整体最多等 5 秒：到点未返回的源按不可达（ok=false）处理，
+	// 避免被拦源（TLS 挂死）拖住整个检查接口导致前端长时间白屏
+	var gr giteeRes
+	var hr ghRes
+	gotG, gotH := false, false
+	deadline := time.After(5 * time.Second)
+	for !(gotG && gotH) {
+		select {
+		case gr = <-gc:
+			gotG = true
+		case hr = <-hc:
+			gotH = true
+		case <-deadline:
+			gotG, gotH = true, true // 超时的源保持零值：rels/tags 为 nil、ok=false
+		}
+	}
 
 	// 合并：tag → 条目（gitee release 元数据优先，github tags 补充版本）
 	byTag := map[string]*relItem{}
