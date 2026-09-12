@@ -3,12 +3,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"acu-aqua/gateway/internal/auth"
+	"acu-aqua/gateway/internal/billing"
 	"acu-aqua/gateway/internal/config"
 	"acu-aqua/gateway/internal/upstream"
 )
@@ -24,11 +26,92 @@ func (a *App) Routes() http.Handler {
 		// （旧网关目录含免费模型 + 收费模型 + 活动价状态，与前端展示完全一致）
 		mux.HandleFunc("GET /v1/models", a.handleModels)
 	}
+	mux.HandleFunc("GET /v1/models/{id}", a.handleModelDetail)
+	mux.HandleFunc("GET /v1/models/{id}/{rest...}", a.handleModelDetail)
 	mux.HandleFunc("POST /v1/chat/completions", a.handleChat)
 	mux.HandleFunc("POST /v1/images/generations", a.handleImages)
 	mux.HandleFunc("GET /v1/images/file/{id}", a.handleImageFile)
 
-	// 用户面
+	// 扩展能力端点（embeddings / rerank / moderations / audio / videos）
+	mux.HandleFunc("POST /v1/embeddings", a.handleEmbeddings)
+	mux.HandleFunc("POST /v1/rerank", a.handleRerank)
+	mux.HandleFunc("POST /v1/moderations", a.handleModerations)
+	mux.HandleFunc("POST /v1/audio/speech", a.handleAudioSpeech)
+	mux.HandleFunc("POST /v1/audio/transcriptions", a.handleAudioTranscriptions)
+	mux.HandleFunc("POST /v1/videos/generations", a.handleVideos)
+
+	// 公开数据端点
+	mux.HandleFunc("GET /v1/stats", a.handleStats)
+
+	// 竞技场（盲测对决 / 投票 / 排行榜）
+	mux.HandleFunc("POST /v1/arena", a.handleArena)
+	mux.HandleFunc("POST /v1/arena/vote", a.handleVote)
+	mux.HandleFunc("GET /v1/arena/leaderboard", a.handleLeaderboard)
+
+	// 工具箱（树洞 / 提示词工坊 / 站内 AI 工具通道 / 本地工具 / 短链 / Webhook）
+	mux.HandleFunc("POST /v1/tools/treehole", a.handleTreehole)
+	mux.HandleFunc("GET /v1/tools/treehole/prompt", a.handleTreeholePrompt)
+	mux.HandleFunc("GET /v1/tools/prompts", a.handlePrompts)
+	mux.HandleFunc("POST /v1/tools/chat", a.handleToolsChat)
+	mux.HandleFunc("POST /v1/tools/translate", a.handleTranslate)
+	mux.HandleFunc("POST /v1/tools/url-summary", a.handleURLSummary)
+	mux.HandleFunc("POST /v1/tools/text-stats", a.handleToolTextStats)
+	mux.HandleFunc("POST /v1/tools/token-count", a.handleToolTokenCount)
+	mux.HandleFunc("POST /v1/tools/hash", a.handleToolHash)
+	mux.HandleFunc("POST /v1/tools/password", a.handleToolPassword)
+	mux.HandleFunc("POST /v1/tools/subnet", a.handleToolSubnet)
+	mux.HandleFunc("POST /v1/tools/json", a.handleToolJSON)
+	mux.HandleFunc("POST /v1/tools/regex", a.handleToolRegex)
+	mux.HandleFunc("POST /v1/tools/color", a.handleToolColor)
+	mux.HandleFunc("POST /v1/tools/url-code", a.handleToolURLCode)
+	mux.HandleFunc("POST /v1/tools/base64", a.handleToolBase64)
+	mux.HandleFunc("POST /v1/tools/dice", a.handleToolDice)
+	mux.HandleFunc("POST /v1/tools/timestamp", a.handleToolTimestampPost)
+	mux.HandleFunc("GET /v1/tools/timestamp", a.handleToolTimestampGet)
+	mux.HandleFunc("GET /v1/tools/uuid", a.handleToolUUID)
+	mux.HandleFunc("POST /v1/tools/uuid-bulk", a.handleToolUUIDBulk)
+	mux.HandleFunc("POST /v1/tools/shorten", a.handleToolShorten)
+	mux.HandleFunc("GET /s/{id}", a.handleShortRedirect)
+	mux.HandleFunc("POST /v1/tools/webhook", a.handleToolWebhook)
+	mux.HandleFunc("/hook/{id}", a.handleHookCollect)
+
+	// IP 定位
+	mux.HandleFunc("POST /v1/ip_location", a.handleIPLocation)
+
+	// 用户认证（前端 SPA 契约路径 /v1/auth/*）
+	mux.HandleFunc("POST /v1/auth/login", a.authLogin)
+	mux.HandleFunc("POST /v1/auth/logout", a.authLogout)
+	mux.HandleFunc("GET /v1/auth/me", a.authMe)
+	mux.HandleFunc("POST /v1/auth/register", a.authRegister)
+	mux.HandleFunc("POST /v1/auth/send-code", a.authSendCode)
+	mux.HandleFunc("POST /v1/auth/forgot", a.authForgot)
+	mux.HandleFunc("POST /v1/auth/reset", a.authReset)
+	mux.HandleFunc("POST /v1/auth/password", a.authPassword)
+	mux.HandleFunc("POST /v1/auth/profile", a.authProfile)
+	mux.HandleFunc("GET /v1/auth/avatar/{id}", a.authAvatar)
+
+	// 用户控制台数据（/v1/my/*）
+	mux.HandleFunc("GET /v1/my/balance", a.myBalance)
+	mux.HandleFunc("GET /v1/my/balance-alert", a.myBalanceAlertGet)
+	mux.HandleFunc("POST /v1/my/balance-alert", a.myBalanceAlertSet)
+	mux.HandleFunc("GET /v1/my/keys", a.myKeysGet)
+	mux.HandleFunc("POST /v1/my/keys", a.myKeysCreate)
+	mux.HandleFunc("DELETE /v1/my/keys/{id}", a.myKeysDelete)
+	mux.HandleFunc("GET /v1/my/keys/{id}/reveal", a.myKeysReveal)
+	mux.HandleFunc("GET /v1/my/usage", a.myUsage)
+	mux.HandleFunc("GET /v1/my/history", a.myHistory)
+	mux.HandleFunc("GET /v1/my/billing", a.myBilling)
+	mux.HandleFunc("GET /v1/my/checkup", a.myCheckup)
+	mux.HandleFunc("POST /v1/my/avatar", a.authAvatarUpload)
+
+	// 充值（易支付）
+	mux.HandleFunc("GET /v1/pay/orders", a.payOrders)
+	mux.HandleFunc("POST /v1/pay/create", a.payCreate)
+	mux.HandleFunc("GET /v1/pay/status", a.payStatus)
+	mux.HandleFunc("POST /v1/pay/notify", a.payNotify)
+	mux.HandleFunc("GET /v1/pay/notify", a.payNotify)
+
+	// 用户面（Go 过渡期路径 /v1/user/*，保留兼容）
 	mux.HandleFunc("POST /v1/user/register", a.handleRegister)
 	mux.HandleFunc("POST /v1/user/login", a.handleLogin)
 	mux.HandleFunc("POST /v1/user/logout", a.handleLogout)
@@ -38,27 +121,56 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/user/keys", a.handleListKeys)
 	mux.HandleFunc("DELETE /v1/user/keys/{id}", a.handleRevokeKey)
 
-	// 其余全部反代旧网关（免费线/usage/hooks/pay/auth/my/admin 等，绞杀者迁移）。
-	// 注意：管理后台（/v1/admin/*）整体由旧网关承接——前端管理页的响应形状
-	// （core/ledger/summary、page 分页、quota/audit/supervision/reconcile）与
-	// Rust 版强耦合，待按其真实响应形状精确移植后再接管，避免后台不可用。
+	// —— 管理后台 /v1/admin/*（Go 原生，响应形状对齐 Rust 版）——
+	// 单密码模型 + adm_ 令牌独立会话 + 高危操作二次密码 + SHA-256 哈希链审计
+	mux.HandleFunc("POST /v1/admin/login", a.handleAdminLogin)
+	mux.HandleFunc("POST /v1/admin/logout", a.handleAdminLogout)
+	mux.HandleFunc("GET /v1/admin/stats", a.handleAdminStats)
+	mux.HandleFunc("GET /v1/admin/users", a.handleAdminUsers)
+	mux.HandleFunc("GET /v1/admin/users/{uid}", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserDetail(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("POST /v1/admin/users/{uid}/balance", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserBalance(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("GET /v1/admin/quota", a.handleAdminQuota)
+	mux.HandleFunc("POST /v1/admin/quota/topup", a.handleAdminQuotaTopup)
+	mux.HandleFunc("POST /v1/admin/quota/circuit", a.handleAdminQuotaCircuit)
+	mux.HandleFunc("POST /v1/admin/quota/sync", a.handleAdminQuotaSync)
+	mux.HandleFunc("GET /v1/admin/audit", a.handleAdminAudit)
+	mux.HandleFunc("GET /v1/admin/reconcile", a.handleAdminReconcile)
+	mux.HandleFunc("GET /v1/admin/supervision", a.handleAdminSupervision)
+	// 系统更新（gitee 发行版源；config [update] enabled=true 才开放）
+	mux.HandleFunc("GET /v1/admin/update/check", a.handleAdminUpdateCheck)
+	mux.HandleFunc("POST /v1/admin/update/apply", a.handleAdminUpdateApply)
+
+	// 其余全部反代旧网关（绞杀者迁移残留；纯 Go 单体模式下未注册路径 404）
 	mux.HandleFunc("/", a.handleLegacy)
 	return accessLog(corsGate(mux))
 }
 
-// corsGate CORS 门卫：Go 原生路由注入 CORS 头（与 Rust 版口径一致：
-// allow-origin * / GET,POST,DELETE,OPTIONS / Authorization,Content-Type,x-api-key）。
-// 反代路径由旧网关自带回 CORS 头，此处不注入，避免重复头被浏览器拒绝。
-// OPTIONS 预检请求方法不匹配原生路由 → 落入 catch-all 反代旧网关应答（Rust 全局处理 OPTIONS）。
+// corsGate CORS 门卫：
+// 1. OPTIONS 预检全局应答（204 + CORS 头）——跨域 SPA 依赖预检放行。
+// 2. 全部响应注入 CORS 头（单一来源）。
+// ⚠️ 必须走 mux.ServeHTTP 而非 mux.Handler(r)+手动调用：后者绕过 Go 1.22
+//    ServeMux 的路径参数注入（r.matches 私有字段仅 ServeMux.ServeHTTP 设置），
+//    导致所有 {id} 路径参数为空——reveal/吊销/头像等带参数端点全线 404。
+//    反代响应中的上游 CORS 头由 ReverseProxy ModifyResponse 剥除，避免重复。
 func corsGate(mux *http.ServeMux) http.Handler {
+	cors := func(w http.ResponseWriter) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-api-key")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h, pattern := mux.Handler(r)
-		if pattern != "/" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-api-key")
+		if r.Method == http.MethodOptions {
+			cors(w)
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
-		h.ServeHTTP(w, r)
+		cors(w)
+		mux.ServeHTTP(w, r)
 	})
 }
 
@@ -157,10 +269,41 @@ func upstreamErrOut(w http.ResponseWriter, upstreamStatus int, body []byte) {
 	}
 }
 
-// handleStatus 存活探测
+// handleStatus 存活探测 + 状态透明页（全模型近 1 小时成功率 / 延迟）
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, 200, map[string]any{"ok": true, "service": "aqua-gateway-go"})
+	since := time.Now().Unix() - 3600
+	models := []map[string]any{}
+	rows, err := a.DB.Query(
+		`SELECT model, COUNT(*) calls, SUM(ok)*1.0/COUNT(*) succ, COALESCE(AVG(latency_ms),0) lat
+		 FROM model_health WHERE ts>=? GROUP BY model ORDER BY calls DESC`, since)
+	if err == nil {
+		for rows.Next() {
+			var model string
+			var calls int64
+			var succ, lat float64
+			if rows.Scan(&model, &calls, &succ, &lat) == nil {
+				models = append(models, map[string]any{
+					"model": model, "calls_1h": calls,
+					"success_rate":   round1(succ * 100),
+					"avg_latency_ms": round1(lat),
+				})
+			}
+		}
+		rows.Close()
+	}
+	jsonOut(w, 200, map[string]any{
+		"ok":         true,
+		"service":    "aqua-gateway-go",
+		"version":    gatewayVersion,
+		"uptime_sec": time.Now().Unix() - startTime.Unix(),
+		"window":     "1h",
+		"models":     models,
+	})
 }
+
+// gatewayVersion 网关版本（/status 展示；构建时可注入：
+// go build -ldflags "-X acu-aqua/gateway/internal/httpapi.gatewayVersion=v2026.09.12"）
+var gatewayVersion = "go-2026.09"
 
 // handleMeta 站点信息（前端渲染源，全部来自配置——代码零运营事实）
 func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -173,46 +316,122 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleModels 模型列表（价格展示；成本率绝不出现）
+// handleModels 模型列表（价格展示；成本率绝不出现）。
+// 组成：auto 置顶 + 收费线（paid:true + 实时价目）+ 免费线（无 paid → 前端标免费）+ 动态目录。
+// 用户组差异化：VIP 用户（price_grp_call/token='vip'）在 normal 价已下架时回退 vip 组价目——
+// 已下架模型对 VIP 仍可见可用；普通用户仅见当前生效价的模型。
 func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
-	actx := auth.Authenticate(a.DB.DB, r)
-	var data []map[string]any
+	actx := auth.Authenticate(a.DB.DB, r) // 公开端点：无凭据时按普通口径
+	created := time.Now().Unix()
+	data := a.modelListEntries(actx, created)
+	jsonOut(w, 200, map[string]any{"object": "list", "created": created, "data": data})
+}
+
+// modelListEntries 全量模型条目（/v1/models 与 /v1/models/{id} 共用）
+func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
+	data := []map[string]any{{
+		"id": "auto", "object": "model", "created": created, "owned_by": "acu",
+		"auto":        true,
+		"description": "智能自动路由：每次请求实时选择当前成功率最高、响应最快的模型，快与稳优先，不保证每次命中同一模型",
+	}}
+
+	health := a.computeHealth()
+	retired := a.retiredUpstreams()
+
+	// 收费线：实时价目（DB pricing 表为准）；下架（normal 价过期）即从列表消失，VIP 回退 vip 组
 	for i := range a.Cfg.Lines {
 		l := &a.Cfg.Lines[i]
-		grp := "normal"
-		if actx != nil {
-			grp = a.userGrpFor(actx.UserID, l.Mode)
+		if l.Mode == "free" {
+			continue
 		}
+		vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
 		for j := range l.Models {
 			m := &l.Models[j]
 			full := config.ModelFullName(l.ID, m.SiteID)
-			// 实时价格：仅列出当前生效价的模型——下架（pricing 行过期）即从列表消失
-			pricing := a.pricingFor(full, grp)
-			if pricing == nil {
+			p := a.pricingFor(full, "normal")
+			if p == nil && vip {
+				// VIP：normal 价已下架 → 回退 vip 组价目（vip 价目永久生效）
+				p = a.pricingFor(full, "vip")
+			}
+			if p == nil {
 				continue
 			}
 			item := map[string]any{
-				"id": full, "object": "model", "owned_by": l.ID, "mode": l.Mode,
+				"id": full, "object": "model", "created": created, "owned_by": "acu",
+				"paid":        true,
+				"mode":        p.Mode,
+				"price_micro": p.PriceMicro,
+				"description": pricingDescription(m, p),
 			}
-			{
-				if pricing.Mode == "per_token" {
-					item["in_price"] = float64(pricing.InRate10) / 10000
-					item["cache_price"] = float64(pricing.CacheRate10) / 10000
-					item["out_price"] = float64(pricing.OutRate10) / 10000
-					item["price_micro"] = pricing.PriceMicro
-					item["floor_micro"] = pricing.FloorMicro
-				} else {
-					item["price_micro"] = pricing.PriceMicro
-					if m.Image {
-						item["image"] = true
-						item["per_image"] = pricing.PriceMicro
-					}
-				}
+			if p.Mode == "per_token" {
+				item["floor_micro"] = p.FloorMicro
+				item["in_price"] = float64(p.InRate10) / 10000
+				item["cache_price"] = float64(p.CacheRate10) / 10000
+				item["out_price"] = float64(p.OutRate10) / 10000
+			}
+			if m.Image {
+				item["image"] = true
+				item["per_image"] = p.PriceMicro
 			}
 			data = append(data, item)
 		}
 	}
-	jsonOut(w, 200, map[string]any{"object": "list", "data": data})
+
+	// 免费线：全部模型列出（上游永久下线的隐藏）+ 动态目录
+	for i := range a.Cfg.Lines {
+		l := &a.Cfg.Lines[i]
+		if l.Mode != "free" {
+			continue
+		}
+		configured := map[string]bool{}
+		for j := range l.Models {
+			m := &l.Models[j]
+			configured[strings.ToLower(m.SiteID)] = true
+			if retired[m.UpstreamID] {
+				continue // 上游永久下线（404/410 两次确认）：隐藏
+			}
+			item := map[string]any{"id": m.SiteID, "object": "model", "created": created, "owned_by": l.ID}
+			if h, ok := health[m.SiteID]; ok {
+				item["health"] = h
+			}
+			data = append(data, item)
+		}
+		if l.Dynamic {
+			for _, item := range a.dynamicModels(l.ID, configured, retired) {
+				if h, ok := health[item["id"].(string)]; ok {
+					item["health"] = h
+				}
+				data = append(data, item)
+			}
+		}
+	}
+	return data
+}
+
+// pricingDescription 收费模型对外计费说明（不含成本/通道/折扣率字样）
+func pricingDescription(m *config.Model, p *billing.PricingInfo) string {
+	if p.Mode == "per_token" {
+		return fmt.Sprintf(
+			"按量计费：输入 %s / 缓存命中 %s / 输出 %s 元每百万 tokens（先付后用：余额充足方可调用，可在请求中调小 max_tokens 降低单次预扣，单次保底 %s 元）",
+			trimPrice(float64(p.InRate10)/10000), trimPrice(float64(p.CacheRate10)/10000),
+			trimPrice(float64(p.OutRate10)/10000), microToYuanStr(p.FloorMicro))
+	}
+	if m.Image {
+		return fmt.Sprintf("%s 元/张，按张计费（先付后用，n 参数控制张数）", microToYuanStr(p.PriceMicro))
+	}
+	return fmt.Sprintf("预充值按次计费：%s 元/次（先付后用：余额充足方可调用）", microToYuanStr(p.PriceMicro))
+}
+
+// trimPrice 价格显示：0.0500 → "0.05"（去尾零）
+func trimPrice(v float64) string {
+	s := fmt.Sprintf("%.4f", v)
+	s = strings.TrimRight(s, "0")
+	return strings.TrimRight(s, ".")
+}
+
+// microToYuanStr 微元 → 元字符串（去尾零）
+func microToYuanStr(micro int64) string {
+	return trimPrice(float64(micro) / 1_000_000)
 }
 
 // bearerToken 提取 Authorization: Bearer xxx

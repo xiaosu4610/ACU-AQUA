@@ -47,13 +47,14 @@ type Model struct {
 
 // Line 一条上游线：独立的转发 + 计费体系。新增上游 = 追加一个 [[lines]] 块。
 type Line struct {
-	ID           string   `toml:"id"`   // 线标识（对应模型前缀 line-id/model）
+	ID           string   `toml:"id"`   // 线标识（收费线模型形如 line-id/model；免费线模型为裸 site_id）
 	Name         string   `toml:"name"` // 展示名
-	Mode         string   `toml:"mode"` // per_call | per_token
+	Mode         string   `toml:"mode"` // per_call | per_token | free（免费线：不计费不预扣，仅转发记账）
 	BaseURL      string   `toml:"base_url"`
 	Keys         []string `toml:"keys"`
 	AuthStyle    string   `toml:"auth_style"`     // bearer | x-api-key
 	KeyFaceMicro int64    `toml:"key_face_micro"` // 每把密钥面值（微元，面值台账用；0=不限）
+	Dynamic      bool     `toml:"dynamic"`        // 免费线：启用动态目录（nvidia_models 表，自动同步上游新模型）
 	// vip 折扣 = 普通售价 × VipNum/VipDen（分数表达，整数可除零精度损失）
 	VipNum  int64    `toml:"vip_multiplier_num"`
 	VipDen  int64    `toml:"vip_multiplier_den"`
@@ -68,11 +69,41 @@ type Server struct {
 	LegacyUpstreamURL string `toml:"legacy_upstream_url"`
 }
 
+// SMTP 邮箱验证码发信（注册/找回密码）
+type SMTP struct {
+	Host string `toml:"host"` // 如 smtpdm.aliyun.com
+	Port int    `toml:"port"` // 通常 465（隐式 TLS）
+	User string `toml:"user"` // 发信账号
+	Pass string `toml:"pass"` // 发信密码/授权码
+	From string `toml:"from"` // 发件人显示（默认同 User）
+}
+
+// EPay 易支付（充值渠道 V1，MD5 签名）
+type EPay struct {
+	Gateway    string `toml:"gateway"`     // 如 https://xnoo.cn
+	PID        string `toml:"pid"`         // 商户 ID
+	Key        string `toml:"key"`         // 商户密钥
+	NotifyBase string `toml:"notify_base"` // 回调域名（如 https://acu.example.com）
+	ReturnBase string `toml:"return_base"` // 支付完成跳转域名
+}
+
+// Update 系统自动更新（gitee 发行版源；管理后台"系统更新"视图使用）
+type Update struct {
+	Repo      string `toml:"repo"`       // gitee 仓库，如 xiaosu4610/acu-aqua
+	Token     string `toml:"token"`      // 私有仓库访问令牌（公开仓库可空）
+	AssetName string `toml:"asset_name"` // 发行版附件名（linux-amd64 二进制），默认 aqua-gateway-go-linux-amd64
+	Service   string `toml:"service"`    // systemd 服务名（更新后自重启），默认 aqua-gateway-go
+	Enabled   bool   `toml:"enabled"`    // 是否启用在线更新入口（默认关；启用后管理后台才显示检查更新）
+}
+
 // Cfg 顶层配置
 type Cfg struct {
 	Site     Site     `toml:"site"`
 	Database Database `toml:"database"`
 	Server   Server   `toml:"server"`
+	SMTP     SMTP     `toml:"smtp"`
+	EPay     EPay     `toml:"epay"`
+	Update   Update   `toml:"update"`
 	Lines    []Line   `toml:"lines"`
 }
 
@@ -129,6 +160,48 @@ func applyEnv(c *Cfg) {
 	if v := os.Getenv("AQUA_SITE_QQ_GROUP_URL"); v != "" {
 		c.Site.QQGroupURL = v
 	}
+	if v := os.Getenv("AQUA_SMTP_HOST"); v != "" {
+		c.SMTP.Host = v
+	}
+	if v := os.Getenv("AQUA_SMTP_USER"); v != "" {
+		c.SMTP.User = v
+	}
+	if v := os.Getenv("AQUA_SMTP_PASS"); v != "" {
+		c.SMTP.Pass = v
+	}
+	if n := envInt("AQUA_SMTP_PORT", 0); n > 0 {
+		c.SMTP.Port = int(n)
+	}
+	if v := os.Getenv("AQUA_EPAY_GATEWAY"); v != "" {
+		c.EPay.Gateway = v
+	}
+	if v := os.Getenv("AQUA_EPAY_PID"); v != "" {
+		c.EPay.PID = v
+	}
+	if v := os.Getenv("AQUA_EPAY_KEY"); v != "" {
+		c.EPay.Key = v
+	}
+	if v := os.Getenv("AQUA_EPAY_NOTIFY_BASE"); v != "" {
+		c.EPay.NotifyBase = v
+	}
+	if v := os.Getenv("AQUA_EPAY_RETURN_BASE"); v != "" {
+		c.EPay.ReturnBase = v
+	}
+	if v := os.Getenv("AQUA_UPDATE_REPO"); v != "" {
+		c.Update.Repo = v
+	}
+	if v := os.Getenv("AQUA_UPDATE_TOKEN"); v != "" {
+		c.Update.Token = v
+	}
+	if v := os.Getenv("AQUA_UPDATE_ASSET_NAME"); v != "" {
+		c.Update.AssetName = v
+	}
+	if v := os.Getenv("AQUA_UPDATE_SERVICE"); v != "" {
+		c.Update.Service = v
+	}
+	if v := os.Getenv("AQUA_UPDATE_ENABLED"); v == "1" || strings.EqualFold(v, "true") {
+		c.Update.Enabled = true
+	}
 }
 
 // validate 配置合法性校验
@@ -152,8 +225,8 @@ func (c *Cfg) validate() error {
 		if l.BaseURL == "" {
 			return fmt.Errorf("line %s 缺少 base_url", l.ID)
 		}
-		if l.Mode != "per_call" && l.Mode != "per_token" {
-			return fmt.Errorf("line %s mode 必须是 per_call 或 per_token", l.ID)
+		if l.Mode != "per_call" && l.Mode != "per_token" && l.Mode != "free" {
+			return fmt.Errorf("line %s mode 必须是 per_call、per_token 或 free", l.ID)
 		}
 		if l.AuthStyle == "" {
 			l.AuthStyle = "bearer"
@@ -196,6 +269,44 @@ func SplitModel(full string) (lineID, siteID string, ok bool) {
 		return "", "", false
 	}
 	return full[:i], full[i+1:], true
+}
+
+// FindFreeModel 跨免费线按裸 site_id 查模型（大小写不敏感；免费模型无 line-id/ 前缀）
+func (c *Cfg) FindFreeModel(siteID string) (*Line, *Model) {
+	for i := range c.Lines {
+		l := &c.Lines[i]
+		if l.Mode != "free" {
+			continue
+		}
+		for j := range l.Models {
+			if strings.EqualFold(l.Models[j].SiteID, siteID) {
+				return l, &l.Models[j]
+			}
+		}
+	}
+	return nil, nil
+}
+
+// IsAutoModel auto 智能路由模型判定（含旧 ID 兼容）
+func IsAutoModel(m string) bool {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "auto", "acu/auto", "acu/auto-models":
+		return true
+	}
+	return false
+}
+
+// NormalizeModel 旧模型 ID → 新 ID 兼容：auto 特例 + 去首个「厂商/」前缀段 + 全小写
+// （例：zhipu/glm-4-flash → glm-4-flash；仅用于免费模型，收费线走 SplitModel）
+func NormalizeModel(m string) string {
+	t := strings.TrimSpace(m)
+	if IsAutoModel(t) {
+		return "auto"
+	}
+	if i := strings.IndexByte(t, '/'); i >= 0 {
+		return strings.ToLower(t[i+1:])
+	}
+	return strings.ToLower(t)
 }
 
 // envInt 环境变量读整数（内部工具）

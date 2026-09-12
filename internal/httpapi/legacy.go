@@ -30,10 +30,19 @@ func initLegacy(base string) {
 			pr.Out.Host = u.Host
 		},
 		FlushInterval: -1, // 流式响应逐写即时下发
+		// CORS 单一来源在外层 corsGate：剥上游 CORS 头，防止重复头被浏览器拒绝
+		ModifyResponse: func(resp *http.Response) error {
+			for k := range resp.Header {
+				if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+					resp.Header.Del(k)
+				}
+			}
+			return nil
+		},
 		Transport: &http.Transport{
-			MaxIdleConns:        64,
-			MaxIdleConnsPerHost: 64,
-			IdleConnTimeout:     90 * time.Second,
+			MaxIdleConns:          64,
+			MaxIdleConnsPerHost:   64,
+			IdleConnTimeout:       90 * time.Second,
 			ResponseHeaderTimeout: 660 * time.Second,
 		},
 	}
@@ -48,7 +57,7 @@ func (a *App) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	legacyProxy.ServeHTTP(w, r)
 }
 
-// proxyChat 非收费模型（无 line-id/ 前缀）整请求转发旧网关（免费线由 Rust 继续承接）
+// proxyChat 非收费模型（绞杀者模式下）整请求转发旧网关（免费线由 Rust 继续承接）
 func (a *App) proxyChat(w http.ResponseWriter, r *http.Request, body []byte) {
 	if legacyProxy == nil {
 		errOut(w, 404, "model_not_found", "模型不存在：" + readModelName(body))

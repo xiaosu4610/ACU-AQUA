@@ -21,8 +21,12 @@
 
 # 构建产物
 aqua-linux
+aqua-linux-new
+aqua-gateway-go-linux
+aqua-gateway-go-linux-amd64
 /bin/
 /dist/
+/internal/httpapi/data/
 
 # 本地环境与数据
 .env

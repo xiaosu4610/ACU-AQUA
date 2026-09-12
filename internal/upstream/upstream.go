@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -175,11 +176,22 @@ type Client struct {
 }
 
 // NewClient 构造上游客户端
+// 连接/TLS 快速失败：上游 CDN 拦截（TLS 握手挂死）场景 10 秒内报错进入重试/冷却，
+// 而非拖满整段请求超时
 func NewClient(l *config.Line) *Client {
 	return &Client{
 		Line: l,
 		Pool: NewKeyPool(l.Keys, l.KeyFaceMicro, 300),
-		HTTP: &http.Client{Timeout: 300 * time.Second},
+		HTTP: &http.Client{
+			Timeout: 300 * time.Second,
+			Transport: &http.Transport{
+				DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				TLSHandshakeTimeout: 10 * time.Second,
+				MaxIdleConns:        64,
+				MaxIdleConnsPerHost: 16,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}
 }
 

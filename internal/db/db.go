@@ -82,7 +82,6 @@ func InitTables(d *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_bflows_req ON balance_flows(request_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_bflows_type_ts ON balance_flows(type, ts)`,
 		`CREATE TABLE IF NOT EXISTS requests (
-			rowid_ INTEGER PRIMARY KEY AUTOINCREMENT,
 			key_hash TEXT NOT NULL DEFAULT '',
 			endpoint TEXT NOT NULL DEFAULT '',
 			model TEXT NOT NULL DEFAULT '',
@@ -138,8 +137,66 @@ func InitTables(d *sql.DB) error {
 			amount_micro INTEGER NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
 			out_trade_no TEXT NOT NULL DEFAULT '',
+			channel TEXT NOT NULL DEFAULT '',
+			trade_no TEXT NOT NULL DEFAULT '',
+			ip TEXT NOT NULL DEFAULT '',
 			created_ts INTEGER NOT NULL,
 			paid_ts INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS email_codes (
+			email TEXT NOT NULL,
+			purpose TEXT NOT NULL,
+			code TEXT NOT NULL,
+			fails INTEGER NOT NULL DEFAULT 0,
+			expire_ts INTEGER NOT NULL,
+			PRIMARY KEY (email, purpose))`,
+		// —— 免费线三表（与 Rust 版同构，生产库已存在，此处仅兜底新建）——
+		`CREATE TABLE IF NOT EXISTS model_health (
+			model TEXT NOT NULL,
+			ts INTEGER NOT NULL,
+			ok INTEGER NOT NULL,
+			err_type TEXT NOT NULL DEFAULT '',
+			status_code INTEGER NOT NULL DEFAULT 0,
+			latency_ms INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE INDEX IF NOT EXISTS idx_mhealth_model_ts ON model_health(model, ts)`,
+		`CREATE TABLE IF NOT EXISTS retired_models (
+			model TEXT PRIMARY KEY,
+			retired_ts INTEGER NOT NULL,
+			hits INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS nvidia_models (
+			id TEXT PRIMARY KEY,
+			upstream_id TEXT NOT NULL DEFAULT '',
+			ts INTEGER NOT NULL)`,
+		// —— 工具/竞技场五表（与 Rust 版同构，生产库已存在，此处仅兜底新建）——
+		`CREATE TABLE IF NOT EXISTS arena_battles (
+			id TEXT PRIMARY KEY, model_a TEXT NOT NULL, model_b TEXT NOT NULL, ts INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS arena_votes (
+			battle_id TEXT UNIQUE NOT NULL, model_a TEXT NOT NULL, model_b TEXT NOT NULL,
+			winner TEXT NOT NULL, ts INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS shortlinks (
+			code TEXT PRIMARY KEY, url TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0,
+			created_ts INTEGER NOT NULL, last_hit_ts INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS hooks (id TEXT PRIMARY KEY, created_ts INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS hook_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, hook_id TEXT NOT NULL, method TEXT NOT NULL,
+			path TEXT DEFAULT '', headers TEXT DEFAULT '{}', body BLOB, ts INTEGER NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_hook_requests ON hook_requests(hook_id, ts)`,
+		// —— 管理后台：上游额度池（stats/quota/supervision 数据源，与 Rust 版同构）——
+		`CREATE TABLE IF NOT EXISTS upstream_quota (
+			provider TEXT PRIMARY KEY,
+			total_calls INTEGER NOT NULL DEFAULT 0,
+			used_calls INTEGER NOT NULL DEFAULT 0,
+			cost_per_call_micro INTEGER NOT NULL DEFAULT 0,
+			circuit_open INTEGER NOT NULL DEFAULT 0,
+			updated_ts INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS upstream_topups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL DEFAULT 'pool',
+			amount_micro INTEGER NOT NULL DEFAULT 0,
+			calls_added INTEGER NOT NULL DEFAULT 0,
+			total_before INTEGER NOT NULL DEFAULT 0,
+			total_after INTEGER NOT NULL DEFAULT 0,
+			note TEXT NOT NULL DEFAULT '',
+			ts INTEGER NOT NULL)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
@@ -155,6 +212,13 @@ func InitTables(d *sql.DB) error {
 		{"users", "price_grp_call", "TEXT NOT NULL DEFAULT 'normal'"},
 		{"users", "price_grp_token", "TEXT NOT NULL DEFAULT 'normal'"},
 		{"sessions", "last_seen_ts", "INTEGER NOT NULL DEFAULT 0"},
+		{"payments", "channel", "TEXT NOT NULL DEFAULT ''"},
+		{"payments", "trade_no", "TEXT NOT NULL DEFAULT ''"},
+		{"payments", "ip", "TEXT NOT NULL DEFAULT ''"},
+		{"payments", "fee_micro", "INTEGER NOT NULL DEFAULT 0"},
+		{"requests", "tide_face_micro", "INTEGER NOT NULL DEFAULT 0"},
+		{"admin_audit", "prev_hash", "TEXT NOT NULL DEFAULT 'GENESIS'"},
+		{"admin_audit", "self_hash", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range alters {
 		var n int

@@ -38,11 +38,11 @@ func NewPlainKey() string {
 	return "sk-" + hex.EncodeToString(b)
 }
 
-// NewSessionToken 生成用户会话令牌
+// NewSessionToken 生成用户会话令牌（sess_ + 64 hex，与 Rust 版 require_session 校验规则一致）
 func NewSessionToken() string {
-	b := make([]byte, 24)
+	b := make([]byte, 32)
 	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return "sess_" + hex.EncodeToString(b)
 }
 
 // Authenticate 从请求中解析凭证 → 鉴权。

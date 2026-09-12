@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"acu-aqua/gateway/internal/auth"
 	"acu-aqua/gateway/internal/config"
 	"acu-aqua/gateway/internal/db"
 	"acu-aqua/gateway/internal/seeding"
@@ -109,17 +111,20 @@ func TestFullFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. 模型列表：价格已播种（normal in 6 元/M）
+	// 3. 模型列表：auto 置顶 + 价格已播种（normal in 6 元/M）
 	rec, out = doJSON(t, h, "GET", "/v1/models", tok, nil)
 	if rec.Code != 200 {
 		t.Fatalf("models: %d", rec.Code)
 	}
 	data := out["data"].([]any)
-	if len(data) != 2 {
-		t.Fatalf("期望 2 个模型，得 %d", len(data))
+	if len(data) != 3 {
+		t.Fatalf("期望 3 个条目（auto + 2 模型），得 %d", len(data))
 	}
-	m := data[0].(map[string]any)
-	if m["id"] != "t/m1" || m["in_price"] != 6.0 {
+	if m := data[0].(map[string]any); m["id"] != "auto" || m["auto"] != true {
+		t.Fatalf("auto 条目缺失: %v", m)
+	}
+	m := data[1].(map[string]any)
+	if m["id"] != "t/m1" || m["in_price"] != 6.0 || m["paid"] != true {
 		t.Fatalf("模型信息错误: %v", m)
 	}
 
@@ -331,16 +336,462 @@ func TestCORSAndAdminProxy(t *testing.T) {
 		t.Fatalf("chat 原生路由缺 CORS 头: %v", rec.Header())
 	}
 
-	// admin 路径不再由 Go 承接 → 反代旧网关（mock 对未知路径回 404，证明未落 Go 原生处理）
+	// admin/login 已由 Go 原生接管：测试环境未配置 AQUA_ADMIN_PASSWORD_HASH
+	// → 503 admin_disabled（Rust 版同款语义）；CORS 头由 corsGate 统一注入
 	req = httptest.NewRequest("POST", "/v1/admin/login", strings.NewReader(`{"password":"x"}`))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 404 {
-		t.Fatalf("admin/login 应反代旧网关（mock 404），得 %d %s", rec.Code, rec.Body.String())
+	if rec.Code != 503 {
+		t.Fatalf("admin/login 应原生处理（未配密码 503），得 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("admin 响应应带统一 CORS 头: %v", rec.Header())
+	}
+}
+
+// TestOptionsPreflight P0 登录修复回归：OPTIONS 预检必须全局 204 + CORS 头。
+// 曾因预检落 catch-all 404 且无 CORS 头，浏览器拦截全部跨域请求（登录页"网络错误"）。
+// 预检走任意路径（含不存在的路径）都必须放行，不得进路由。
+func TestOptionsPreflight(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	h := app.Routes()
+
+	for _, path := range []string{
+		"/v1/auth/login", "/v1/my/keys", "/v1/pay/create",
+		"/v1/not-exist-at-all", "/", "/v1/chat/completions",
+	} {
+		req := httptest.NewRequest("OPTIONS", path, nil)
+		req.Header.Set("Origin", "https://acu.ltzy.top")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		req.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 204 {
+			t.Fatalf("OPTIONS %s 应 204，得 %d", path, rec.Code)
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatalf("OPTIONS %s 缺 Allow-Origin: %v", path, rec.Header())
+		}
+		if rec.Header().Get("Access-Control-Allow-Headers") == "" {
+			t.Fatalf("OPTIONS %s 缺 Allow-Headers", path)
+		}
+	}
+}
+
+// TestAuthLoginFlow P0 登录修复回归：/v1/auth/login（前端 SPA 契约路径）。
+// 1. 用户名登录与邮箱登录均可；2. 错误密码 401；3. /v1/auth/me 返回完整资料；
+// 4. pbkdf2 老格式（Rust 全量 981 用户）密码可登录。
+func TestAuthLoginFlow(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	h := app.Routes()
+
+	// 注册（Go 新格式 pbkdf2；验证码直接注入 DB，send-code 走 SMTP 不在用例范围）
+	_, _ = app.DB.Exec(
+		"INSERT INTO email_codes (email, purpose, code, fails, expire_ts) VALUES ('alice@t.dev','register','123456',0,?)",
+		time.Now().Unix()+600)
+	rec, out := doJSON(t, h, "POST", "/v1/auth/register", "", map[string]string{
+		"email": "alice@t.dev", "code": "123456", "username": "alice", "password": "password123"})
+	if rec.Code != 200 {
+		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
 
-	// 反代路径不注入 CORS（旧网关自带，避免重复头）；mock 未回 CORS → 此处应为空
-	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
-		t.Fatalf("反代响应不应由 Go 注入 CORS: %v", rec.Header())
+	// 注册响应：token + api_key（自动发默认密钥，Rust 版行为）+ user
+	if out["api_key"] == nil || out["api_key"] == "" {
+		t.Fatalf("注册响应缺 api_key: %v", out)
+	}
+	if out["user"] == nil {
+		t.Fatalf("注册响应缺 user: %v", out)
+	}
+
+	// 用户名登录：token 必须 sess_ 前缀（Rust require_session 硬校验）
+	rec, out = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "alice", "password": "password123"})
+	if rec.Code != 200 || out["token"] == nil || out["token"] == "" {
+		t.Fatalf("用户名登录失败: %d %v", rec.Code, out)
+	}
+	tok := out["token"].(string)
+	if !strings.HasPrefix(tok, "sess_") {
+		t.Fatalf("会话令牌必须 sess_ 前缀，得 %q", tok[:12])
+	}
+	if out["user"] == nil {
+		t.Fatalf("登录响应缺 user 对象: %v", out)
+	}
+
+	// 邮箱登录
+	rec, out = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "alice@t.dev", "password": "password123"})
+	if rec.Code != 200 || out["token"] == "" {
+		t.Fatalf("邮箱登录失败: %d %v", rec.Code, out)
+	}
+
+	// 错误密码 → 401（不是 500/404，前端据此提示"账号或密码错误"）
+	rec, out = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "alice", "password": "wrong-password"})
+	if rec.Code != 401 {
+		t.Fatalf("错误密码应 401，得 %d %v", rec.Code, out)
+	}
+
+	// me：user_json + key_count（Rust 版形状）
+	rec, out = doJSON(t, h, "GET", "/v1/auth/me", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("me 失败: %d %v", rec.Code, out)
+	}
+	if out["username"] != "alice" || out["email"] != "alice@t.dev" {
+		t.Fatalf("me 资料错误: %v", out)
+	}
+	if _, ok := out["key_count"]; !ok {
+		t.Fatalf("me 缺 key_count: %v", out)
+	}
+
+	// 未带 token 的 me → 401
+	rec, _ = doJSON(t, h, "GET", "/v1/auth/me", "", nil)
+	if rec.Code != 401 {
+		t.Fatalf("未登录 me 应 401，得 %d", rec.Code)
+	}
+
+	// Rust 老格式用户（pbkdf2$120000$盐hex$哈希hex）直接可登录
+	oldHash := auth.HashPasswordPbkdf2("rust-legacy-pass")
+	if !strings.HasPrefix(oldHash, "pbkdf2$") {
+		t.Fatalf("新哈希格式错误: %s", oldHash)
+	}
+	if _, err := app.DB.Exec(
+		"INSERT INTO users (username, email, password_hash, status, created_ts) VALUES ('rustu','rust@t.dev',?,1,?)",
+		oldHash, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	rec, out = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "rust@t.dev", "password": "rust-legacy-pass"})
+	if rec.Code != 200 || out["token"] == "" {
+		t.Fatalf("pbkdf2 老格式登录失败: %d %v", rec.Code, out)
+	}
+	// 老格式错误密码仍拒绝
+	rec, _ = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "rust@t.dev", "password": "rust-legacy-bad"})
+	if rec.Code != 401 {
+		t.Fatalf("老格式错误密码应 401，得 %d", rec.Code)
+	}
+
+	// 封禁用户（status=0）不可登录（Login 括号修复回归）
+	_, _ = app.DB.Exec("UPDATE users SET status=0 WHERE email='alice@t.dev'")
+	rec, _ = doJSON(t, h, "POST", "/v1/auth/login", "", map[string]string{
+		"account": "alice", "password": "password123"})
+	if rec.Code != 401 {
+		t.Fatalf("封禁用户应 401，得 %d", rec.Code)
+	}
+}
+
+// TestMyConsoleData P0 回归：/v1/my/* 控制台契约形状（keys/balance/usage/history/checkup）。
+func TestMyConsoleData(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	h := app.Routes()
+
+	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
+		"username": "bob", "email": "bob@t.dev", "password": "password123"})
+	if rec.Code != 200 {
+		t.Fatalf("注册失败: %d %v", rec.Code, out)
+	}
+	tok := out["token"].(string)
+
+	// balance → {balance_micro, today_cost_micro, total_cost_micro, ...}（Rust 版对象形状）
+	rec, out = doJSON(t, h, "GET", "/v1/my/balance", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("balance: %d", rec.Code)
+	}
+	if _, ok := out["balance_micro"]; !ok {
+		t.Fatalf("balance 应为对象（含 balance_micro），得 %v", out)
+	}
+	if _, ok := out["today_cost_micro"]; !ok {
+		t.Fatalf("balance 缺 today_cost_micro: %v", out)
+	}
+
+	// keys → {keys:[{id,prefix,name,revoked,created_ts,can_reveal}]}
+	rec, out = doJSON(t, h, "POST", "/v1/my/keys", tok, map[string]string{"name": "k1"})
+	if rec.Code != 200 {
+		t.Fatalf("创建密钥失败: %d %v", rec.Code, out)
+	}
+	rec, out = doJSON(t, h, "GET", "/v1/my/keys", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("keys: %d", rec.Code)
+	}
+	keys, ok := out["keys"].([]any)
+	if !ok || len(keys) != 1 {
+		t.Fatalf("keys 形状错误: %v", out)
+	}
+	k0 := keys[0].(map[string]any)
+	if _, ok := k0["prefix"]; !ok {
+		t.Fatalf("keys[0] 缺 prefix 字段（前端消费 k.prefix）: %v", k0)
+	}
+	if _, ok := k0["can_reveal"]; !ok {
+		t.Fatalf("keys[0] 缺 can_reveal 字段: %v", k0)
+	}
+
+	// usage → {user_id, username, today:{calls,ok_rate,avg_latency_ms}, week, by_model, recent}
+	rec, out = doJSON(t, h, "GET", "/v1/my/usage", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("usage: %d", rec.Code)
+	}
+	today, _ := out["today"].(map[string]any)
+	if today == nil {
+		t.Fatalf("usage.today 形状错误: %v", out)
+	}
+	if _, ok := today["calls"]; !ok {
+		t.Fatalf("usage.today.calls 缺失: %v", today)
+	}
+	if _, ok := today["avg_latency_ms"]; !ok {
+		t.Fatalf("usage.today.avg_latency_ms 缺失: %v", today)
+	}
+	if out["recent"] == nil {
+		t.Fatalf("usage.recent 缺失: %v", out)
+	}
+
+	// history → {items, total}（items 全 18 字段）
+	rec, out = doJSON(t, h, "GET", "/v1/my/history?page=1&page_size=10", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("history: %d", rec.Code)
+	}
+	if out["items"] == nil || out["total"] == nil {
+		t.Fatalf("history 形状错误（需 items+total）: %v", out)
+	}
+
+	// checkup → {ok, score, items:[{id,ok,level,title,detail,advice}], generated_ts}
+	rec, out = doJSON(t, h, "GET", "/v1/my/checkup", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("checkup: %d", rec.Code)
+	}
+	if out["score"] == nil {
+		t.Fatalf("checkup 形状错误（需 score）: %v", out)
+	}
+	items, ok := out["items"].([]any)
+	if !ok || len(items) != 6 {
+		t.Fatalf("checkup.items 应为 6 项，得 %d: %v", len(items), out)
+	}
+	c0 := items[0].(map[string]any)
+	for _, f := range []string{"id", "level", "title", "detail", "advice"} {
+		if _, ok := c0[f]; !ok {
+			t.Fatalf("checkup.items[0] 缺 %s: %v", f, c0)
+		}
+	}
+
+	// balance-alert → {threshold_micro, armed, email}
+	rec, out = doJSON(t, h, "GET", "/v1/my/balance-alert", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("balance-alert: %d", rec.Code)
+	}
+	if _, ok := out["armed"]; !ok {
+		t.Fatalf("balance-alert 缺 armed: %v", out)
+	}
+
+	// 头像上传：合法 PNG 魔数 → 200；非法内容 → 400
+	png := append([]byte{0x89, 'P', 'N', 'G'}, make([]byte, 64)...)
+	req := httptest.NewRequest("POST", "/v1/my/avatar", bytes.NewReader(png))
+	req.Header.Set("Content-Type", "image/png")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("头像上传应 200，得 %d %s", rec.Code, rec.Body.String())
+	}
+	req2 := httptest.NewRequest("POST", "/v1/my/avatar", strings.NewReader("not-an-image"))
+	req2.Header.Set("Content-Type", "image/png")
+	req2.Header.Set("Authorization", "Bearer "+tok)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req2)
+	if rec.Code != 400 {
+		t.Fatalf("伪造头像应 400，得 %d", rec.Code)
+	}
+
+	// 未登录 → 401
+	rec, _ = doJSON(t, h, "GET", "/v1/my/keys", "", nil)
+	if rec.Code != 401 {
+		t.Fatalf("未登录 keys 应 401，得 %d", rec.Code)
+	}
+}
+
+// TestFreeModelsAndVIP 免费线移植 + paid 标签 + VIP 可见下架模型回归
+func TestFreeModelsAndVIP(t *testing.T) {
+	tmp := t.TempDir()
+	// 模拟免费上游：记录收到的 model 字段，回标准响应
+	var gotModel string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			w.WriteHeader(404)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		var m struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(b, &m)
+		gotModel = m.Model
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	}))
+	t.Cleanup(up.Close)
+
+	cfg := config.Default()
+	cfg.Lines = []config.Line{
+		{ // 按次收费线：m1 在架，m2 normal 已下架（仅 vip 价生效）
+			ID: "aqua", Name: "按次线", Mode: "per_call", BaseURL: up.URL, Keys: []string{"k"},
+			Models: []config.Model{{SiteID: "m1"}, {SiteID: "m2"}},
+		},
+		{ // 免费线
+			ID: "nvidia", Name: "免费线", Mode: "free", BaseURL: up.URL, Keys: []string{"fk"},
+			Models: []config.Model{
+				{SiteID: "qwen3-8b", UpstreamID: "vendor/qwen3-8b"},
+				{SiteID: "cogview-3-flash", UpstreamID: "cog", Image: true},
+			},
+		},
+	}
+	d, err := db.Open(filepath.Join(tmp, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := db.InitTables(d); err != nil {
+		t.Fatal(err)
+	}
+	app := New(cfg, &db.DBx{DB: d})
+	legacyProxy = nil // 重置包级全局（绞杀者单测可能已设置，纯 Go 模式必须走原生 /v1/models）
+	h := app.Routes()
+
+	// 价目：m1 normal 5000 生效；m2 normal 已过期（下架），vip 3500 永久生效
+	now := time.Now().Unix()
+	for _, p := range []struct {
+		model, grp string
+		ends       any
+		price      int64
+	}{
+		{"aqua/m1", "normal", nil, 5000},
+		{"aqua/m2", "normal", now - 3600, 6000},
+		{"aqua/m2", "vip", nil, 3500},
+	} {
+		if _, err := d.Exec(
+			"INSERT INTO pricing (model, price_micro, starts_at, ends_at, grp, mode) VALUES (?,?,?,?,?,'per_call')",
+			p.model, p.price, 0, p.ends, p.grp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 注册普通用户（DB 注入邮箱验证码）
+	_, _ = d.Exec(
+		"INSERT INTO email_codes (email, purpose, code, fails, expire_ts) VALUES ('u1@t.dev','register','123456',0,?)",
+		time.Now().Unix()+600)
+	rec, out := doJSON(t, h, "POST", "/v1/auth/register", "", map[string]string{
+		"email": "u1@t.dev", "code": "123456", "username": "user1", "password": "password123"})
+	if rec.Code != 200 {
+		t.Fatalf("注册失败: %d %v", rec.Code, out)
+	}
+	tok := out["token"].(string)
+
+	modelsOf := func(token string) map[string]map[string]any {
+		t.Helper()
+		rec, out := doJSON(t, h, "GET", "/v1/models", token, nil)
+		if rec.Code != 200 {
+			t.Fatalf("models: %d %v", rec.Code, out)
+		}
+		m := map[string]map[string]any{}
+		for _, it := range out["data"].([]any) {
+			x := it.(map[string]any)
+			m[x["id"].(string)] = x
+		}
+		return m
+	}
+
+	// 匿名：auto + aqua/m1（paid）+ 2 免费模型；无 m2（已下架）
+	m := modelsOf("")
+	if len(m) != 4 {
+		t.Fatalf("期望 4 条目，得 %d: %v", len(m), m)
+	}
+	if m["auto"] == nil || m["auto"]["auto"] != true {
+		t.Fatalf("auto 条目缺失: %v", m["auto"])
+	}
+	if m["aqua/m1"]["paid"] != true || m["aqua/m1"]["price_micro"] != float64(5000) {
+		t.Fatalf("收费模型 paid 标签/价格错误: %v", m["aqua/m1"])
+	}
+	if _, has := m["aqua/m1"]["description"]; !has {
+		t.Fatalf("收费模型缺 description: %v", m["aqua/m1"])
+	}
+	if _, has := m["qwen3-8b"]["paid"]; has {
+		t.Fatalf("免费模型不应有 paid 标签: %v", m["qwen3-8b"])
+	}
+	if m["qwen3-8b"]["owned_by"] != "nvidia" {
+		t.Fatalf("免费模型 owned_by 错误: %v", m["qwen3-8b"])
+	}
+	if _, has := m["aqua/m2"]; has {
+		t.Fatalf("已下架模型不应出现在普通列表: %v", m["aqua/m2"])
+	}
+
+	// 普通用户：同匿名口径
+	if _, has := modelsOf(tok)["aqua/m2"]; has {
+		t.Fatal("普通用户不应看到已下架模型")
+	}
+
+	// VIP 用户：m2 可见（回退 vip 价 3500）
+	_, _ = d.Exec("UPDATE users SET price_grp_call='vip' WHERE email='u1@t.dev'")
+	m = modelsOf(tok)
+	if m["aqua/m2"] == nil || m["aqua/m2"]["price_micro"] != float64(3500) {
+		t.Fatalf("VIP 应见已下架模型（vip 价 3500）: %v", m["aqua/m2"])
+	}
+	if _, has := modelsOf("")["aqua/m2"]; has {
+		t.Fatal("匿名不应看到已下架模型")
+	}
+
+	// 免费模型调用：成功 + 上游收到真实 ID + 请求行 billed=0
+	rec, out = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
+		"model": "qwen3-8b", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 200 {
+		t.Fatalf("免费 chat: %d %v", rec.Code, out)
+	}
+	if rec.Header().Get("X-AQUA-Model") != "qwen3-8b" {
+		t.Fatalf("缺 X-AQUA-Model: %s", rec.Header().Get("X-AQUA-Model"))
+	}
+	if gotModel != "vendor/qwen3-8b" {
+		t.Fatalf("上游 model 应为真实 ID，得 %s", gotModel)
+	}
+	var billed int64
+	var state string
+	_ = d.QueryRow("SELECT billed, bill_state FROM requests WHERE model='qwen3-8b' AND ok=1").Scan(&billed, &state)
+	if billed != 0 || state != "free" {
+		t.Fatalf("免费请求应 billed=0 state=free，得 %d %s", billed, state)
+	}
+
+	// 旧 ID 兼容：nvidia/qwen3-8b → qwen3-8b
+	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
+		"model": "nvidia/qwen3-8b", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 200 {
+		t.Fatalf("旧 ID 免费 chat: %d", rec.Code)
+	}
+
+	// auto 路由：无健康数据 → 回退兜底（第一个非特殊免费模型）
+	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
+		"model": "auto", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 200 {
+		t.Fatalf("auto chat: %d", rec.Code)
+	}
+	if rec.Header().Get("X-AQUA-Model") != "qwen3-8b" {
+		t.Fatalf("auto 应回退 qwen3-8b，得 %s", rec.Header().Get("X-AQUA-Model"))
+	}
+
+	// 未收录模型 → 404；免费模型未登录 → 401
+	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
+		"model": "no-such-model", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 404 {
+		t.Fatalf("未收录模型应 404，得 %d", rec.Code)
+	}
+	// 免登录免费对话（Rust AUTH_MODE=open 等价；体验中心/树洞/竞技场依赖）→ 200
+	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", "", map[string]any{
+		"model": "qwen3-8b", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 200 {
+		t.Fatalf("免登录免费对话应 200，得 %d", rec.Code)
+	}
+
+	// retired：上游 404 两次登记 → 列表隐藏 + 调用 410
+	_, _ = d.Exec("INSERT INTO retired_models (model, retired_ts, hits) VALUES ('vendor/qwen3-8b', ?, 2)", now)
+	if _, has := modelsOf(tok)["qwen3-8b"]; has {
+		t.Fatal("retired 免费模型应从列表隐藏")
+	}
+	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
+		"model": "qwen3-8b", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+	if rec.Code != 410 {
+		t.Fatalf("retired 模型应 410，得 %d", rec.Code)
 	}
 }

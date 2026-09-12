@@ -11,10 +11,13 @@ import (
 	"acu-aqua/gateway/internal/config"
 )
 
-// SeedAll 全部线 × 全部模型播种 normal + vip 两组
+// SeedAll 全部线 × 全部模型播种 normal + vip 两组（free 线免计费，不播种）
 func SeedAll(d *sql.DB, c *config.Cfg) error {
 	for i := range c.Lines {
 		l := &c.Lines[i]
+		if l.Mode == "free" {
+			continue
+		}
 		for j := range l.Models {
 			m := &l.Models[j]
 			full := config.ModelFullName(l.ID, m.SiteID)

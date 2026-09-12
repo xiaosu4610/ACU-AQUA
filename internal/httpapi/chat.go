@@ -37,7 +37,8 @@ type usageJSON struct {
 }
 
 // handleChat /v1/chat/completions 主入口：
-// 鉴权 → 收费线路由（line-id/ 前缀）→ 免费直传 or 预扣→上游→结算（多退少补）
+// 鉴权 → 收费线路由（line-id/ 前缀且线存在）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
+//  → 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
@@ -49,16 +50,27 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 400, "bad_request", "请求体格式错误或缺 model 字段")
 		return
 	}
-
-	// 非收费模型（无 line-id/ 前缀）→ 整请求反代旧网关（免费线由 Rust 继续承接）
-	lineID, siteID, isPaid := config.SplitModel(req.Model)
-	if !isPaid {
-		a.proxyChat(w, r, body)
-		return
+	// 收费线（line-id/ 前缀且线存在且非 free）；其余全部走免费分发
+	// （无前缀裸模型 / 旧厂商前缀 zhipu/glm-4-flash / auto 智能路由 / 动态目录）
+	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
+	var line *config.Line
+	if hasPrefix {
+		line = a.Cfg.LineByID(lineID)
 	}
-	line := a.Cfg.LineByID(lineID)
-	if line == nil {
-		errOut(w, 404, "model_not_found", "模型不存在：" + req.Model)
+	if line == nil || line.Mode == "free" {
+		// 绞杀者模式：免费线仍由旧网关承接（免 Go 鉴权，旧网关自管）
+		if legacyProxy != nil {
+			a.proxyChat(w, r, body)
+			return
+		}
+		// 纯 Go 模式：免费线 open 模式（与 Rust AUTH_MODE=open 等价）——
+		// 免登录直接对话（体验中心/树洞/竞技场依赖）；带凭据则 usage 记到用户
+		actx := auth.Authenticate(a.DB.DB, r)
+		uid, kh := int64(0), ""
+		if actx != nil {
+			uid, kh = actx.UserID, actx.KeyHash
+		}
+		a.handleFreeChat(w, r, body, &req, uid, kh)
 		return
 	}
 	// 鉴权（收费线强制登录/API 密钥）

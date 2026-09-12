@@ -49,13 +49,13 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lineID, siteID, ok := config.SplitModel(req.Model)
-	if !ok {
-		errOut(w, 404, "model_not_found", "模型不存在：" + req.Model)
-		return
+	var line *config.Line
+	if ok {
+		line = a.Cfg.LineByID(lineID)
 	}
-	line := a.Cfg.LineByID(lineID)
-	if line == nil {
-		errOut(w, 404, "model_not_found", "模型不存在：" + req.Model)
+	if line == nil || line.Mode == "free" {
+		// 免费图像模型（裸名如 cogview-3-flash）：转发 + URL 站内重写，不计费
+		a.handleFreeImages(w, r, body, &req, actx.UserID, actx.KeyHash)
 		return
 	}
 	var model *config.Model
@@ -158,6 +158,68 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(out)
+}
+
+// handleFreeImages 免费图像模型：转发 → URL 站内重写 → usage 记账（不计费）
+func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []byte, req *struct {
+	Model string `json:"model"`
+	N     int64  `json:"n"`
+}, uid int64, keyHash string) {
+	model := config.NormalizeModel(req.Model)
+	fline, fm := a.Cfg.FindFreeModel(model)
+	if fm == nil || !fm.Image {
+		errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成：" + model)
+		return
+	}
+	upBody, err := replaceModel(body, fm.UpstreamID)
+	if err != nil {
+		errOut(w, 500, "internal_error", "请求处理失败")
+		return
+	}
+	client := a.clientFor(fline.ID)
+	ctx, cancel := contextWithTimeout(r.Context(), 300*time.Second)
+	defer cancel()
+	resp, _, err := client.Do(ctx, upBody, false, "/images/generations")
+	if err != nil {
+		errOut(w, 502, "upstream_error", "免费通道暂时不可用，请稍后重试")
+		return
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		errOut(w, 502, "upstream_error", "上游响应读取失败")
+		return
+	}
+	if resp.StatusCode != 200 {
+		upstreamErrOut(w, resp.StatusCode, raw)
+		return
+	}
+	rid := a.insertRequest(uid, keyHash, "images", model, false)
+	var jr struct {
+		Data []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := jsonUnmarshal(raw, &jr); err != nil || len(jr.Data) == 0 {
+		a.failRequest(rid, "bad_response")
+		errOut(w, 502, "upstream_error", "上游响应异常，请稍后重试")
+		return
+	}
+	// URL 重写：上游 OSS URL → 站内 /v1/images/file/{id}（防上游地址泄露）
+	for i := range jr.Data {
+		d := &jr.Data[i]
+		localID, err := a.cacheImage(d.URL, d.B64JSON)
+		if err != nil {
+			continue
+		}
+		d.URL = "/v1/images/file/" + localID
+		d.B64JSON = ""
+	}
+	a.okFreeRequest(rid, billing.Usage{}, 200)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(stripSensitive(jsonMarshal(jr)))
 }
 
 // cacheImage 把上游图片缓存到本地 data/images/（成功返回站内 id）
