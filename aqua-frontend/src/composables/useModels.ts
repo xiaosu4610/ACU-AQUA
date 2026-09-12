@@ -20,6 +20,8 @@ export interface ModelRow {
   billing_switch_at?: number
   /** 按量计费：计费模式（per_call=按次 / per_token=按量三段价） */
   mode?: 'per_call' | 'per_token'
+  /** 可用计费分组列表（同模型双分组并存时为 [per_call, per_token]） */
+  groups?: string[]
   /** 三段价（元/百万 tokens）：输入 / 缓存命中 / 输出 */
   in_price?: number
   cache_price?: number
@@ -70,6 +72,7 @@ export function useModels() {
           promo_ends_at: raw.promo_ends_at,
           billing_switch_at: raw.billing_switch_at,
           mode: raw.mode === 'per_token' ? 'per_token' : 'per_call',
+          groups: Array.isArray(raw.groups) ? raw.groups : undefined,
           in_price: raw.in_price,
           cache_price: raw.cache_price,
           out_price: raw.out_price,

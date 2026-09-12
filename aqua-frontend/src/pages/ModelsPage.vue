@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /* 模型中心 · 模型列表（自旧版 page-modelhub hub-pane:models 平移）
- * 旧版对应逻辑：loadModels / applyFilter / render / smartSort / healthTag / updateModelsNotice */
+ * 旧版对应逻辑：loadModels / applyFilter / render / smartSort / healthTag / updateModelsNotice
+ * v2026.09.16-rc7：收费页改版——倍率横幅（0.2× 促销 → 0.5× 恢复）+ 模型卡片内嵌实时状态
+ * （时延/生成速度/成功率，20 秒轮询）+ 搜索/筛选工具栏，独立「实时状态」子页移除。 */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import CopyBtn from '@/components/CopyBtn.vue'
@@ -9,12 +11,12 @@ import { dsMaintenance, hideTag, platformLabel, typeLabel } from '@/composables/
 import CapabilitiesPage from './CapabilitiesPage.vue'
 import AqIcon from '@/components/AqIcon.vue'
 
-/* 视图切换：free 免费模型 / paid 收费模型 / cap 能力总览 / live 实时状态（URL ?view= 可直达分享） */
+/* 视图切换：free 免费模型 / paid 收费模型 / cap 能力总览（URL ?view= 可直达分享） */
 const route = useRoute()
 const router = useRouter()
-const view = ref(route.query.view === 'cap' ? 'cap' : route.query.view === 'paid' ? 'paid' : route.query.view === 'live' ? 'live' : 'free')
-watch(() => route.query.view, v => { view.value = v === 'cap' ? 'cap' : v === 'paid' ? 'paid' : v === 'live' ? 'live' : 'free' })
-function setView(v: 'free' | 'paid' | 'cap' | 'live') {
+const view = ref(route.query.view === 'cap' ? 'cap' : route.query.view === 'paid' ? 'paid' : 'free')
+watch(() => route.query.view, v => { view.value = v === 'cap' ? 'cap' : v === 'paid' ? 'paid' : 'free' })
+function setView(v: 'free' | 'paid' | 'cap') {
   view.value = v
   router.replace({ query: v === 'free' ? {} : { view: v } })
 }
@@ -24,14 +26,22 @@ onMounted(() => {
   load()
   // 旧版每 60 秒自动刷新（模型列表与额度状态自动更新）
   refreshTimer = window.setInterval(() => load(true), 60000)
-  liveTimer = window.setInterval(() => { if (view.value === 'live') loadLive() }, 30000)
+  // 实时状态：卡片内嵌展示，20 秒轮询持续刷新（页面级，不依赖子视图）
+  liveTimer = window.setInterval(loadLive, 20000)
+  loadLive()
+  loadRate()
 })
 let refreshTimer = 0
 let liveTimer = 0
-onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); if (liveTimer) window.clearInterval(liveTimer) })
+let tickTimer = 0
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
+  if (liveTimer) window.clearInterval(liveTimer)
+  if (tickTimer) window.clearInterval(tickTimer)
+})
 function retry() { load(true) }
 
-/* ---- 实时状态：/v1/models/status 30 分钟窗口聚合（时延/速度/成功率），30 秒自动刷新 ---- */
+/* ---- 实时状态：/v1/models/status 30 分钟窗口聚合（时延/速度/成功率），20 秒自动刷新 ---- */
 type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
 const liveRows = ref<LiveRow[]>([])
 const liveTs = ref(0)
@@ -46,9 +56,7 @@ async function loadLive() {
   } catch { /* 静默：下一轮自动重试 */ }
   liveLoading.value = false
 }
-watch(view, v => { if (v === 'live' && !liveRows.value.length) loadLive() })
 const liveMap = computed(() => { const m: Record<string, LiveRow> = {}; for (const r of liveRows.value) m[r.model] = r; return m })
-const livePaid = computed(() => paidModels.value.map(m => ({ id: m.id, live: liveMap.value[m.id] })))
 function fmtLat(ms?: number): string {
   if (!ms) return '--'
   return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
@@ -61,6 +69,43 @@ function fmtAgo(ts?: number): string {
   if (d < 3600) return Math.floor(d / 60) + ' 分钟前'
   return Math.floor(d / 3600) + ' 小时前'
 }
+/* 卡片实时状态灯：ok 绿 / degraded 黄 / down 红 / 无数据灰（待命中） */
+function liveStatusOf(id: string): { key: 'ok' | 'degraded' | 'down' | 'idle'; text: string } {
+  const live = liveMap.value[id]
+  if (!live) return { key: 'idle', text: '待命中' }
+  if (live.status === 'ok') return { key: 'ok', text: '运行正常' }
+  if (live.status === 'degraded') return { key: 'degraded', text: '部分异常' }
+  return { key: 'down', text: '故障' }
+}
+
+/* ---- 计费倍率横幅（/v1/meta 配置下发；促销结束 promo_ends_at 过期后横幅自动隐藏） ---- */
+const ratePromo = ref('')
+const rateNormal = ref('')
+async function loadRate() {
+  try {
+    const r = await fetch('/v1/meta')
+    const j = await r.json()
+    ratePromo.value = j.rate_promo || ''
+    rateNormal.value = j.rate_normal || ''
+  } catch { /* 静默：无配置不展示横幅 */ }
+}
+const nowTick = ref(Math.floor(Date.now() / 1000))
+tickTimer = window.setInterval(() => { nowTick.value = Math.floor(Date.now() / 1000) }, 1000)
+const promoEndsAt = computed(() => {
+  let t = 0
+  for (const m of paidModels.value) { const e = (m as any).promoEndsAt || 0; if (e > t) t = e }
+  return t
+})
+const rateBannerVisible = computed(() => !!ratePromo.value && !!rateNormal.value && promoEndsAt.value > nowTick.value)
+function fmtCountdown(sec: number): string {
+  if (sec <= 0) return ''
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60
+  if (d > 0) return d + ' 天 ' + h + ' 小时'
+  if (h > 0) return h + ' 小时 ' + m + ' 分'
+  return m + ' 分 ' + (s < 10 ? '0' : '') + s + ' 秒'
+}
+const promoLeftStr = computed(() => fmtCountdown(promoEndsAt.value - nowTick.value))
+const promoEndsStr = computed(() => new Date(promoEndsAt.value * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))
 
 /* ---- 筛选状态（旧 curPlatform / curType / 搜索词） ---- */
 const curPlatform = ref('all')
@@ -185,7 +230,7 @@ const noticeMsg = computed(() => {
   return `模型列表已同步，更新于 ${timeStr(loadedAt.value)}（每 60 秒自动刷新）`
 })
 
-/* ---- 收费模型专区：统一 aqua/ 前缀（按次/按量分组由密钥决定，实时健康分动态渲染） ---- */
+/* ---- 收费模型专区：统一 aqua/ 前缀（按次/按量分组由密钥决定，实时状态内嵌卡片） ---- */
 const paidModels = computed(() => orderedModels.value
   .filter(m => m.paid)
   .map(m => ({
@@ -208,6 +253,7 @@ const paidModels = computed(() => orderedModels.value
     perImage: (m as any).per_image,
     basePerImage: (m as any).base_per_image,
     subsidized: m.subsidized === true,
+    promoEndsAt: m.promo_ends_at ?? 0,
     isImage: m.type === 'image',
     health: healthOf(m),
     st: statusOf(m),
@@ -216,6 +262,23 @@ const paidModels = computed(() => orderedModels.value
 /** 按次分组 / 按量分组（同一模型两组都有时两栏都展示——用哪组计费取决于密钥分组） */
 const paidCallLine = computed(() => paidModels.value.filter(m => m.groups.includes('per_call')))
 const paidTokenLine = computed(() => paidModels.value.filter(m => m.groups.includes('per_token')))
+
+/* ---- 收费页工具栏：搜索 + 类型筛选 + 排序 ---- */
+const paidQ = ref('')
+const paidType = ref<'all' | 'chat' | 'image'>('all')
+const paidSort = ref<'smart' | 'price'>('smart')
+function sortTokenLine(arr: typeof paidModels.value) {
+  const kw = paidQ.value.toLowerCase().trim()
+  let out = arr.filter(m => (paidType.value === 'all' || (paidType.value === 'image' ? m.isImage : !m.isImage))
+    && (kw ? m.id.toLowerCase().indexOf(kw) !== -1 : true))
+  if (paidSort.value === 'price') {
+    out = out.slice().sort((a, b) => (a.perImage ?? a.outPrice ?? a.price) - (b.perImage ?? b.outPrice ?? b.price))
+  }
+  return out
+}
+const tokenLineRows = computed(() => sortTokenLine(paidTokenLine.value))
+const callLineRows = computed(() => sortTokenLine(paidCallLine.value))
+
 /** 微元 → 元字符串（去尾零：2000→"0.002"，3800→"0.0038"） */
 function microYuan(v?: number): string {
   if (v == null) return '--'
@@ -240,7 +303,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       <button type="button" class="hub-tab" :class="{ active: view === 'free' }" @click="setView('free')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>免费模型</button>
       <button type="button" class="hub-tab" :class="{ active: view === 'paid' }" @click="setView('paid')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1.1-1.7 2.5-1.7s2.5.7 2.5 1.7c0 2.6-5 1.4-5 4 0 1 1.1 1.7 2.5 1.7s2.5-.7 2.5-1.7"/></svg></span>收费模型</button>
       <button type="button" class="hub-tab" :class="{ active: view === 'cap' }" @click="setView('cap')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 20 7v10l-8 5-8-5V7l8-5z"/><path d="M12 12v8"/><path d="m4 7 8 5 8-5"/><path d="M12 2v8"/></svg></span>模型能力</button>
-      <button type="button" class="hub-tab" :class="{ active: view === 'live' }" @click="setView('live')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>实时状态</button>
     </nav>
     <div class="hub-pane">
       <template v-if="view === 'free'">
@@ -253,74 +315,115 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       </div>
       </template>
       <template v-else-if="view === 'paid'">
-      <p class="hub-desc">官方自营<b>收费模型统一使用 <code>aqua/</code> 前缀</b>：计费方式由你<b>密钥的计费分组</b>决定——「免费+按次」密钥按次扣费，「免费+按量」密钥按 tokens 三段扣费——先付后用、失败全额退回、绝不透支。<router-link to="/console?view=topup">在线充值即充即用</router-link>，免费模型不受余额影响。</p>
+      <!-- 倍率横幅：明示当前促销倍率与恢复倍率（meta 配置下发，促销到期自动隐藏） -->
+      <div v-if="rateBannerVisible" class="rate-banner">
+        <div class="rb-left">
+          <span class="rb-rate"><b>{{ ratePromo }}</b><i>×</i></span>
+          <span class="rb-rate-label">当前计费倍率<br><em>限时补贴价</em></span>
+        </div>
+        <div class="rb-mid">
+          <b class="rb-title">全场按量计费模型 · 官方补贴进行中</b>
+          <p class="rb-desc">现在按 <b>{{ ratePromo }} 倍率</b>（上游成本的 {{ Math.round(Number(ratePromo) * 10) }} 折）计费，活动结束后恢复 <b>{{ rateNormal }} 倍率</b>——越早用越便宜，恢复前价格不变。</p>
+        </div>
+        <div class="rb-right">
+          <span class="rb-cd-label">距恢复 {{ rateNormal }}×</span>
+          <span class="rb-cd">{{ promoLeftStr }}</span>
+          <span class="rb-cd-sub">{{ promoEndsStr }} 自动恢复</span>
+        </div>
+      </div>
+      <p class="hub-desc">官方自营<b>收费模型统一使用 <code>aqua/</code> 前缀</b>：计费方式由你<b>密钥的计费分组</b>决定——先付后用、失败全额退回、绝不透支。<router-link to="/console?view=topup">在线充值即充即用</router-link>，免费模型不受余额影响。</p>
       <!-- 收费模型专区：按分组双栏（数据实时来自 /v1/models 的 groups 字段） -->
       <div v-if="paidModels.length" class="paid-models-sec">
         <div class="pms-head">
           <div class="pms-title">
             <span class="pms-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26 6.86.63-5.2 4.55 1.56 6.71L12 16.9 5.88 20.15l1.56-6.71-5.2-4.55 6.86-.63z"/></svg></span>
             <b>收费模型专区 · 官方自营</b>
-            <span class="pms-promo" title="统一 aqua/ 前缀；按次还是按量由密钥分组决定，两个分组都有的模型用对应密钥即可调用">统一 aqua/ 前缀 · 计费方式由密钥分组决定</span>
+            <span class="pms-promo">实时状态内嵌卡片 · 每 20 秒自动刷新</span>
           </div>
-          <span class="pms-sub">失败自动全额退回 · 先付后用、绝不透支 · <router-link to="/console?view=topup">在线充值即充即用</router-link></span>
+          <span class="pms-live-meta">
+            <span class="live-pulse" :class="{ loading: liveLoading }"></span>
+            数据时间 {{ liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--' }}
+            <button class="mini-btn" :disabled="liveLoading" @click="loadLive">{{ liveLoading ? '刷新中…' : '立即刷新' }}</button>
+          </span>
         </div>
-        <!-- 按次计费分组（密钥选「免费+按次」时可用） -->
-        <div v-if="paidCallLine.length" class="pms-line-title">按次计费分组<small>（密钥选「免费 + 按次计费」时可用：每次成功请求扣一次，与生成长度无关）</small></div>
-        <div class="pms-grid">
-          <div v-for="m in paidCallLine" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }">
-            <div class="pms-top">
-              <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
-              <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
-              <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
-            </div>
-            <!-- 按次计费：单次正式价（默认，后端当前模式）；VIP 用户展示拿货价 + 底部原价 -->
-            <div v-if="m.mode === 'per_call'" class="pms-price">
-              <b>¥{{ microYuan(m.price) }}</b><i>/次</i>
-              <span class="pms-price-tag" :class="{ promo: m.subsidized || m.basePrice != null }">{{ m.basePrice != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '正常价') }}</span>
-            </div>
-            <div v-if="m.mode === 'per_call' && m.basePrice != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
-            <!-- 按量计费：三段价 + 单次保底 + 补贴徽标（仅按量模型渲染；按次卡不再显示无意义的 ¥0 token 行） -->
-            <div v-if="m.mode !== 'per_call'" class="pms-price pms-price-token">
-              <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-floor">单次最低 ¥{{ microYuan(m.floor) }}<span v-if="m.subsidized" class="tp-subsidy" title="补贴额度有限，随时恢复原价">限时补贴</span></div>
-            </div>
-            <div class="pms-actions">
-              <CopyBtn :text="m.id" />
-              <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
-            </div>
+        <!-- 工具栏：搜索 + 类型筛选 + 排序 -->
+        <div class="pms-toolbar">
+          <input v-model="paidQ" type="text" class="pms-search" placeholder="搜索模型，如 deepseek / glm / qwen …">
+          <div class="pms-pills">
+            <button class="pill" :class="{ active: paidType === 'all' }" @click="paidType = 'all'">全部</button>
+            <button class="pill" :class="{ active: paidType === 'chat' }" @click="paidType = 'chat'">对话</button>
+            <button class="pill" :class="{ active: paidType === 'image' }" @click="paidType = 'image'">图片</button>
+          </div>
+          <div class="pms-pills">
+            <button class="pill" :class="{ active: paidSort === 'smart' }" @click="paidSort = 'smart'" title="旗舰与国产模型优先">智能排序</button>
+            <button class="pill" :class="{ active: paidSort === 'price' }" @click="paidSort = 'price'" title="按输出单价从低到高">价格优先</button>
           </div>
         </div>
+        <!-- 按次计费分组（密钥选「免费+按次」时可用；按次线临时下架时整栏自动消失） -->
+        <template v-if="callLineRows.length">
+          <div class="pms-line-title">按次计费分组<small>（密钥选「免费 + 按次计费」时可用：每次成功请求扣一次，与生成长度无关）</small></div>
+          <div class="pms-grid">
+            <div v-for="m in callLineRows" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }">
+              <div class="pms-top">
+                <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
+                <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
+              </div>
+              <div v-if="m.mode === 'per_call'" class="pms-price">
+                <b>¥{{ microYuan(m.price) }}</b><i>/次</i>
+                <span class="pms-price-tag" :class="{ promo: m.basePrice != null }">{{ m.basePrice != null ? 'VIP 拿货价' : '正常价' }}</span>
+              </div>
+              <div v-if="m.mode === 'per_call' && m.basePrice != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
+              <div class="pms-actions">
+                <CopyBtn :text="m.id" />
+                <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
+              </div>
+            </div>
+          </div>
+        </template>
         <!-- 按量计费分组（密钥选「免费+按量」时可用；三段价、无保底、先付后用） -->
-        <div v-if="paidTokenLine.length" class="pms-line-title">按量计费分组<small>（密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
-        <div class="pms-grid">
-          <div v-for="m in paidTokenLine" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
-            <div class="pms-top">
-              <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
-              <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
-              <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
-            </div>
-            <!-- 图片模型：按张计费（VIP 展示拿货价 + 底部原价） -->
-            <div v-if="m.perImage != null" class="pms-price">
-              <b>¥{{ microYuan(m.perImage) }}</b><i>/张</i>
-              <span class="pms-price-tag" :class="{ promo: m.basePerImage != null || m.subsidized }">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
-            </div>
-            <div v-if="m.perImage != null && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
-            <!-- 按量计费：三段价（无保底；缓存命中更省；图片按张卡不渲染 token 行，避免 ¥0 误读为免费） -->
-            <div v-if="m.perImage == null" class="pms-price pms-price-token">
-              <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-              <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
-              <div v-if="m.baseInPrice != null" class="tp-base">VIP 拿货价已生效 · 原价：输入 ¥{{ perMYuan(m.baseInPrice) }} / 缓存 ¥{{ perMYuan(m.baseCachePrice) }} / 输出 ¥{{ perMYuan(m.baseOutPrice) }} 每百万tokens（保底 ¥{{ microYuan(m.baseFloor) }}）</div>
-            </div>
-            <div class="pms-actions">
-              <CopyBtn :text="m.id" />
-              <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
+        <template v-if="tokenLineRows.length">
+          <div class="pms-line-title">按量计费分组<small>（密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
+          <div class="pms-grid">
+            <div v-for="m in tokenLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
+              <div class="pms-top">
+                <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
+                <span v-if="m.subsidized && ratePromo" class="pms-rate-badge" :title="'限时补贴倍率 ' + ratePromo + '×，活动结束后恢复 ' + rateNormal + '×'">{{ ratePromo }}×</span>
+                <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="pms-vip-badge" title="VIP 专享拿货价已生效">VIP</span>
+              </div>
+              <!-- 实时状态灯行：30 分钟真实请求聚合（20 秒轮询） -->
+              <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
+                :title="'近 30 分钟真实请求 · 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
+                <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
+              </div>
+              <!-- 图片模型：按张计费（VIP 展示拿货价 + 底部原价） -->
+              <div v-if="m.perImage != null" class="pms-price">
+                <b>¥{{ microYuan(m.perImage) }}</b><i>/张</i>
+                <span class="pms-price-tag" :class="{ promo: m.basePerImage != null || m.subsidized }">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
+              </div>
+              <div v-if="m.perImage != null && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
+              <!-- 按量计费：三段价（无保底；缓存命中更省；图片按张卡不渲染 token 行，避免 ¥0 误读为免费） -->
+              <div v-if="m.perImage == null" class="pms-price pms-price-token">
+                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
+                <div v-if="m.baseInPrice != null" class="tp-base">VIP 拿货价已生效 · 原价：输入 ¥{{ perMYuan(m.baseInPrice) }} / 缓存 ¥{{ perMYuan(m.baseCachePrice) }} / 输出 ¥{{ perMYuan(m.baseOutPrice) }} 每百万tokens（保底 ¥{{ microYuan(m.baseFloor) }}）</div>
+              </div>
+              <!-- 实时指标：平均时延 / 生成速度 / 成功率（30 分钟窗口聚合） -->
+              <div class="pms-live-metrics" :title="'近 30 分钟真实计费请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
+              </div>
+              <div class="pms-actions">
+                <CopyBtn :text="m.id" />
+                <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
+              </div>
             </div>
           </div>
-        </div>
+          <div v-if="!tokenLineRows.length" class="model-empty">未找到匹配的收费模型</div>
+        </template>
       </div>
       <!-- 收费模型与免费政策说明（用户必读） -->
       <div class="paid-policy-card">
@@ -341,9 +444,10 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <span class="pp-no pp-no-paid">2</span>
             <div>
               <b>收费模型：官方自营系列（统一 <code>aqua/</code> 前缀）</b>
-              <p>收费模型统一使用 <code>aqua/</code> 前缀，<b>计费方式由你密钥的计费分组决定</b>：在个人控制台创建密钥时选择「免费 + 按次计费」或「免费 + 按量计费」。两个分组的可用模型不同（上方双栏即两组各自可用列表；部分模型两个分组通用）。按次分组为高频调用与极致速度单独采购的专属算力；按量分组提供全系列大杯旗舰与文生图等特殊计费模型（特殊模型按张/按量计费以卡片实时标注为准）。调用方式与免费模型完全一致（同一个接口，只是 <code>model</code> 换成它们），支持流式输出，对客户端完全透明。</p>
+              <p v-if="paidCallLine.length">收费模型统一使用 <code>aqua/</code> 前缀，<b>计费方式由你密钥的计费分组决定</b>：在个人控制台创建密钥时选择「免费 + 按次计费」或「免费 + 按量计费」。两个分组的可用模型不同（上方双栏即两组各自可用列表；部分模型两个分组通用）。按次分组为高频调用与极致速度单独采购的专属算力；按量分组提供全系列大杯旗舰与文生图等特殊计费模型（特殊模型按张/按量计费以卡片实时标注为准）。调用方式与免费模型完全一致（同一个接口，只是 <code>model</code> 换成它们），支持流式输出，对客户端完全透明。</p>
+              <p v-else>收费模型统一使用 <code>aqua/</code> 前缀，<b>密钥选择「免费 + 按量计费」分组即可调用</b>：输入 / 缓存命中 / 输出分段精算，用多少付多少。文生图等特殊计费模型以卡片实时标注为准。调用方式与免费模型完全一致（同一个接口，只是 <code>model</code> 换成它们），支持流式输出，对客户端完全透明。</p>
               <div class="pp-rules">
-                <span>计费方式：<b>按次分组密钥</b>——每次<b>成功</b>请求按所用模型单价扣一次，<b>与生成长度无关</b>（各模型实时单价见上方专区）</span>
+                <span v-if="paidCallLine.length">计费方式：<b>按次分组密钥</b>——每次<b>成功</b>请求按所用模型单价扣一次，<b>与生成长度无关</b>（各模型实时单价见上方专区）</span>
                 <span>计费方式：<b>按量分组密钥</b>——输入 / 缓存命中 / 输出分段计价，<b>用多少付多少、无保底</b>；重复前缀命中缓存价，输入成本大幅更低</span>
                 <span>先付后用：发起请求即按预估预扣（可在请求中调小 <code>max_tokens</code> 降低单次预扣），完成后<b>多退少补</b>；余额用完自动停止，<b>绝不透支、绝无欠费</b></span>
                 <span>请求失败自动全额退回，<b>错误请求不扣费</b></span>
@@ -408,37 +512,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       <p class="hint" style="margin-top:10px;">点击任意模型 ID 可查看该模型的详细能力说明与支持参数。</p>
       </template>
       <CapabilitiesPage v-if="view === 'cap'" embedded />
-      <template v-else-if="view === 'live'">
-      <p class="hub-desc">收费模型<b>实时运行状态</b>：最近 30 分钟真实计费请求聚合出的成功率、平均响应时延与生成速度（tokens/s），每 30 秒自动刷新。无请求记录的模型显示「待命中」。</p>
-      <div class="live-bar">
-        <span class="live-pulse" :class="{ loading: liveLoading }"></span>
-        <span class="live-updated">数据时间：{{ liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--' }}<i>（窗口 30 分钟 · 每 30 秒自动刷新）</i></span>
-        <button class="mini-btn" :disabled="liveLoading" @click="loadLive">{{ liveLoading ? '刷新中…' : '立即刷新' }}</button>
-      </div>
-      <div class="live-wrap">
-        <table class="live-table">
-          <thead>
-            <tr><th>模型</th><th>状态</th><th>平均时延</th><th>生成速度</th><th>成功率</th><th>请求数</th><th>最近活动</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in livePaid" :key="row.id">
-              <td><code class="live-model">{{ row.id.replace(/^aqua\//, '') }}</code></td>
-              <td>
-                <span v-if="!row.live" class="st-badge st-idle">待命中</span>
-                <span v-else-if="row.live.status === 'ok'" class="st-badge st-ok">运行正常</span>
-                <span v-else-if="row.live.status === 'degraded'" class="st-badge st-deg">部分异常</span>
-                <span v-else class="st-badge st-down">故障</span>
-              </td>
-              <td>{{ row.live?.avg_latency_ms ? fmtLat(row.live.avg_latency_ms) : '--' }}</td>
-              <td>{{ row.live?.avg_tps ? row.live.avg_tps.toFixed(1) + ' tok/s' : '--' }}</td>
-              <td>{{ row.live ? fmtRate(row.live.ok_rate) : '--' }}</td>
-              <td>{{ row.live?.samples || 0 }}</td>
-              <td>{{ fmtAgo(row.live?.last_ts) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      </template>
     </div>
   </section>
 </template>
@@ -447,44 +520,126 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
 /* 子导航 Tab 外观统一由 legacy.css 的 .hub-tab 提供（按钮化视觉），此处仅继承字体 */
 button.hub-tab { font-family: inherit; }
 
-/* ---- 收费模型专区（pms-*）：价格 + 倒计时 + 实时健康分 ---- */
+/* ---- 倍率横幅（rate-banner）：明示 0.2× 促销 → 0.5× 恢复 ---- */
+.rate-banner {
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+  margin: 0 0 16px; padding: 18px 24px; border-radius: 16px;
+  background:
+    radial-gradient(ellipse 60% 120% at 8% 0%, rgba(251,191,36,.28), transparent 60%),
+    radial-gradient(ellipse 50% 100% at 92% 100%, rgba(244,63,94,.22), transparent 65%),
+    linear-gradient(120deg, rgba(120,53,15,.55), rgba(69,26,3,.65) 55%, rgba(76,5,25,.55));
+  border: 1px solid rgba(251,191,36,.4);
+  box-shadow: 0 10px 32px -12px rgba(245,158,11,.35), inset 0 1px 0 rgba(255,255,255,.08);
+  position: relative; overflow: hidden;
+}
+.rate-banner::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,.09) 50%, transparent 60%);
+  animation: rbshine 5.5s ease-in-out infinite;
+}
+@keyframes rbshine { 0%, 55%, 100% { transform: translateX(-60%); } 30% { transform: translateX(60%); } }
+.rb-left { display: flex; align-items: center; gap: 12px; flex: none; }
+.rb-rate { display: flex; align-items: baseline; color: #fbbf24; text-shadow: 0 0 26px rgba(251,191,36,.55); }
+.rb-rate b { font-size: 52px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -2px; }
+.rb-rate i { font-style: normal; font-size: 24px; font-weight: 800; margin-left: 2px; }
+.rb-rate-label { font-size: 12px; font-weight: 700; color: rgba(255,237,213,.92); line-height: 1.5; }
+.rb-rate-label em { font-style: normal; color: #fbbf24; }
+.rb-mid { flex: 1; min-width: 220px; }
+.rb-title { font-size: 16.5px; color: #fff; }
+.rb-desc { margin: 5px 0 0; font-size: 13px; line-height: 1.7; color: rgba(255,237,213,.85); }
+.rb-desc b { color: #fbbf24; }
+.rb-right { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.rb-cd-label { font-size: 11.5px; font-weight: 700; color: rgba(255,237,213,.7); letter-spacing: .04em; }
+.rb-cd { font-size: 24px; font-weight: 900; color: #fff; font-variant-numeric: tabular-nums; text-shadow: 0 0 18px rgba(251,191,36,.4); }
+.rb-cd-sub { font-size: 11px; color: rgba(255,237,213,.6); }
+@media (max-width: 760px) {
+  .rate-banner { gap: 14px; padding: 16px; }
+  .rb-rate b { font-size: 40px; }
+  .rb-right { align-items: flex-start; }
+}
+
+/* ---- 收费模型专区（pms-*）：价格 + 实时状态内嵌 ---- */
 .paid-models-sec {
   border: 1px solid rgba(56, 189, 248, .3);
   background: linear-gradient(160deg, rgba(56,189,248,.07), rgba(129,140,248,.04) 55%, transparent);
-  border-radius: 14px;
+  border-radius: 16px;
   padding: 18px 20px;
   margin: 14px 0 18px;
 }
-.pms-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.pms-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .pms-title { display: flex; align-items: center; gap: 10px; }
 .pms-ic { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: rgba(56,189,248,.14); color: var(--accent); flex: none; }
 .pms-ic svg { width: 18px; height: 18px; }
 .pms-title b { font-size: 16px; }
-.pms-promo { font-size: 12px; color: #b45309; background: rgba(245,158,11,.14); border: 1px solid rgba(245,158,11,.32); border-radius: 999px; padding: 2px 10px; font-weight: 600; }
-[data-theme="light"] .pms-promo { color: #92400e; }
-.pms-sub { font-size: 12.5px; color: var(--muted); }
-.pms-sub a { color: var(--accent); }
-/* 分线标题（aqua/ 按次线 + tide/ 按量线） */
+.pms-promo { font-size: 12px; color: var(--accent); background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.3); border-radius: 999px; padding: 2px 10px; font-weight: 600; }
+.pms-live-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+/* 工具栏：搜索 + 筛选 + 排序 */
+.pms-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+.pms-search {
+  flex: 1; min-width: 200px; max-width: 340px; height: 34px; padding: 0 14px;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--card);
+  color: var(--text); font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.pms-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+.pms-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pms-pills .pill { font-size: 12px; padding: 5px 13px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-weight: 600; transition: all .15s; }
+.pms-pills .pill:hover { border-color: var(--border-hover); color: var(--text); }
+.pms-pills .pill.active { background: rgba(56,189,248,.15); border-color: rgba(56,189,248,.5); color: var(--accent); }
+/* 分线标题（按次 + 按量） */
 .pms-line-title { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 12px 0 8px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .pms-line-title:first-of-type { margin-top: 0; }
-.pms-line-title code { font-family: var(--mono, monospace); font-size: 12px; background: rgba(56,189,248,.12); color: var(--accent); border-radius: 6px; padding: 1px 6px; }
 .pms-line-title small { font-size: 11.5px; font-weight: 400; color: var(--muted); }
 .tp-cache-tip { font-size: 10px; font-weight: 700; color: #16a34a; background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.32); border-radius: 999px; padding: 1px 7px; }
-.pms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.pms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 12px; }
 .pms-card {
-  border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px;
+  position: relative;
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 15px;
   background: var(--card); display: flex; flex-direction: column; gap: 8px;
   transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
-.pms-card:hover { transform: translateY(-2px); border-color: var(--border-hover); box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.pms-card::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(135deg, rgba(56,189,248,.55), rgba(129,140,248,.35) 45%, transparent 70%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0; transition: opacity .2s ease;
+}
+.pms-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px -8px rgba(0,0,0,.35); }
+.pms-card:hover::before { opacity: 1; }
 .pms-card.paused { opacity: .62; }
 .pms-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.pms-id { font-family: var(--mono, monospace); font-size: 12.5px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pms-health { flex: none; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; }
-.pms-health.h-excellent { background: rgba(34,197,94,.15); color: #22c55e; }
-.pms-health.h-good { background: rgba(56,189,248,.15); color: #38bdf8; }
-.pms-health.h-warn { background: rgba(245,158,11,.16); color: #f59e0b; }
-.pms-health.h-bad { background: rgba(239,68,68,.16); color: #ef4444; }
+.pms-id { font-family: var(--mono, monospace); font-size: 13px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 倍率/VIP 角标 */
+.pms-rate-badge {
+  flex: none; font-size: 11.5px; font-weight: 800; color: #fbbf24;
+  background: linear-gradient(120deg, rgba(245,158,11,.25), rgba(251,191,36,.15));
+  border: 1px solid rgba(251,191,36,.5); border-radius: 999px; padding: 2px 9px;
+  text-shadow: 0 0 12px rgba(251,191,36,.4);
+}
+.pms-vip-badge { flex: none; font-size: 10.5px; font-weight: 800; color: #f59e0b; background: rgba(245,158,11,.16); border: 1px solid rgba(245,158,11,.4); border-radius: 999px; padding: 2px 8px; }
+/* 实时状态灯行 */
+.pms-live { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; }
+.lv-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; position: relative; }
+.lv-ok .lv-dot { background: #22c55e; animation: dotpulse 2s infinite; }
+.lv-degraded .lv-dot { background: #f59e0b; animation: dotpulse 2s infinite; }
+.lv-down .lv-dot { background: #ef4444; animation: dotpulse 1.2s infinite; }
+.lv-idle .lv-dot { background: rgba(148,163,184,.55); }
+@keyframes dotpulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.45); } 70% { box-shadow: 0 0 0 6px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+.pms-live .lv-text { color: var(--muted); }
+.lv-ok .lv-text { color: #22c55e; }
+.lv-degraded .lv-text { color: #f59e0b; }
+.lv-down .lv-text { color: #ef4444; }
+.lv-last { margin-left: auto; font-size: 10.5px; color: var(--muted); opacity: .8; }
+/* 实时指标行：时延 / 速度 / 成功率 */
+.pms-live-metrics {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;
+  border-top: 1px dashed rgba(148,163,184,.25); padding-top: 8px; margin-top: auto;
+}
+.lm-item { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lm-item i { font-style: normal; font-size: 10px; color: var(--muted); opacity: .85; }
+.lm-item b { font-size: 12.5px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lm-item b u { text-decoration: none; font-size: 9.5px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+.lm-item.dim b { color: var(--muted); opacity: .55; }
 .pms-st { flex: none; font-size: 11px; color: #ef4444; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3); border-radius: 999px; padding: 2px 8px; }
 .pms-price { display: flex; align-items: baseline; gap: 5px; }
 .pms-price b { font-size: 21px; font-weight: 800; color: #f59e0b; font-variant-numeric: tabular-nums; }
@@ -507,39 +662,18 @@ button.hub-tab { font-family: inherit; }
 .pms-detail { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--accent); text-decoration: none; }
 .pms-detail:hover { text-decoration: underline; }
 .pms-detail svg { width: 13px; height: 13px; }
-@media (max-width: 480px) {
-  .pms-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 560px) {
+  .pms-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .pms-card { padding: 11px 12px; }
   .pms-price b { font-size: 18px; }
+  .pms-toolbar { gap: 8px; }
 }
 
-/* ---- 实时状态（live-*）：30 分钟聚合表 ---- */
-.live-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
-.live-pulse { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.5); animation: livepulse 2s infinite; }
+/* 实时脉冲点（专区头部） */
+.live-pulse { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.5); animation: livepulse 2s infinite; flex: none; }
 .live-pulse.loading { background: #f59e0b; }
 @keyframes livepulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.45); } 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
-.live-updated { font-size: 12.5px; color: var(--muted); }
-.live-updated i { font-style: normal; opacity: .75; margin-left: 6px; }
-.live-updated .mini-btn { margin-left: 8px; }
-.live-bar .mini-btn { margin-left: auto; }
-.live-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
-.live-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
-.live-table th, .live-table td { padding: 10px 14px; text-align: left; white-space: nowrap; }
-.live-table th { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); }
-.live-table td { border-bottom: 1px solid rgba(148,163,184,.14); color: var(--text); }
-.live-table tbody tr:last-child td { border-bottom: 0; }
-.live-table tbody tr:hover { background: var(--btn-hover); }
-.live-model { font-family: var(--mono, monospace); font-size: 12.5px; color: var(--accent); }
-.st-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
-.st-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.st-ok { color: #16a34a; background: rgba(34,197,94,.13); border: 1px solid rgba(34,197,94,.3); }
-.st-deg { color: #d97706; background: rgba(245,158,11,.13); border: 1px solid rgba(245,158,11,.32); }
-.st-down { color: #dc2626; background: rgba(239,68,68,.13); border: 1px solid rgba(239,68,68,.32); }
-.st-idle { color: var(--muted); background: rgba(148,163,184,.12); border: 1px solid rgba(148,163,184,.26); }
-@media (max-width: 640px) {
-  .live-table th:nth-child(6), .live-table td:nth-child(6),
-  .live-table th:nth-child(7), .live-table td:nth-child(7) { display: none; }
-}
+.live-pulse.loading { animation: none; }
 
 /* 免费与收费政策说明卡（用户必读） */
 .paid-policy-card {

@@ -383,6 +383,8 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"qq_group_url":  a.Cfg.Site.QQGroupURL,
 		"qq_group2":     a.Cfg.Site.QQGroup2,
 		"qq_group_url2": a.Cfg.Site.QQGroupURL2,
+		"rate_promo":    a.Cfg.Site.RatePromo,
+		"rate_normal":   a.Cfg.Site.RateNormal,
 	})
 }
 

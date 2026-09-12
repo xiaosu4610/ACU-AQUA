@@ -72,6 +72,11 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		}
 		line = a.lineForMode(grp)
 		if line == nil {
+			if grp == "per_call" {
+				// 按次线临时下架（admin_lines.enabled=0）：明确告知并引导切换按量分组
+				errOut(w, 403, "per_call_suspended", "按次计费已临时下架，当前仅按量计费开放——请在控制台将该密钥的计费分组切换为「按量计费」后重试")
+				return
+			}
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
 			return
 		}
