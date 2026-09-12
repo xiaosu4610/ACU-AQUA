@@ -99,7 +99,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	prehold := pricing.PriceMicro * req.N
 	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
 		a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写
-		errOut(w, 429, "insufficient_quota", "余额不足，请先到控制台充值（先付后用，绝不透支）")
+		errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
 		return
 	}
 

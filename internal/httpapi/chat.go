@@ -143,7 +143,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
 		if errors.Is(err, billing.ErrInsufficientBalance) {
 			a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写，不留 (empty) 盲区
-			errOut(w, 429, "insufficient_quota", "余额不足，请先到控制台充值（先付后用，绝不透支）")
+			errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
 			return
 		}
 		a.failRequest(rid, "prehold_error", 500)

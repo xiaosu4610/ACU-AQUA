@@ -104,6 +104,8 @@ func UserPriceGrp(d *sql.DB, userID int64, lineMode string) string {
 }
 
 // Prehold 发起请求前预扣（先付后用）：余额不足返回错误（429 insufficient_quota 口径）。
+// 政策硬门槛：使用收费模型须保持账户 0 元以上余额（balance_micro>0 显式政策位，
+// 预扣额恒正时与 >= 等价；防未来 amount=0 路径绕过，绝不透支、绝无事后追缴）。
 // 原子条件 UPDATE（与 Rust 版双进程并发访问同一生产库时无竞态：扣不满足即失败）。
 func Prehold(d *sql.DB, userID, amount int64, requestID int64) error {
 	if amount < 0 {
@@ -111,7 +113,7 @@ func Prehold(d *sql.DB, userID, amount int64, requestID int64) error {
 	}
 	return tx(d, func(tx *sql.Tx) error {
 		res, err := tx.Exec(
-			"UPDATE users SET balance_micro=balance_micro-? WHERE id=? AND status=1 AND balance_micro>=?",
+			"UPDATE users SET balance_micro=balance_micro-? WHERE id=? AND status=1 AND balance_micro>=? AND balance_micro>0",
 			amount, userID, amount)
 		if err != nil {
 			return err

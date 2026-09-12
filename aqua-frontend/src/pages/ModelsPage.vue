@@ -245,8 +245,8 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <span class="pms-price-tag" :class="{ promo: m.subsidized || m.basePrice != null }">{{ m.basePrice != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '正常价') }}</span>
             </div>
             <div v-if="m.mode === 'per_call' && m.basePrice != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
-            <!-- 按量计费：三段价 + 单次保底 + 补贴徽标 -->
-            <div v-else class="pms-price pms-price-token">
+            <!-- 按量计费：三段价 + 单次保底 + 补贴徽标（仅按量模型渲染；按次卡不再显示无意义的 ¥0 token 行） -->
+            <div v-if="m.mode !== 'per_call'" class="pms-price pms-price-token">
               <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
@@ -268,13 +268,13 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
             </div>
             <!-- 图片模型：按张计费（VIP 展示拿货价 + 底部原价） -->
-            <div v-if="m.isImage && m.perImage" class="pms-price">
+            <div v-if="m.perImage != null" class="pms-price">
               <b>¥{{ microYuan(m.perImage) }}</b><i>/张</i>
               <span class="pms-price-tag" :class="{ promo: m.basePerImage != null || m.subsidized }">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
             </div>
-            <div v-if="m.isImage && m.perImage && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
-            <!-- 按量计费：三段价（无保底；缓存命中更省） -->
-            <div v-else class="pms-price pms-price-token">
+            <div v-if="m.perImage != null && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
+            <!-- 按量计费：三段价（无保底；缓存命中更省；图片按张卡不渲染 token 行，避免 ¥0 误读为免费） -->
+            <div v-if="m.perImage == null" class="pms-price pms-price-token">
               <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
