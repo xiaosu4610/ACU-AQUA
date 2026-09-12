@@ -3,7 +3,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useModels, type ModelRow } from '@/composables/useModels'
-import { classifyModel, dsMaintenance, dsRetired, fallbackModels } from '@/composables/modelMeta'
+import { classifyModel, dsMaintenance, dsRetired } from '@/composables/modelMeta'
 import { streamChat, type ChatMessage } from '@/composables/useSSE'
 import { errText } from '@/composables/useApi'
 import AuthBanner from '@/components/AuthBanner.vue'
@@ -27,8 +27,8 @@ let chatHistory: ChatMessage[] = []
 const qm = route.query.model
 let deepLink = (Array.isArray(qm) ? qm[0] : qm) || ''
 
-/* 离线兜底（先有后优）：进页立即可选，在线列表返回后自动覆盖 */
-const OFFLINE: ModelRow[] = ['auto', ...fallbackModels].map(id => ({ id, ...classifyModel(id) }))
+/* 离线兜底（先有后优）：进页立即可选，在线列表返回后自动覆盖；离线仅 auto，不落任何清单 */
+const OFFLINE: ModelRow[] = [{ id: 'auto', ...classifyModel('auto') }]
 const baseRows = computed<ModelRow[]>(() => (models.value.length ? models.value : OFFLINE))
 const listRows = computed<ModelRow[]>(() => {
   // 仅对话类模型可选（维护中的官方自营模型除外）；无对话模型时退化为全部列表，避免空下拉

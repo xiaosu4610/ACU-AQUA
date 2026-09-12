@@ -48,7 +48,7 @@ func newTestApp(t *testing.T) (*App, *httptest.Server, string) {
 	cfg.Server.Listen = "127.0.0.1:0"
 	cfg.Lines = []config.Line{{
 		ID: "t", Name: "测试线", Mode: "per_token", BaseURL: up.URL, Keys: []string{"sk-upstream-1"},
-		VipNum: 9, VipDen: 10, KeyFaceMicro: 67_980_000,
+		VipNum: 9, VipDen: 10, KeyFaceMicro: 88_888_888,
 		Models: []config.Model{{
 			SiteID: "m1", UpstreamID: "vendor-m1",
 			InCostRate10: 120_000, CacheCostRate10: 15_000, OutCostRate10: 360_000,
@@ -57,7 +57,7 @@ func newTestApp(t *testing.T) (*App, *httptest.Server, string) {
 	}, {
 		// 按次线：回归 2026-09-11 计费事故（per_call 带 usage 曾漏扣为 0）
 		ID: "c", Name: "按次线", Mode: "per_call", BaseURL: up.URL, Keys: []string{"sk-upstream-1"},
-		VipNum: 9, VipDen: 10, KeyFaceMicro: 67_980_000,
+		VipNum: 9, VipDen: 10, KeyFaceMicro: 88_888_888,
 		Models: []config.Model{{
 			SiteID: "pc1", UpstreamID: "vendor-pc1", PerCallSell: 2000,
 		}},

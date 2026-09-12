@@ -482,7 +482,7 @@ function fmtTime(ts: number): string {
               </div>
             </div>
             <div class="bal-strip">
-              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按次 2 款 / 按量 21 款含文生图，由密钥计费分组决定），其余全部模型依然完全免费，无余额照样用</span>
+              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按次或按量，由密钥计费分组决定），其余全部模型依然完全免费，无余额照样用</span>
               <span>支持在线充值（支付金额 100% 全额到账，渠道手续费由本站承担）· 失败请求自动全额退回 · 每笔流水永久可查</span>
               <button class="mini-btn ok" @click="go('topup')"><AqIcon name="spark" :size="12" /> 余额充值</button>
               <button class="mini-btn" @click="go('billing')"><AqIcon name="bolt" :size="12" /> 消费账单</button>
@@ -763,7 +763,7 @@ function fmtTime(ts: number): string {
               <button class="mini-btn" @click="manualCheck">我已支付，立即查询</button>
               <button class="mini-btn" @click="stopPolling(); payingOrder = null">取消检测</button>
             </div>
-            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按次计费（正式价 ¥0.004~0.005/次，与生成长度无关），余额低于阈值可开启邮件提醒。</p>
+            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按次/按量计费（实时单价见模型中心收费专区），余额低于阈值可开启邮件提醒。</p>
             <div class="topup-help">
               <b>支付遇到问题？</b>已支付但余额未到账、重复扣款、金额有误——请勿重复支付，保留支付凭证（账单截图 / 商户单号），
               <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">加入 QQ 频道</a> 或

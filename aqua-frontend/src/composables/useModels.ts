@@ -1,7 +1,7 @@
 /* 模型列表共享状态：/v1/models 拉取 + 离线兜底（首屏即有模型可选） */
 import { ref } from 'vue'
 import { apiJson } from './useApi'
-import { classifyModel, fallbackModels } from './modelMeta'
+import { classifyModel } from './modelMeta'
 
 export interface ModelRow {
   id: string
@@ -32,8 +32,8 @@ export interface ModelRow {
   subsidized?: boolean
 }
 
-/** offline fallback：auto 置顶 + 静态清单 */
-const OFFLINE: ModelRow[] = ['auto', ...fallbackModels].map(id => ({ id, ...classifyModel(id) }))
+/** offline fallback：仅 auto（离线不展示任何模型清单，避免运营数据进代码） */
+const OFFLINE: ModelRow[] = [{ id: 'auto', ...classifyModel('auto') }]
 
 const models = ref<ModelRow[]>([])
 const loading = ref(false)
@@ -59,6 +59,8 @@ export function useModels() {
         return {
           id,
           ...classifyModel(id),
+          // 特殊计费类型（image/video…）以后端下发的 type 字段为准（配置化，前端零硬编码），仅离线兜底时走本地推断
+          type: (raw as any).type || classifyModel(id).type,
           health: raw.health || null,
           status: raw.status || undefined,
           status_msg: raw.status_msg || undefined,

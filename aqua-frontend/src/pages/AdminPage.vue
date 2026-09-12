@@ -201,8 +201,12 @@ async function loadQuota() {
 }
 const topupPreview = computed(() => {
   const micro = toMicro(topup.value.amount)
-  // 换算预览按 acu2 通道成本 0.0027 元/次估算（v4-flash 通道成本更低，实际可跑更多次）
-  return micro > 0 ? `≈ ${fmt(Math.floor(micro / 2700))} 次（按 acu2 通道成本 0.0027 元/次折算，v4-flash 通道更低）` : ''
+  if (micro <= 0) return ''
+  // 换算预览按当前上游通道成本折算（从 /admin/quota 实时数据取，不硬编码任何渠道价格）
+  const chs = (quota.value?.channels || []).filter((c: any) => c?.cost_per_call_micro > 0)
+  if (!chs.length) return ''
+  const cost = Math.max(...chs.map((c: any) => Number(c.cost_per_call_micro))) // 取较贵通道保守估算
+  return `≈ ${fmt(Math.floor(micro / cost))} 次（按当前通道成本折算）`
 })
 async function doTopup() {
   const micro = toMicro(topup.value.amount)
@@ -1094,7 +1098,7 @@ async function doUserKeyRevoke(kid: number) {
                 <button v-if="quota.pool?.circuit_open" class="mini-btn" style="margin-left:8px" @click="resetCircuit">解除熔断</button>
               </b>
             </div>
-            <p class="adm-hint">池剩余 ≤ ¥0.54 自动熔断（防超额欠费）；充值/同步后自动解除。两把上游密钥（acu = v4-flash 专线，acu2 = 新模型通道）共用同一个上游钱包，扣费统一从池里按各自上游成本计。</p>
+            <p class="adm-hint">上游密钥共用同一个上游钱包，扣费统一从池里按各自上游成本计；池剩余过低自动熔断（防超额欠费），充值/同步后自动解除。</p>
             <table class="adm-table" style="margin-top:10px">
               <thead><tr><th>通道</th><th class="num">累计额度(次)</th><th class="num">已用(次)</th><th class="num">上游成本</th></tr></thead>
               <tbody>

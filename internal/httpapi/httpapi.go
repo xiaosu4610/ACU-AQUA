@@ -458,6 +458,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			item := map[string]any{
 				"id": a.Cfg.Billing.UnifiedPrefix + "/" + site, "object": "model",
 				"created": created, "owned_by": "acu", "paid": true,
+				"type": "chat", // 特殊计费模型类型下发（image/video…），前端零硬编码；来自线路模型配置
 			}
 			modes := []string{}
 			var pc, pt *grpPrice
@@ -498,6 +499,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			for k := range gs {
 				if gs[k].m.Image {
 					item["image"] = true
+					item["type"] = "image"
 					item["per_image"] = gs[k].p.PriceMicro
 					if gs[k].base != nil {
 						item["base_per_image"] = gs[k].base.PriceMicro
@@ -557,6 +559,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item := map[string]any{
 					"id": full, "object": "model", "created": created, "owned_by": "acu",
 					"paid":        true,
+					"type":        "chat",
 					"mode":        p.Mode,
 					"price_micro": p.PriceMicro,
 					"description": pricingDescription(m, p),
@@ -569,6 +572,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				}
 				if m.Image {
 					item["image"] = true
+					item["type"] = "image"
 					item["per_image"] = p.PriceMicro
 				}
 				if m.Degraded {
@@ -594,6 +598,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				continue // 上游永久下线（404/410 两次确认）：隐藏
 			}
 			item := map[string]any{"id": m.SiteID, "object": "model", "created": created, "owned_by": l.ID}
+			if m.Image {
+				item["type"] = "image" // 特殊计费类型下发（免费文生图等），前端零硬编码
+			}
 			if h, ok := health[m.SiteID]; ok {
 				item["health"] = h
 			}
