@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{ name: string; size?: number }>(), { siz
 const ICONS: Record<string, string> = {
   // —— 控制台 ——
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 20 3"/><path d="M16 7l3 3"/><path d="M13 10l2.5 2.5"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1.1-1.7 2.5-1.7s2.5.7 2.5 1.7c0 2.6-5 1.4-5 4 0 1 1.1 1.7 2.5 1.7s2.5-.7 2.5-1.7"/>',
   alert: '<path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.6" fill="currentColor" stroke="none"/>',
   chart: '<path d="M4 4v16h16"/><path d="M8 16v-5"/><path d="M13 16V8"/><path d="M18 16v-3"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',

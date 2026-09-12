@@ -66,6 +66,10 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		if grp == "" {
 			grp = a.Cfg.Billing.DefaultGrp
 		}
+		if grp == "free" {
+			errOut(w, 403, "free_grp_restricted", "当前密钥为纯免费分组，仅可调用免费模型；收费模型请到控制台切换密钥分组")
+			return
+		}
 		line = a.lineForMode(grp)
 		if line == nil {
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")

@@ -113,6 +113,14 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
                 <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span>我的用量</span>
                 <span class="ddesc">按密钥查统计 · 匿名指纹不存明文</span>
               </router-link>
+              <router-link to="/finance">
+                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg></span>财务管理中心</span>
+                <span class="ddesc">余额 · 消费统计 · 流水 · 充值记录</span>
+              </router-link>
+              <router-link to="/community">
+                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>加入 Q 群</span>
+                <span class="ddesc">一群 / 二群 / 频道 · 交流与活动通知</span>
+              </router-link>
             </div>
           </div>
         </div>
@@ -143,13 +151,19 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
     <p style="margin-top:8px;">
       <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">Gitee <AqIcon name="star" :size="13" /></a> ·
       <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">GitHub <AqIcon name="star" :size="13" /></a> ·
-      <a href="https://qm.qq.com/q/qoe6XbsVge" target="_blank" rel="noopener" style="color:var(--accent);">QQ 一群（1103667832）</a> ·
-      <a href="https://qm.qq.com/q/o8QDbza2Ge" target="_blank" rel="noopener" style="color:var(--accent);">QQ 二群（1006740220）</a> ·
+      <router-link to="/finance" style="color:var(--accent);">财务管理中心</router-link> ·
+      <router-link to="/community" style="color:var(--accent);">加入 Q 群（一群 / 二群 / 频道）</router-link> ·
       <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener" style="color:var(--accent);">QQ 频道（pd57362562）</a> ·
       <router-link to="/sponsor" style="color:var(--accent);">赞助支持</router-link>
       · <span style="color:var(--muted);">v5.2.0 沧溟</span>
     </p>
   </footer>
+
+  <!-- 全局悬浮 Q 群入口（每个页面可见） -->
+  <router-link to="/community" class="qq-fab" title="加入官方 Q 群（一群 / 二群 / 频道）" aria-label="加入官方 Q 群">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+    <span>Q群</span>
+  </router-link>
 
   <!-- ===== 移动端底部标签栏（≤860px，样式见 theme.css）===== -->
   <nav class="tabbar">

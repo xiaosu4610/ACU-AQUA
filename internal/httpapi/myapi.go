@@ -171,6 +171,137 @@ func (a *App) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"ok": true, "key": plain, "billing_grp": grp, "message": "密钥已创建"})
 }
 
+// myKeysGroup PATCH /v1/my/keys/{id}/group {billing_grp} → 随时切换密钥计费分组
+// 合法值：per_call（免费+按次）| per_token（免费+按量）| free（纯免费，仅可调免费模型）
+func (a *App) myKeysGroup(w http.ResponseWriter, r *http.Request) {
+	actx := auth.Authenticate(a.DB.DB, r)
+	if actx == nil {
+		errOut(w, 401, "unauthorized", "请先登录")
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var req struct {
+		BillingGrp string `json:"billing_grp"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	grp := config.NormalizeBillingGrp(req.BillingGrp)
+	// 拒绝空/非法分组：切换接口必须给出明确目标（per_call|per_token|free），
+	// 防止前端异常请求把分组静默重置为"未分组"
+	if grp == "" {
+		errOut(w, 400, "bad_request", "billing_grp 必须为 per_call / per_token / free 之一")
+		return
+	}
+	res, err := a.DB.Exec("UPDATE api_keys SET billing_grp=? WHERE id=? AND user_id=? AND revoked=0",
+		grp, id, actx.UserID)
+	if err != nil {
+		errOut(w, 500, "internal_error", "更新失败")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		errOut(w, 404, "not_found", "密钥不存在或已吊销")
+		return
+	}
+	jsonOut(w, 200, map[string]any{"ok": true, "billing_grp": grp, "message": "计费分组已更新，立即生效"})
+}
+
+// myFinance GET /v1/my/finance → 财务管理中心：余额 + 消费统计 + 按模型统计 + 流水 + 充值记录
+func (a *App) myFinance(w http.ResponseWriter, r *http.Request) {
+	actx := auth.Authenticate(a.DB.DB, r)
+	if actx == nil {
+		errOut(w, 401, "unauthorized", "请先登录")
+		return
+	}
+	uid := actx.UserID
+	now := time.Now().Unix()
+	dayStart := time.Date(time.Now().Local().Year(), time.Now().Local().Month(), time.Now().Local().Day(), 0, 0, 0, 0, time.Now().Local().Location()).Unix()
+
+	var balance int64
+	_ = a.DB.QueryRow("SELECT COALESCE(balance_micro,0) FROM users WHERE id=?", uid).Scan(&balance)
+
+	// 消费汇总（billed=1 的成功扣费请求）
+	var spendToday, spendWeek, spendTotal float64
+	_ = a.DB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN ts>=? THEN bill_amount_micro END),0),
+		COALESCE(SUM(CASE WHEN ts>=? THEN bill_amount_micro END),0),
+		COALESCE(SUM(bill_amount_micro),0)
+		FROM requests WHERE user_id=? AND billed=1`,
+		dayStart, now-7*86400, uid).Scan(&spendToday, &spendWeek, &spendTotal)
+
+	// 近 30 天按模型消费 Top10
+	type modelSpend struct {
+		Model  string  `json:"model"`
+		Amount float64 `json:"amount_micro"`
+		Calls  int64   `json:"calls"`
+	}
+	byModel := []modelSpend{}
+	mrows, err := a.DB.Query(`SELECT model, COALESCE(SUM(bill_amount_micro),0), COUNT(*)
+		FROM requests WHERE user_id=? AND billed=1 AND ts>=? GROUP BY model ORDER BY 2 DESC LIMIT 10`,
+		uid, now-30*86400)
+	if err == nil {
+		for mrows.Next() {
+			var m modelSpend
+			if mrows.Scan(&m.Model, &m.Amount, &m.Calls) == nil {
+				byModel = append(byModel, m)
+			}
+		}
+		mrows.Close()
+	}
+
+	// 最近消费流水（20 条）
+	type flow struct {
+		Model  string  `json:"model"`
+		Amount float64 `json:"amount_micro"`
+		Ok     bool    `json:"ok"`
+		Ts     int64   `json:"ts"`
+	}
+	recent := []flow{}
+	frows, err := a.DB.Query(`SELECT model, bill_amount_micro, ok, ts FROM requests
+		WHERE user_id=? AND billed=1 ORDER BY ts DESC LIMIT 20`, uid)
+	if err == nil {
+		for frows.Next() {
+			var f flow
+			var okI int64
+			if frows.Scan(&f.Model, &f.Amount, &okI, &f.Ts) == nil {
+				f.Ok = okI != 0
+				recent = append(recent, f)
+			}
+		}
+		frows.Close()
+	}
+
+	// 最近充值记录（10 条）
+	type topup struct {
+		Amount    float64 `json:"amount_micro"`
+		Status    string  `json:"status"`
+		Channel   string  `json:"channel"`
+		CreatedTs int64   `json:"created_ts"`
+		PaidTs    int64   `json:"paid_ts"`
+	}
+	topupRows := []topup{}
+	prows, err := a.DB.Query(`SELECT amount_micro, status, COALESCE(channel,''), created_ts, paid_ts
+		FROM payments WHERE user_id=? ORDER BY id DESC LIMIT 10`, uid)
+	if err == nil {
+		for prows.Next() {
+			var t topup
+			if prows.Scan(&t.Amount, &t.Status, &t.Channel, &t.CreatedTs, &t.PaidTs) == nil {
+				topupRows = append(topupRows, t)
+			}
+		}
+		prows.Close()
+	}
+
+	jsonOut(w, 200, map[string]any{
+		"balance_micro":    balance,
+		"spend_today":      spendToday,
+		"spend_week":       spendWeek,
+		"spend_total":      spendTotal,
+		"by_model":         byModel,
+		"recent":           recent,
+		"topups":           topupRows,
+		"generated_ts":     now,
+	})
+}
+
 // myKeysDelete DELETE /v1/my/keys/{id}
 func (a *App) myKeysDelete(w http.ResponseWriter, r *http.Request) {
 	actx := auth.Authenticate(a.DB.DB, r)

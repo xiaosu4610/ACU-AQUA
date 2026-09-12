@@ -9,12 +9,12 @@ import { dsMaintenance, hideTag, platformLabel, typeLabel } from '@/composables/
 import CapabilitiesPage from './CapabilitiesPage.vue'
 import AqIcon from '@/components/AqIcon.vue'
 
-/* 视图切换：free 免费模型 / paid 收费模型 / cap 能力总览（URL ?view=paid|cap 可直达分享） */
+/* 视图切换：free 免费模型 / paid 收费模型 / cap 能力总览 / live 实时状态（URL ?view= 可直达分享） */
 const route = useRoute()
 const router = useRouter()
-const view = ref(route.query.view === 'cap' ? 'cap' : route.query.view === 'paid' ? 'paid' : 'free')
-watch(() => route.query.view, v => { view.value = v === 'cap' ? 'cap' : v === 'paid' ? 'paid' : 'free' })
-function setView(v: 'free' | 'paid' | 'cap') {
+const view = ref(route.query.view === 'cap' ? 'cap' : route.query.view === 'paid' ? 'paid' : route.query.view === 'live' ? 'live' : 'free')
+watch(() => route.query.view, v => { view.value = v === 'cap' ? 'cap' : v === 'paid' ? 'paid' : v === 'live' ? 'live' : 'free' })
+function setView(v: 'free' | 'paid' | 'cap' | 'live') {
   view.value = v
   router.replace({ query: v === 'free' ? {} : { view: v } })
 }
@@ -24,10 +24,43 @@ onMounted(() => {
   load()
   // 旧版每 60 秒自动刷新（模型列表与额度状态自动更新）
   refreshTimer = window.setInterval(() => load(true), 60000)
+  liveTimer = window.setInterval(() => { if (view.value === 'live') loadLive() }, 30000)
 })
 let refreshTimer = 0
-onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer) })
+let liveTimer = 0
+onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); if (liveTimer) window.clearInterval(liveTimer) })
 function retry() { load(true) }
+
+/* ---- 实时状态：/v1/models/status 30 分钟窗口聚合（时延/速度/成功率），30 秒自动刷新 ---- */
+type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
+const liveRows = ref<LiveRow[]>([])
+const liveTs = ref(0)
+const liveLoading = ref(false)
+async function loadLive() {
+  liveLoading.value = true
+  try {
+    const r = await fetch('/v1/models/status')
+    const j = await r.json()
+    liveRows.value = (j.data || []).filter((x: LiveRow) => /^(aqua|acu)\//.test(x.model))
+    liveTs.value = j.generated_ts || 0
+  } catch { /* 静默：下一轮自动重试 */ }
+  liveLoading.value = false
+}
+watch(view, v => { if (v === 'live' && !liveRows.value.length) loadLive() })
+const liveMap = computed(() => { const m: Record<string, LiveRow> = {}; for (const r of liveRows.value) m[r.model] = r; return m })
+const livePaid = computed(() => paidModels.value.map(m => ({ id: m.id, live: liveMap.value[m.id] })))
+function fmtLat(ms?: number): string {
+  if (!ms) return '--'
+  return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
+}
+function fmtRate(v: number): string { return (v * 100).toFixed(1) + '%' }
+function fmtAgo(ts?: number): string {
+  if (!ts) return '--'
+  const d = Math.max(0, Math.floor(Date.now() / 1000 - ts))
+  if (d < 60) return d + ' 秒前'
+  if (d < 3600) return Math.floor(d / 60) + ' 分钟前'
+  return Math.floor(d / 3600) + ' 小时前'
+}
 
 /* ---- 筛选状态（旧 curPlatform / curType / 搜索词） ---- */
 const curPlatform = ref('all')
@@ -207,6 +240,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       <button type="button" class="hub-tab" :class="{ active: view === 'free' }" @click="setView('free')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>免费模型</button>
       <button type="button" class="hub-tab" :class="{ active: view === 'paid' }" @click="setView('paid')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1.1-1.7 2.5-1.7s2.5.7 2.5 1.7c0 2.6-5 1.4-5 4 0 1 1.1 1.7 2.5 1.7s2.5-.7 2.5-1.7"/></svg></span>收费模型</button>
       <button type="button" class="hub-tab" :class="{ active: view === 'cap' }" @click="setView('cap')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 20 7v10l-8 5-8-5V7l8-5z"/><path d="M12 12v8"/><path d="m4 7 8 5 8-5"/><path d="M12 2v8"/></svg></span>模型能力</button>
+      <button type="button" class="hub-tab" :class="{ active: view === 'live' }" @click="setView('live')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>实时状态</button>
     </nav>
     <div class="hub-pane">
       <template v-if="view === 'free'">
@@ -374,13 +408,44 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       <p class="hint" style="margin-top:10px;">点击任意模型 ID 可查看该模型的详细能力说明与支持参数。</p>
       </template>
       <CapabilitiesPage v-if="view === 'cap'" embedded />
+      <template v-else-if="view === 'live'">
+      <p class="hub-desc">收费模型<b>实时运行状态</b>：最近 30 分钟真实计费请求聚合出的成功率、平均响应时延与生成速度（tokens/s），每 30 秒自动刷新。无请求记录的模型显示「待命中」。</p>
+      <div class="live-bar">
+        <span class="live-pulse" :class="{ loading: liveLoading }"></span>
+        <span class="live-updated">数据时间：{{ liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--' }}<i>（窗口 30 分钟 · 每 30 秒自动刷新）</i></span>
+        <button class="mini-btn" :disabled="liveLoading" @click="loadLive">{{ liveLoading ? '刷新中…' : '立即刷新' }}</button>
+      </div>
+      <div class="live-wrap">
+        <table class="live-table">
+          <thead>
+            <tr><th>模型</th><th>状态</th><th>平均时延</th><th>生成速度</th><th>成功率</th><th>请求数</th><th>最近活动</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in livePaid" :key="row.id">
+              <td><code class="live-model">{{ row.id.replace(/^aqua\//, '') }}</code></td>
+              <td>
+                <span v-if="!row.live" class="st-badge st-idle">待命中</span>
+                <span v-else-if="row.live.status === 'ok'" class="st-badge st-ok">运行正常</span>
+                <span v-else-if="row.live.status === 'degraded'" class="st-badge st-deg">部分异常</span>
+                <span v-else class="st-badge st-down">故障</span>
+              </td>
+              <td>{{ row.live?.avg_latency_ms ? fmtLat(row.live.avg_latency_ms) : '--' }}</td>
+              <td>{{ row.live?.avg_tps ? row.live.avg_tps.toFixed(1) + ' tok/s' : '--' }}</td>
+              <td>{{ row.live ? fmtRate(row.live.ok_rate) : '--' }}</td>
+              <td>{{ row.live?.samples || 0 }}</td>
+              <td>{{ fmtAgo(row.live?.last_ts) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      </template>
     </div>
   </section>
 </template>
 
 <style scoped>
-/* 子导航 Tab 由 router-link 改为按钮：去掉按钮默认边框/底色，其余外观沿用 legacy.css 的 .hub-tab */
-button.hub-tab { border: 0; background: none; font-family: inherit; cursor: pointer; }
+/* 子导航 Tab 外观统一由 legacy.css 的 .hub-tab 提供（按钮化视觉），此处仅继承字体 */
+button.hub-tab { font-family: inherit; }
 
 /* ---- 收费模型专区（pms-*）：价格 + 倒计时 + 实时健康分 ---- */
 .paid-models-sec {
@@ -446,6 +511,34 @@ button.hub-tab { border: 0; background: none; font-family: inherit; cursor: poin
   .pms-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pms-card { padding: 11px 12px; }
   .pms-price b { font-size: 18px; }
+}
+
+/* ---- 实时状态（live-*）：30 分钟聚合表 ---- */
+.live-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+.live-pulse { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.5); animation: livepulse 2s infinite; }
+.live-pulse.loading { background: #f59e0b; }
+@keyframes livepulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.45); } 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+.live-updated { font-size: 12.5px; color: var(--muted); }
+.live-updated i { font-style: normal; opacity: .75; margin-left: 6px; }
+.live-updated .mini-btn { margin-left: 8px; }
+.live-bar .mini-btn { margin-left: auto; }
+.live-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.live-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
+.live-table th, .live-table td { padding: 10px 14px; text-align: left; white-space: nowrap; }
+.live-table th { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); }
+.live-table td { border-bottom: 1px solid rgba(148,163,184,.14); color: var(--text); }
+.live-table tbody tr:last-child td { border-bottom: 0; }
+.live-table tbody tr:hover { background: var(--btn-hover); }
+.live-model { font-family: var(--mono, monospace); font-size: 12.5px; color: var(--accent); }
+.st-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
+.st-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.st-ok { color: #16a34a; background: rgba(34,197,94,.13); border: 1px solid rgba(34,197,94,.3); }
+.st-deg { color: #d97706; background: rgba(245,158,11,.13); border: 1px solid rgba(245,158,11,.32); }
+.st-down { color: #dc2626; background: rgba(239,68,68,.13); border: 1px solid rgba(239,68,68,.32); }
+.st-idle { color: var(--muted); background: rgba(148,163,184,.12); border: 1px solid rgba(148,163,184,.26); }
+@media (max-width: 640px) {
+  .live-table th:nth-child(6), .live-table td:nth-child(6),
+  .live-table th:nth-child(7), .live-table td:nth-child(7) { display: none; }
 }
 
 /* 免费与收费政策说明卡（用户必读） */

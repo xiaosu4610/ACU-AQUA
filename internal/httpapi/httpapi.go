@@ -28,6 +28,7 @@ func (a *App) Routes() http.Handler {
 		// （旧网关目录含免费模型 + 收费模型 + 活动价状态，与前端展示完全一致）
 		mux.HandleFunc("GET /v1/models", a.handleModels)
 	}
+	mux.HandleFunc("GET /v1/models/status", a.handleModelsStatus)
 	mux.HandleFunc("GET /v1/models/{id}", a.handleModelDetail)
 	mux.HandleFunc("GET /v1/models/{id}/{rest...}", a.handleModelDetail)
 	mux.HandleFunc("POST /v1/chat/completions", a.handleChat)
@@ -98,8 +99,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/my/balance-alert", a.myBalanceAlertSet)
 	mux.HandleFunc("GET /v1/my/keys", a.myKeysGet)
 	mux.HandleFunc("POST /v1/my/keys", a.myKeysCreate)
+	mux.HandleFunc("PATCH /v1/my/keys/{id}/group", a.myKeysGroup)
 	mux.HandleFunc("DELETE /v1/my/keys/{id}", a.myKeysDelete)
 	mux.HandleFunc("GET /v1/my/keys/{id}/reveal", a.myKeysReveal)
+	mux.HandleFunc("GET /v1/my/finance", a.myFinance)
 	mux.HandleFunc("GET /v1/my/usage", a.myUsage)
 	mux.HandleFunc("GET /v1/my/history", a.myHistory)
 	mux.HandleFunc("GET /v1/my/billing", a.myBilling)
@@ -373,12 +376,65 @@ var gatewayVersion = "go-2026.09"
 // handleMeta 站点信息（前端渲染源，全部来自配置——代码零运营事实）
 func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{
-		"name":         a.Cfg.Site.Name,
-		"domain":       a.Cfg.Site.Domain,
-		"docs_url":     a.Cfg.Site.DocsURL,
-		"qq_group":     a.Cfg.Site.QQGroup,
-		"qq_group_url": a.Cfg.Site.QQGroupURL,
+		"name":          a.Cfg.Site.Name,
+		"domain":        a.Cfg.Site.Domain,
+		"docs_url":      a.Cfg.Site.DocsURL,
+		"qq_group":      a.Cfg.Site.QQGroup,
+		"qq_group_url":  a.Cfg.Site.QQGroupURL,
+		"qq_group2":     a.Cfg.Site.QQGroup2,
+		"qq_group_url2": a.Cfg.Site.QQGroupURL2,
 	})
+}
+
+// handleModelsStatus 模型实时状态（公开匿名聚合，30 分钟窗口）：
+// 每模型请求数/成功率/平均时延/平均输出速度，供模型中心"实时状态"页展示。
+// 只输出聚合运行指标，不含成本/渠道/用户信息。
+func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
+	win := int64(1800)
+	since := time.Now().Unix() - win
+	rows, err := a.DB.Query(`
+		SELECT model, COUNT(*), COALESCE(SUM(ok),0),
+		       COALESCE(AVG(CASE WHEN ok=1 THEN latency_ms END),0),
+		       COALESCE(AVG(CASE WHEN ok=1 AND tps>0 THEN tps END),0),
+		       COALESCE(MAX(ts),0)
+		FROM requests WHERE ts>=? GROUP BY model`, since)
+	if err != nil {
+		errOut(w, 500, "internal_error", "查询失败")
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var model string
+		var total, okN, lastTs int64
+		var avgLat, avgTps float64
+		if rows.Scan(&model, &total, &okN, &avgLat, &avgTps, &lastTs) != nil {
+			continue
+		}
+		rate := 0.0
+		if total > 0 {
+			rate = float64(okN) / float64(total)
+		}
+		status := "ok"
+		switch {
+		case rate < 0.90:
+			status = "down"
+		case rate < 0.99:
+			status = "degraded"
+		}
+		it := map[string]any{
+			"model": model, "samples": total, "ok": okN, "ok_rate": rate,
+			"status": status, "last_ts": lastTs, "window_sec": win,
+		}
+		if avgLat > 0 {
+			it["avg_latency_ms"] = int64(avgLat)
+		}
+		if avgTps > 0 {
+			it["avg_tps"] = avgTps
+		}
+		items = append(items, it)
+	}
+	jsonOut(w, 200, map[string]any{"object": "list", "window_sec": win, "generated_ts": time.Now().Unix(), "data": items})
 }
 
 // handleModels 模型列表（价格展示；成本率绝不出现）。
@@ -402,9 +458,11 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 
 	health := a.computeHealth()
 	retired := a.retiredUpstreams()
+	// 纯免费分组密钥：收费模型对其不可见不可调（列表同步隐藏，调用端 403 拦截）
+	freeOnly := actx != nil && actx.KeyGrp == "free"
 
 	// 收费线：实时价目（DB pricing 表为准）；下架（normal 价过期）即从列表消失，VIP 回退 vip 组
-	if a.Cfg.Billing.UnifiedPrefix != "" {
+	if a.Cfg.Billing.UnifiedPrefix != "" && !freeOnly {
 		// 统一前缀模式：全部收费线模型合并为 前缀/site_id，groups 标注可用计费分组
 		// （同 ID 在按次/按量线都存在 → 两条分组都列出；计费方式由密钥分组决定）
 		type grpPrice struct {
@@ -542,7 +600,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		directLines := a.linesSnap()
 		for i := range directLines {
 			l := &directLines[i]
-			if l.Mode == "free" {
+			if l.Mode == "free" || freeOnly {
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"

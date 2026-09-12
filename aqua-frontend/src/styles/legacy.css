@@ -255,6 +255,13 @@
     text-decoration: none; transition: transform .15s, box-shadow .15s; }
   #fab-sponsor:hover { transform: translateY(-2px); box-shadow: 0 8px 26px rgba(244,63,94,.45); }
   #fab-sponsor svg { width: 16px; height: 16px; }
+  /* 全局悬浮 Q 群入口（叠在赞助按钮上方，每页可见） */
+  .qq-fab { position: fixed; right: 18px; bottom: 76px; z-index: 90; display: inline-flex; align-items: center; gap: 7px;
+    padding: 10px 16px; border-radius: 999px; font-size: 13.5px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #12b3a8, #12d0b8); box-shadow: 0 6px 20px rgba(18,179,168,.35);
+    text-decoration: none; transition: transform .15s, box-shadow .15s; }
+  .qq-fab:hover { transform: translateY(-2px); box-shadow: 0 8px 26px rgba(18,179,168,.45); }
+  .qq-fab svg { width: 16px; height: 16px; }
   /* footer 赞助提示行 */
   .footer-sponsor { color: #f43f5e; text-decoration: none; font-size: 13.5px; }
   .footer-sponsor:hover { color: #fb7185; text-decoration: underline; }
@@ -366,13 +373,21 @@
     transition: all .15s; }
   .subnav-chip:hover { background: var(--btn-hover); transform: translateY(-1px); }
   /* ===== 大板块子目录（模型中心 / 体验中心）：hash 驱动的二级导航 ===== */
-  .hub-subnav { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 20px; }
-  .hub-tab { display: inline-flex; align-items: center; gap: 7px; padding: 8px 18px; border-radius: 999px;
-    border: 1px solid var(--border); background: var(--card); color: var(--muted); font-size: 13.5px; font-weight: 600;
+  /* 视觉强按钮化：渐变描边 + 卡片底 + 悬浮抬升，让"这是可以点的按钮"一眼可辨 */
+  .hub-subnav { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 20px; }
+  .hub-tab { display: inline-flex; align-items: center; gap: 7px; padding: 10px 22px; border-radius: 14px;
+    border: 1.5px solid var(--border); background: linear-gradient(160deg, var(--card), var(--card2));
+    color: var(--muted); font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.14);
     text-decoration: none; transition: all .15s; }
-  .hub-tab .ic svg { width: 16px; height: 16px; }
-  .hub-tab:hover { background: var(--btn-hover); color: var(--accent); transform: translateY(-1px); }
-  .hub-tab.active { background: linear-gradient(90deg, var(--grad-1), var(--grad-2)); border-color: transparent; color: #04121f; }
+  .hub-tab .ic { display: inline-flex; color: var(--accent); }
+  .hub-tab .ic svg { width: 17px; height: 17px; }
+  .hub-tab:hover { background: var(--btn-hover); color: var(--accent); transform: translateY(-2px);
+    border-color: var(--aqua); box-shadow: 0 6px 16px rgba(0,0,0,.2); }
+  .hub-tab:active { transform: translateY(0); }
+  .hub-tab.active { background: linear-gradient(90deg, var(--grad-1), var(--grad-2)); border-color: transparent;
+    color: #04121f; box-shadow: 0 4px 14px rgba(56,189,248,.35); }
+  .hub-tab.active .ic { color: #04121f; }
+  .hub-tab.active::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #04121f; opacity: .55; }
   .hub-desc { color: var(--muted); font-size: 13.5px; line-height: 1.7; margin: 0 0 14px; }
   /* 直达磁贴：页面入口矩阵化，首屏即点即达 */
   .quick-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }

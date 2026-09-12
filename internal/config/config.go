@@ -15,11 +15,13 @@ import (
 
 // Site 站点信息（前端 /v1/meta 渲染源，全部可自定义）
 type Site struct {
-	Name       string `toml:"name"`
-	Domain     string `toml:"domain"`
-	DocsURL    string `toml:"docs_url"`
-	QQGroup    string `toml:"qq_group"`
-	QQGroupURL string `toml:"qq_group_url"`
+	Name        string `toml:"name"`
+	Domain      string `toml:"domain"`
+	DocsURL     string `toml:"docs_url"`
+	QQGroup     string `toml:"qq_group"`
+	QQGroupURL  string `toml:"qq_group_url"`
+	QQGroup2    string `toml:"qq_group2"`
+	QQGroupURL2 string `toml:"qq_group_url2"`
 }
 
 // Database 数据库配置
@@ -180,6 +182,12 @@ func applyEnv(c *Cfg) {
 	if v := os.Getenv("AQUA_SITE_QQ_GROUP_URL"); v != "" {
 		c.Site.QQGroupURL = v
 	}
+	if v := os.Getenv("AQUA_SITE_QQ_GROUP2"); v != "" {
+		c.Site.QQGroup2 = v
+	}
+	if v := os.Getenv("AQUA_SITE_QQ_GROUP_URL2"); v != "" {
+		c.Site.QQGroupURL2 = v
+	}
 	if v := os.Getenv("AQUA_SMTP_HOST"); v != "" {
 		c.SMTP.Host = v
 	}
@@ -288,13 +296,15 @@ func (c *Cfg) LineForMode(mode string) *Line {
 	return nil
 }
 
-// NormalizeBillingGrp 计费分组标准化：仅接受 per_call / per_token，其余归空（未分组）
+// NormalizeBillingGrp 计费分组标准化：per_call / per_token / free（纯免费，仅可调免费模型），其余归空（未分组）
 func NormalizeBillingGrp(g string) string {
 	switch strings.ToLower(strings.TrimSpace(g)) {
 	case "per_call":
 		return "per_call"
 	case "per_token":
 		return "per_token"
+	case "free":
+		return "free"
 	}
 	return ""
 }

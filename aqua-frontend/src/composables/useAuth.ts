@@ -85,11 +85,31 @@ export async function listKeys(): Promise<KeyItem[]> {
   return j.keys || []
 }
 
-/** 计费分组：per_call=免费+按次计费；per_token=免费+按量计费；''=旧式未分组 */
-export type BillingGrp = '' | 'per_call' | 'per_token'
+/** 计费分组：per_call=免费+按次计费；per_token=免费+按量计费；free=纯免费（仅可调免费模型）；''=旧式未分组 */
+export type BillingGrp = '' | 'per_call' | 'per_token' | 'free'
 
 export async function createKey(name: string, billingGrp: BillingGrp = ''): Promise<{ key: string; prefix: string; billing_grp: string }> {
   return apiJson('/my/keys', { method: 'POST', session: true, body: { name, billing_grp: billingGrp } })
+}
+
+/** 随时切换密钥计费分组（立即生效，无需重建密钥） */
+export async function changeKeyGroup(id: number, billingGrp: BillingGrp): Promise<void> {
+  await apiJson(`/my/keys/${id}/group`, { method: 'PATCH', session: true, body: { billing_grp: billingGrp } })
+}
+
+/* ===== 财务管理中心 ===== */
+export interface FinanceData {
+  balance_micro: number
+  spend_today: number
+  spend_week: number
+  spend_total: number
+  by_model: { model: string; amount_micro: number; calls: number }[]
+  recent: { model: string; amount_micro: number; ok: boolean; ts: number }[]
+  topups: { amount_micro: number; status: string; channel: string; created_ts: number; paid_ts: number }[]
+}
+
+export async function fetchFinance(): Promise<FinanceData> {
+  return apiJson('/my/finance', { session: true })
 }
 
 /** 随时查看密钥原文（服务端加密存储回显） */

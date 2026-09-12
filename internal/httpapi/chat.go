@@ -87,6 +87,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		if grp == "" {
 			grp = a.Cfg.Billing.DefaultGrp
 		}
+		if grp == "free" {
+			// 纯免费分组密钥：收费模型全部拦截（免费模型走裸名不经此分支）
+			errOut(w, 403, "free_grp_restricted", "当前密钥为纯免费分组，仅可调用免费模型（不带 aqua/ 前缀的裸模型名）；收费模型请在控制台将该密钥切换为按次/按量分组")
+			return
+		}
 		line = a.lineForMode(grp)
 		if line == nil {
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")

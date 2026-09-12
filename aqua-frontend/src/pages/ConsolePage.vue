@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiJson, copyText, errText, fmt } from '@/composables/useApi'
 import {
-  avatarUrl, changePassword, createKey, fetchBalanceAlert, fetchCheckup, isLoggedIn, listKeys, loadMe, logout,
+  avatarUrl, changeKeyGroup, changePassword, createKey, fetchBalanceAlert, fetchCheckup, isLoggedIn, listKeys, loadMe, logout,
   me, revealKey, revokeKey, setBalanceAlert, uploadAvatar, type BillingGrp, type Checkup, type KeyItem,
 } from '@/composables/useAuth'
 import AqIcon from '@/components/AqIcon.vue'
@@ -147,6 +147,23 @@ async function copyKey(k: KeyItem) {
 async function doRevoke(k: KeyItem) {
   if (!confirm(`确认吊销密钥「${k.name}」？使用它的程序会立即 401。`)) return
   try { await revokeKey(k.id); await loadKeys(); loadCheckup() } catch (e) { keysMsg.value = errText(e) }
+}
+
+/* ---- 密钥切换计费分组（立即生效，无需重建） ---- */
+const grpEdit = ref({ open: false, id: 0, name: '', prefix: '', grp: '' as BillingGrp })
+const grpSaving = ref(false)
+function openGrpEdit(k: KeyItem) {
+  grpEdit.value = { open: true, id: k.id, name: k.name, prefix: k.prefix, grp: (k.billing_grp || '') as BillingGrp }
+}
+async function doChangeGrp() {
+  grpSaving.value = true
+  try {
+    await changeKeyGroup(grpEdit.value.id, grpEdit.value.grp)
+    grpEdit.value.open = false
+    await loadKeys()
+    note('计费分组已更新，立即生效', true)
+  } catch (e) { keysMsg.value = errText(e) }
+  grpSaving.value = false
 }
 
 function setDefaultKey() {
@@ -432,6 +449,10 @@ function fmtTime(ts: number): string {
             <span v-if="!collapsed" class="cnav-label">{{ n.label }}</span>
             <i v-if="n.id === 'keys' && !collapsed && activeKeys" class="cnav-badge">{{ activeKeys }}</i>
           </button>
+          <button class="cnav-item" title="财务管理中心" @click="router.push('/finance')">
+            <AqIcon name="coin" :size="17" />
+            <span v-if="!collapsed" class="cnav-label">财务管理中心</span>
+          </button>
         </nav>
 
         <div v-if="!collapsed" class="cside-foot">
@@ -588,10 +609,13 @@ function fmtTime(ts: number): string {
                 <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
                   <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
                 </button>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'free' }" @click="newKeyGrp = 'free'">
+                  <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
+                </button>
               </div>
               <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">创建密钥</button>
             </div>
-            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按次分组密钥按次扣费、按量分组密钥按 tokens 扣费（免费模型不受影响）。按量分组可用模型更多。</p>
+            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按次分组密钥按次扣费、按量分组密钥按 tokens 扣费（免费模型不受影响）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
             <!-- 新密钥首次展示（之后可在列表随时复制） -->
             <div v-if="freshKey" class="fresh-key">
               <code>{{ freshKey }}</code>
@@ -609,17 +633,42 @@ function fmtTime(ts: number): string {
                 <code class="key-prefix">{{ k.prefix }}</code>
                 <span v-if="k.billing_grp === 'per_call'" class="key-grp call" title="该密钥调用收费模型时按次计费">按次</span>
                 <span v-else-if="k.billing_grp === 'per_token'" class="key-grp token" title="该密钥调用收费模型时按 tokens 计费">按量</span>
+                <span v-else-if="k.billing_grp === 'free'" class="key-grp free" title="纯免费分组：仅可调用免费模型，调收费模型直接拒绝">纯免费</span>
                 <span v-else class="key-grp legacy" title="旧式密钥未选分组，收费模型按默认分组（按次）计费">未分组</span>
                 <span class="key-time">{{ fmtTime(k.created_ts) }}</span>
                 <button v-if="!k.revoked && k.can_reveal !== false" class="mini-btn ok" @click="copyKey(k)">
                   <AqIcon :name="copiedId === k.id ? 'check' : 'copy'" :size="12" /> {{ copiedId === k.id ? '已复制' : '复制' }}
                 </button>
                 <span v-else-if="!k.revoked" class="key-legacy" title="旧版密钥未存原文，无法查看">旧密钥</span>
+                <button v-if="!k.revoked" class="mini-btn" @click="openGrpEdit(k)">切换分组</button>
                 <button v-if="!k.revoked" class="mini-btn danger" @click="doRevoke(k)">吊销</button>
                 <span v-if="k.revoked" class="key-revoked">已吊销</span>
               </div>
             </div>
             <p v-if="keysMsg" class="hint-line">{{ keysMsg }}</p>
+          </div>
+        </div>
+
+        <!-- 密钥切换分组弹窗 -->
+        <div v-if="grpEdit.open" class="grp-mask" @click.self="grpEdit.open = false">
+          <div class="grp-edit-modal">
+            <h3>切换密钥计费分组</h3>
+            <p class="hint-line">密钥 <code>{{ grpEdit.prefix }}</code>（{{ grpEdit.name }}）——切换立即生效，无需重建密钥。</p>
+            <div class="grp-pick vertical">
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" @click="grpEdit.grp = 'per_call'">
+                <b>免费 + 按次计费</b><span>收费模型按次一口价扣费</span>
+              </button>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_token' }" @click="grpEdit.grp = 'per_token'">
+                <b>免费 + 按量计费</b><span>收费模型按 tokens 三段计费，模型最全</span>
+              </button>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'free' }" @click="grpEdit.grp = 'free'">
+                <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
+              </button>
+            </div>
+            <div class="grp-edit-ops">
+              <button class="mini-btn" @click="grpEdit.open = false">取消</button>
+              <button class="btn tool-run" :disabled="grpSaving" @click="doChangeGrp">{{ grpSaving ? '保存中…' : '保存' }}</button>
+            </div>
           </div>
         </div>
 
@@ -1068,8 +1117,16 @@ function fmtTime(ts: number): string {
 .key-grp { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .key-grp.call { background: rgba(11,108,255,.12); color: var(--accent, #0b6cff); }
 .key-grp.token { background: rgba(52,211,153,.14); color: #34d399; }
+.key-grp.free { background: rgba(34,197,94,.14); color: #16a34a; border: 1px solid rgba(34,197,94,.35); }
 .key-grp.legacy { background: rgba(128,140,160,.15); color: var(--muted, #8a94a6); }
 .grp-pick { display: flex; gap: 8px; }
+.grp-pick.vertical { flex-direction: column; }
+/* 密钥切换分组弹窗 */
+.grp-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.grp-edit-modal { background: var(--card, #121a26); border: 1px solid var(--border, rgba(128,140,160,.3)); border-radius: 16px; padding: 20px 22px; width: min(420px, 92vw); max-height: 86vh; overflow-y: auto; }
+.grp-edit-modal h3 { margin: 0 0 10px; font-size: 16px; }
+.grp-edit-modal .hint-line { margin: 0 0 12px; }
+.grp-edit-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .grp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; cursor: pointer; font-size: 12px; color: inherit; text-align: left; }
 .grp-opt b { font-size: 12.5px; }
 .grp-opt span { color: var(--muted, #8a94a6); font-size: 11px; }

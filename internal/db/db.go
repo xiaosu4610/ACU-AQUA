@@ -245,6 +245,8 @@ func InitTables(d *sql.DB) error {
 			ts INTEGER NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS idx_eevents_ts ON error_events(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_eevents_kind ON error_events(kind, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)`, // 模型实时状态 30 分钟窗口聚合
+		`CREATE INDEX IF NOT EXISTS idx_requests_uid_billed_ts ON requests(user_id, billed, ts)`, // 财务中心消费统计
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
