@@ -893,7 +893,7 @@ func (a *App) freeDispatchJSON(model string, messages []map[string]any, temperat
 			continue
 		}
 		if rid != 0 {
-			a.okFreeRequest(rid, usageFromUpstreamJSON(j), resp.StatusCode)
+			a.okFreeRequest(rid, usageFromUpstreamJSON(j), resp.StatusCode, "actual")
 		}
 		return resp.StatusCode, j, cand
 	}

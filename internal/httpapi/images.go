@@ -23,6 +23,7 @@ var (
 
 // handleImages 图片生成（按张计费：n×单价预扣 → 上游 → URL 重写站内中转 → 结算）
 func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")
@@ -172,7 +173,8 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		client.Pool.ReportFace(key, face)
 		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
 	}
-	a.okRequest(rid, billing.Usage{}, final, face)
+	// 按张计费不看 token，usage_source 记 estimated（token 口径无上游 usage）
+	a.okRequest(rid, billing.Usage{}, final, face, "estimated", time.Since(start).Milliseconds(), 200)
 
 	out := stripSensitive(jsonMarshal(jr))
 	w.Header().Set("Content-Type", "application/json")
@@ -236,7 +238,7 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 		d.URL = "/v1/images/file/" + localID
 		d.B64JSON = ""
 	}
-	a.okFreeRequest(rid, billing.Usage{}, 200)
+	a.okFreeRequest(rid, billing.Usage{}, 200, "estimated")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(stripSensitive(jsonMarshal(jr)))

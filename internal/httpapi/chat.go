@@ -182,6 +182,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写
 func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
+	start := time.Now()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		a.settleSafely(uid, prehold, 0, rid, 0, "read_error")
@@ -232,7 +233,11 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		c.Pool.ReportFace(key, face)
 		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
 	}
-	a.okRequest(rid, u, final, face)
+	src := "estimated"
+	if probe.Usage != nil {
+		src = "actual"
+	}
+	a.okRequest(rid, u, final, face, src, time.Since(start).Milliseconds(), 200)
 	// 剥层后透传（信息隔离：移除成本/追踪类字段）
 	out := stripSensitive(raw)
 	w.Header().Set("Content-Type", "application/json")
@@ -253,6 +258,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(200)
+	start := time.Now()
 
 	var u billing.Usage
 	final := int64(0)
@@ -279,7 +285,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
 			a.settleSafely(uid, prehold, final, rid, final, "billed")
-			a.okRequest(rid, u, final, faceTotal)
+			a.okRequest(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200)
 		} else if interrupted {
 			// 一帧有效内容都没有且上游异常中断：全额退回
 			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
@@ -292,7 +298,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				final = p.FloorMicro
 			}
 			a.settleSafely(uid, prehold, final, rid, final, "billed")
-			a.okRequest(rid, u, final, faceTotal)
+			a.okRequest(rid, u, final, faceTotal, "estimated", time.Since(start).Milliseconds(), 200)
 		} else {
 			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
 			a.failRequest(rid, "stream_incomplete", 502)
@@ -480,10 +486,12 @@ func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stre
 }
 
 // okRequest 成功回写：usage + 金额 + 面值成本 + bill_state='billed'
-func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64) {
+// src=usage 来源口径（actual=上游实发 / estimated=保底估算）；latMs/sc 回写观测口径，
+// 消除生产旧表列默认值（usage_source='estimated'/status_code=200）造成的统计失真
+func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int) {
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed' WHERE rowid=?",
-		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, rid)
+		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=? WHERE rowid=?",
+		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, rid)
 }
 
 // failRequest 失败回写（诊断 D2：reason 必填区分失败原因，status_code 回写真实状态码供统计）

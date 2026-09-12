@@ -578,7 +578,11 @@ func (a *App) serveFreeJSONChat(w http.ResponseWriter, resp *http.Response, rid 
 	_ = jsonUnmarshal(raw, &jr)
 	u := usageFromJSON(jr.Usage)
 	if ok {
-		a.okFreeRequest(rid, u, resp.StatusCode)
+		src := "estimated"
+		if jr.Usage != nil {
+			src = "actual"
+		}
+		a.okFreeRequest(rid, u, resp.StatusCode, src)
 	} else {
 		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode), resp.StatusCode)
 	}
@@ -645,7 +649,7 @@ func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start t
 	ok := u.PromptTokens > 0 || u.CompletionTokens > 0
 	a.recordHealth(model, ok, healthResultType(ok, 200), 200, lat)
 	if ok {
-		a.okFreeRequest(rid, u, 200)
+		a.okFreeRequest(rid, u, 200, "actual")
 	} else {
 		a.failRequest(rid, "stream_incomplete", 502)
 	}
@@ -659,9 +663,9 @@ func healthResultType(ok bool, code int) string {
 	return healthErrType(code)
 }
 
-// okFreeRequest 免费模型成功回写（usage 照记，不计费）
-func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int) {
+// okFreeRequest 免费模型成功回写（usage 照记，不计费；src=usage 来源口径 actual/estimated）
+func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int, src string) {
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free' WHERE rowid=?",
-		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, rid)
+		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=? WHERE rowid=?",
+		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, src, rid)
 }
