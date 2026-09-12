@@ -584,14 +584,15 @@ func (a *App) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return
 	}
-	// 1) 余额重放：流水四类型求和 vs users.balance
+	// 1) 余额重放：流水求和 vs users.balance
+	// 口径（诊断 D1 实证锁定）：prehold 扣款行（amount<0）不计入；billed 记 -unit_price；
+	// refunded 行 amount 恒为 0（退回资金不得与预扣重复计入）——Rust 时代 +delta 旧行已一次性清洗
 	mismatch := int64(0)
 	var replayDiffSum, replayDiffMax int64
 	rows, err := a.DB.Query(
 		`SELECT u.id, u.balance_micro,
 		        COALESCE((SELECT SUM(CASE WHEN f.type IN ('topup','prehold') AND f.amount_micro>0 THEN f.amount_micro
 		                                       WHEN f.type='deduct' THEN f.amount_micro
-		                                       WHEN f.type='refunded' THEN f.amount_micro
 		                                       WHEN f.type='billed' THEN -f.unit_price_micro END)
 		                  FROM balance_flows f WHERE f.user_id=u.id),0)
 		 FROM users u`)
