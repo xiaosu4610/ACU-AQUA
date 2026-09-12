@@ -300,7 +300,7 @@ func (a *App) autoCandidates() []string {
 		}
 		return cands[i].lat < cands[j].lat
 	})
-	out := make([]string, 0, len(cands)+len(a.Cfg.Lines))
+	out := make([]string, 0, len(cands)+len(a.linesSnap()))
 	for _, c := range cands {
 		out = append(out, c.m)
 	}
@@ -320,8 +320,9 @@ func (a *App) autoCandidates() []string {
 func (a *App) autoFallbacks() []string {
 	seen := map[string]bool{}
 	var out []string
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
+	ls := a.linesSnap()
+	for i := range ls {
+		l := &ls[i]
 		if l.Mode != "free" {
 			continue
 		}
@@ -391,9 +392,10 @@ func logFreeErr(lineID, model string, err error) {
 
 // dynamicLine 配置了 dynamic 的免费线（NVIDIA 动态目录承载线）
 func (a *App) dynamicLine() *config.Line {
-	for i := range a.Cfg.Lines {
-		if a.Cfg.Lines[i].Mode == "free" && a.Cfg.Lines[i].Dynamic {
-			return &a.Cfg.Lines[i]
+	ls := a.linesSnap()
+	for i := range ls {
+		if ls[i].Mode == "free" && ls[i].Dynamic {
+			return &ls[i]
 		}
 	}
 	return nil

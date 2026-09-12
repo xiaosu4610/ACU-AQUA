@@ -197,6 +197,42 @@ func InitTables(d *sql.DB) error {
 			total_after INTEGER NOT NULL DEFAULT 0,
 			note TEXT NOT NULL DEFAULT '',
 			ts INTEGER NOT NULL)`,
+		// —— 上游线路管理（管理后台在线 CRUD，DB 为唯一事实源；config toml 仅为首次引导种子）——
+		`CREATE TABLE IF NOT EXISTS admin_lines (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			mode TEXT NOT NULL DEFAULT 'free',
+			base_url TEXT NOT NULL DEFAULT '',
+			vip_num INTEGER NOT NULL DEFAULT 0,
+			vip_den INTEGER NOT NULL DEFAULT 0,
+			key_face_micro INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			updated_ts INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS admin_line_keys (
+			line_id TEXT NOT NULL,
+			idx INTEGER NOT NULL,
+			key TEXT NOT NULL,
+			dead INTEGER NOT NULL DEFAULT 0,
+			note TEXT NOT NULL DEFAULT '',
+			updated_ts INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (line_id, idx))`,
+		`CREATE TABLE IF NOT EXISTS admin_line_models (
+			line_id TEXT NOT NULL,
+			site_id TEXT NOT NULL,
+			upstream_id TEXT NOT NULL DEFAULT '',
+			image INTEGER NOT NULL DEFAULT 0,
+			per_call_sell INTEGER NOT NULL DEFAULT 0,
+			per_call_cost INTEGER NOT NULL DEFAULT 0,
+			per_image_sell INTEGER NOT NULL DEFAULT 0,
+			per_image_cost INTEGER NOT NULL DEFAULT 0,
+			in_sell_rate10 INTEGER NOT NULL DEFAULT 0,
+			cache_sell_rate10 INTEGER NOT NULL DEFAULT 0,
+			out_sell_rate10 INTEGER NOT NULL DEFAULT 0,
+			in_cost_rate10 INTEGER NOT NULL DEFAULT 0,
+			cache_cost_rate10 INTEGER NOT NULL DEFAULT 0,
+			out_cost_rate10 INTEGER NOT NULL DEFAULT 0,
+			updated_ts INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (line_id, site_id))`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {

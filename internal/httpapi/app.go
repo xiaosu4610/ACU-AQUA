@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log"
 	"path/filepath"
 	"sync"
 
@@ -18,15 +19,44 @@ type App struct {
 
 	AvatarsDir string // 用户头像目录（<db目录>/avatars，文件名 <uid>.<ext>）
 
+	// linesMu 保护 Cfg.Lines 的热重载替换（上游管理）：
+	// reload 整体替换 slice（新底层数组，从不原地改元素），读方拿到的快照/元素指针锁外使用安全。
+	linesMu sync.RWMutex
+
 	clientsMu sync.Mutex
 	clients   map[string]*upstream.Client
 }
 
-// New 构造
+// New 构造（上游线路 DB 优先：admin_lines 有数据则以 DB 为事实源）
 func New(c *config.Cfg, d *db.DBx) *App {
 	avatars := ""
 	if c.Database.Path != "" {
 		avatars = filepath.Join(filepath.Dir(c.Database.Path), "avatars")
 	}
+	if err := initLinesFromStore(c, d.DB); err != nil {
+		// 种子/加载失败不阻断启动：保留 toml 配置继续服务
+		log.Printf("[lines] 上游线路 DB 加载失败（回退 toml 配置）: %v", err)
+	}
 	return &App{Cfg: c, DB: d, Mail: mail.New(c.SMTP), AvatarsDir: avatars}
+}
+
+// lineByID 线查找（读锁）
+func (a *App) lineByID(id string) *config.Line {
+	a.linesMu.RLock()
+	defer a.linesMu.RUnlock()
+	return a.Cfg.LineByID(id)
+}
+
+// lineForMode 按计费模式取第一条收费线（读锁）
+func (a *App) lineForMode(mode string) *config.Line {
+	a.linesMu.RLock()
+	defer a.linesMu.RUnlock()
+	return a.Cfg.LineForMode(mode)
+}
+
+// linesSnap 线路快照（读锁内取 slice 头；reload 只整体替换，快照元素不可变）
+func (a *App) linesSnap() []config.Line {
+	a.linesMu.RLock()
+	defer a.linesMu.RUnlock()
+	return a.Cfg.Lines
 }

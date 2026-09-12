@@ -52,7 +52,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
 	var line *config.Line
 	if hasPrefix && !unified {
-		line = a.Cfg.LineByID(lineID)
+		line = a.lineByID(lineID)
 	}
 	if !hasPrefix || (line == nil && !unified) || (line != nil && line.Mode == "free") {
 		// 免费图像模型（裸名如 cogview-3-flash）：转发 + URL 站内重写，不计费
@@ -65,7 +65,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		if grp == "" {
 			grp = a.Cfg.Billing.DefaultGrp
 		}
-		line = a.Cfg.LineForMode(grp)
+		line = a.lineForMode(grp)
 		if line == nil {
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
 			return

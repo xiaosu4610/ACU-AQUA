@@ -1168,8 +1168,9 @@ func (a *App) handleIPLocation(w http.ResponseWriter, r *http.Request) {
 
 // giteeProvider 免费线里 id=gitee 的 (base_url, 首密钥)
 func (a *App) giteeProvider() (string, string) {
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
+	ls := a.linesSnap()
+	for i := range ls {
+		l := &ls[i]
 		if l.ID == "gitee" && l.BaseURL != "" && len(l.Keys) > 0 {
 			return l.BaseURL, l.Keys[0]
 		}

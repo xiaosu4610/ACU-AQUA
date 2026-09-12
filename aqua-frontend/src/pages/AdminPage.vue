@@ -6,10 +6,11 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { apiJson, errText, fmt } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
 
-type View = 'dashboard' | 'users' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'update'
+type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'update'
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: '仪表盘', icon: 'chart' },
   { id: 'users', label: '客户管理', icon: 'user' },
+  { id: 'lines', label: '上游管理', icon: 'puzzle' },
   { id: 'quota', label: '上游额度', icon: 'bolt' },
   { id: 'supervision', label: '额度监管', icon: 'gauge' },
   { id: 'audit', label: '审计日志', icon: 'list' },
@@ -64,6 +65,7 @@ function go(v: View) {
   view.value = v
   if (v === 'dashboard') loadStats()
   if (v === 'users') loadUsers()
+  if (v === 'lines') loadLines()
   if (v === 'quota') loadQuota()
   if (v === 'supervision') loadSupervision()
   if (v === 'audit') loadAudit()
@@ -411,6 +413,290 @@ const flowTypeLabel: Record<string, string> = {
 const streamModeLabel: Record<string, string> = {
   sim_stream: '模拟流式', passthrough: '流式透传', nonstream: '非流式',
 }
+
+/* ===== 上游管理（线路/密钥池/模型映射，DB 事实源 + 热重载） ===== */
+const linesItems = ref<any[]>([])
+const linesMsg = ref('')
+const loadingLines = ref(false)
+const lineOpen = ref('')               // 展开的线路 id
+const lineDetail = ref<Record<string, { keys: any[]; models: any[] }>>({})
+const rate10 = (r: number | undefined | null): string => (r == null ? '—' : (r / 10).toFixed(1)) // 万分率 → 元/百万tokens
+
+async function loadLines() {
+  if (!token.value) return
+  loadingLines.value = true; linesMsg.value = ''
+  try {
+    const j = await apiJson<any>('/admin/lines', { key: token.value })
+    linesItems.value = j.lines || []
+  } catch (e) { linesMsg.value = errText(e) }
+  loadingLines.value = false
+}
+async function openLine(id: string) {
+  if (lineOpen.value === id) { lineOpen.value = ''; return }
+  lineOpen.value = id
+  if (!lineDetail.value[id]) await refreshLine(id)
+}
+async function refreshLine(id: string) {
+  try {
+    const [k, m] = await Promise.all([
+      apiJson<any>(`/admin/lines/${id}/keys`, { key: token.value }),
+      apiJson<any>(`/admin/lines/${id}/models`, { key: token.value }),
+    ])
+    lineDetail.value = { ...lineDetail.value, [id]: { keys: k.keys || [], models: m.models || [] } }
+  } catch (e) { linesMsg.value = errText(e) }
+}
+function modeLabel(m: string): string {
+  return m === 'per_token' ? '按量' : m === 'per_call' ? '按次' : m === 'free' ? '免费' : m
+}
+
+/* 新增线路弹窗 */
+const lineNew = ref({ open: false, id: '', name: '', mode: 'per_token', base_url: '', vip_num: '9', vip_den: '10', key_face: '', keys: '', pw: '' })
+const lineNewMsg = ref('')
+const lineCreating = ref(false)
+async function doLineCreate() {
+  const n = lineNew.value
+  if (!n.id || !n.name || !n.base_url) { lineNewMsg.value = '请填写线路 ID / 名称 / 上游地址'; return }
+  if (!n.pw) { lineNewMsg.value = '请输入管理密码确认'; return }
+  lineCreating.value = true; lineNewMsg.value = ''
+  try {
+    await apiJson('/admin/lines', {
+      method: 'POST', key: token.value,
+      body: {
+        id: n.id.trim(), name: n.name.trim(), mode: n.mode, base_url: n.base_url.trim(),
+        vip_num: Number(n.vip_num) || 0, vip_den: Number(n.vip_den) || 0,
+        key_face_micro: toMicro(n.key_face), keys: n.keys,
+        confirm_password: n.pw,
+      },
+    })
+    lineNew.value.open = false
+    loadLines()
+  } catch (e) { lineNewMsg.value = errText(e) }
+  lineCreating.value = false
+}
+
+/* 停用/启用线路 */
+const lineBusy = ref('')
+async function doLineToggle(id: string, enabled: boolean) {
+  const pw = prompt(enabled ? `启用线路 ${id}：请输入管理密码确认` : `停用线路 ${id}（调用方将收到 404）：请输入管理密码确认`)
+  if (!pw) return
+  lineBusy.value = id
+  try {
+    await apiJson(`/admin/lines/${id}`, { method: 'POST', key: token.value, body: { enabled, confirm_password: pw } })
+    loadLines()
+  } catch (e) { linesMsg.value = errText(e) }
+  lineBusy.value = ''
+}
+/* 删除线路（须先停用） */
+async function doLineDelete(id: string) {
+  const pw = prompt(`删除线路 ${id}（同时删除其密钥池与模型映射，不可恢复）：请输入管理密码确认`)
+  if (!pw) return
+  lineBusy.value = id
+  try {
+    await apiJson(`/admin/lines/${id}`, { method: 'DELETE', key: token.value, body: { confirm_password: pw } })
+    if (lineOpen.value === id) lineOpen.value = ''
+    loadLines()
+  } catch (e) { linesMsg.value = errText(e) }
+  lineBusy.value = ''
+}
+
+/* 批量加钥 */
+const keyAdd = ref({ line: '', raw: '', pw: '' })
+const keyAddMsg = ref('')
+const keyAdding = ref(false)
+function openKeyAdd(id: string) { keyAdd.value = { line: id, raw: '', pw: '' }; keyAddMsg.value = '' }
+async function doKeysAdd() {
+  const k = keyAdd.value
+  if (!k.raw.trim() || !k.pw) { keyAddMsg.value = '请粘贴密钥并输入管理密码'; return }
+  keyAdding.value = true; keyAddMsg.value = ''
+  try {
+    const j = await apiJson<any>(`/admin/lines/${k.line}/keys`, {
+      method: 'POST', key: token.value, body: { keys: k.raw, confirm_password: k.pw },
+    })
+    keyAdd.value.raw = ''; keyAdd.value.pw = ''
+    keyAddMsg.value = `已添加 ${j.added} 把${j.duplicates ? `（重复跳过 ${j.duplicates}）` : ''}`
+    await refreshLine(k.line); loadLines()
+  } catch (e) { keyAddMsg.value = errText(e) }
+  keyAdding.value = false
+}
+/* 密钥停用/启用/删除 */
+const keyBusy = ref(-1)
+async function doKeyDead(id: string, idx: number, dead: boolean) {
+  const pw = prompt(`#${idx} 号密钥将${dead ? '停用（不再参与轮询）' : '重新启用'}：请输入管理密码确认`)
+  if (!pw) return
+  keyBusy.value = idx
+  try {
+    await apiJson(`/admin/lines/${id}/keys/${idx}/dead`, { method: 'POST', key: token.value, body: { dead, confirm_password: pw } })
+    await refreshLine(id); loadLines()
+  } catch (e) { linesMsg.value = errText(e) }
+  keyBusy.value = -1
+}
+async function doKeyDelete(id: string, idx: number) {
+  const pw = prompt(`删除 #${idx} 号密钥（仅从线路摘除，面值台账保留）：请输入管理密码确认`)
+  if (!pw) return
+  keyBusy.value = idx
+  try {
+    await apiJson(`/admin/lines/${id}/keys/${idx}`, { method: 'DELETE', key: token.value, body: { confirm_password: pw } })
+    await refreshLine(id); loadLines()
+  } catch (e) { linesMsg.value = errText(e) }
+  keyBusy.value = -1
+}
+
+/* 模型映射 upsert / 删除 */
+const modelEdit = ref({
+  open: false, line: '', site_id: '', upstream_id: '', image: false,
+  per_call_sell: '', per_call_cost: '',
+  in_sell: '', cache_sell: '', out_sell: '', in_cost: '', cache_cost: '', out_cost: '', pw: '',
+})
+const modelEditMsg = ref('')
+const modelSaving = ref(false)
+function openModelEdit(id: string, m?: any) {
+  modelEdit.value = {
+    open: true, line: id,
+    site_id: m?.site_id || '', upstream_id: m?.upstream_id || '', image: !!m?.image,
+    per_call_sell: m?.per_call_sell ? String(m.per_call_sell) : '',
+    per_call_cost: m?.per_call_cost ? String(m.per_call_cost) : '',
+    in_sell: m?.in_sell_rate10 ? String(m.in_sell_rate10) : '', cache_sell: m?.cache_sell_rate10 ? String(m.cache_sell_rate10) : '', out_sell: m?.out_sell_rate10 ? String(m.out_sell_rate10) : '',
+    in_cost: m?.in_cost_rate10 ? String(m.in_cost_rate10) : '', cache_cost: m?.cache_cost_rate10 ? String(m.cache_cost_rate10) : '', out_cost: m?.out_cost_rate10 ? String(m.out_cost_rate10) : '',
+    pw: '',
+  }
+  modelEditMsg.value = ''
+}
+async function doModelUpsert() {
+  const m = modelEdit.value
+  if (!m.site_id.trim() || !m.pw) { modelEditMsg.value = '请填写站点模型 ID 与管理密码'; return }
+  modelSaving.value = true; modelEditMsg.value = ''
+  try {
+    const j = await apiJson<any>(`/admin/lines/${m.line}/models`, {
+      method: 'POST', key: token.value,
+      body: {
+        site_id: m.site_id.trim(), upstream_id: m.upstream_id.trim() || m.site_id.trim(), image: m.image,
+        per_call_sell: Number(m.per_call_sell) || 0, per_call_cost: Number(m.per_call_cost) || 0,
+        in_sell_rate10: Number(m.in_sell) || 0, cache_sell_rate10: Number(m.cache_sell) || 0, out_sell_rate10: Number(m.out_sell) || 0,
+        in_cost_rate10: Number(m.in_cost) || 0, cache_cost_rate10: Number(m.cache_cost) || 0, out_cost_rate10: Number(m.out_cost) || 0,
+        confirm_password: m.pw,
+      },
+    })
+    modelEditMsg.value = `已保存${j.pricing_seeded ? `，播种价目 ${j.pricing_seeded} 组` : ''}`
+    await refreshLine(m.line); loadLines()
+    setTimeout(() => { modelEdit.value.open = false }, 700)
+  } catch (e) { modelEditMsg.value = errText(e) }
+  modelSaving.value = false
+}
+async function doModelDelete(id: string, site: string) {
+  const pw = prompt(`删除模型映射 ${site}（历史价目保留，用户将无法再调用该模型）：请输入管理密码确认`)
+  if (!pw) return
+  try {
+    await apiJson(`/admin/lines/${id}/models/${site}`, { method: 'DELETE', key: token.value, body: { confirm_password: pw } })
+    await refreshLine(id); loadLines()
+  } catch (e) { linesMsg.value = errText(e) }
+}
+/* 手动热重载 */
+const reloading = ref(false)
+async function doLinesReload() {
+  reloading.value = true
+  try {
+    await apiJson('/admin/lines/reload', { method: 'POST', key: token.value })
+    linesMsg.value = '已重载全部线路（内存配置已刷新）'
+  } catch (e) { linesMsg.value = errText(e) }
+  reloading.value = false
+}
+
+/* ===== 用户管理操作（封禁/重置密码/价目组/踢下线/密钥/注销） ===== */
+const umgr = ref({
+  open: false, uid: 0, name: '', email: '', status: 1,
+  grpCall: 'normal', grpToken: 'normal', pw: '', confirmEmail: '',
+  msg: '', msgOk: false, loading: '', newPwd: '',
+})
+function openUserMgr(u: any) {
+  umgr.value = {
+    open: true, uid: u.id, name: u.username, email: u.email, status: u.status,
+    grpCall: u.price_grp_call || 'normal', grpToken: u.price_grp_token || 'normal',
+    pw: '', confirmEmail: '', msg: '', msgOk: false, loading: '', newPwd: '',
+  }
+}
+function umgrFail(e: unknown) { umgr.value.msg = errText(e); umgr.value.msgOk = false }
+async function doUserBan(ban: boolean) {
+  const m = umgr.value
+  if (!m.pw) { m.msg = '请先输入管理密码'; return }
+  m.loading = 'ban'
+  try {
+    await apiJson(`/admin/users/${m.uid}/status`, {
+      method: 'POST', key: token.value,
+      body: { status: ban ? 0 : 1, note: ban ? '管理后台封禁' : '管理后台解封', confirm_password: m.pw },
+    })
+    m.status = ban ? 0 : 1
+    m.msg = ban ? '已封禁：密钥与会话全部失效' : '已解封：用户恢复正常'
+    m.msgOk = true; loadUsers()
+  } catch (e) { umgrFail(e) }
+  m.loading = ''
+}
+async function doUserKick() {
+  const m = umgr.value
+  if (!m.pw) { m.msg = '请先输入管理密码'; return }
+  m.loading = 'kick'
+  try {
+    const j = await apiJson<any>(`/admin/users/${m.uid}/kick`, { method: 'POST', key: token.value, body: { confirm_password: m.pw } })
+    m.msg = `已强制下线 ${j.sessions_removed} 个会话`; m.msgOk = true
+  } catch (e) { umgrFail(e) }
+  m.loading = ''
+}
+async function doUserResetPwd() {
+  const m = umgr.value
+  if (!m.pw) { m.msg = '请先输入管理密码'; return }
+  m.loading = 'pwd'
+  try {
+    const j = await apiJson<any>(`/admin/users/${m.uid}/password`, { method: 'POST', key: token.value, body: { confirm_password: m.pw } })
+    m.newPwd = j.new_password
+    m.msg = '密码已重置并强制下线，新密码仅本次显示'; m.msgOk = true
+  } catch (e) { umgrFail(e) }
+  m.loading = ''
+}
+async function doUserGrp() {
+  const m = umgr.value
+  if (!m.pw) { m.msg = '请先输入管理密码'; return }
+  m.loading = 'grp'
+  try {
+    await apiJson(`/admin/users/${m.uid}/price-grp`, {
+      method: 'POST', key: token.value,
+      body: { price_grp_call: m.grpCall, price_grp_token: m.grpToken, confirm_password: m.pw },
+    })
+    m.msg = '价目组已更新'; m.msgOk = true; loadUsers()
+  } catch (e) { umgrFail(e) }
+  m.loading = ''
+}
+async function doUserDelete() {
+  const m = umgr.value
+  if (!m.pw) { m.msg = '请先输入管理密码'; return }
+  if (m.confirmEmail.trim() !== m.email) { m.msg = '确认邮箱与用户邮箱不一致'; return }
+  m.loading = 'del'
+  try {
+    await apiJson(`/admin/users/${m.uid}`, {
+      method: 'DELETE', key: token.value,
+      body: { confirm_email: m.confirmEmail.trim(), confirm_password: m.pw },
+    })
+    m.open = false; loadUsers()
+  } catch (e) { umgrFail(e) }
+  m.loading = ''
+}
+/* 用户密钥列表 + 吊销 */
+const ukeys = ref<{ open: boolean; uid: number; name: string; items: any[]; msg: string }>({ open: false, uid: 0, name: '', items: [], msg: '' })
+async function openUserKeys(u: any) {
+  ukeys.value = { open: true, uid: u.id, name: u.username, items: [], msg: '' }
+  try {
+    const j = await apiJson<any>(`/admin/users/${u.id}/keys`, { key: token.value })
+    ukeys.value.items = j.keys || []
+  } catch (e) { ukeys.value.msg = errText(e) }
+}
+async function doUserKeyRevoke(kid: number) {
+  const pw = prompt(`吊销密钥 #${kid}（用户将无法再用该密钥调用）：请输入管理密码确认`)
+  if (!pw) return
+  try {
+    await apiJson(`/admin/users/${ukeys.value.uid}/keys/${kid}/revoke`, { method: 'POST', key: token.value, body: { confirm_password: pw } })
+    const j = await apiJson<any>(`/admin/users/${ukeys.value.uid}/keys`, { key: token.value })
+    ukeys.value.items = j.keys || []
+  } catch (e) { ukeys.value.msg = errText(e) }
+}
+
 </script>
 
 <template>
@@ -609,7 +895,10 @@ const streamModeLabel: Record<string, string> = {
                 <td colspan="8" class="adm-empty">{{ loadingUsers ? '加载中…' : '没有匹配的用户' }}</td>
               </tr>
               <tr v-for="u in usersItems" :key="u.id">
-                <td class="nm">#{{ u.id }} {{ u.username }}</td>
+                <td class="nm">#{{ u.id }} {{ u.username }}
+                  <span v-if="u.status === 0" class="adm-tag bad">已封禁</span>
+                  <span v-else-if="u.status === 99" class="adm-tag warn">已注销</span>
+                </td>
                 <td class="em">{{ u.email }}</td>
                 <td class="num hl">¥{{ yuan(u.balance_micro) }}</td>
                 <td class="num">¥{{ yuan(u.topup_micro) }}</td>
@@ -620,6 +909,8 @@ const streamModeLabel: Record<string, string> = {
                   <button class="mini-btn ok" @click="openAdjust(u.id, u.username, 1)">加余额</button>
                   <button class="mini-btn danger" @click="openAdjust(u.id, u.username, -1)">减余额</button>
                   <button class="mini-btn" @click="openDetail(u.id)">详情</button>
+                  <button class="mini-btn" :class="{ warn: u.status === 0 }" @click="openUserMgr(u)">管理</button>
+                  <button class="mini-btn" @click="openUserKeys(u)">密钥</button>
                 </td>
               </tr>
             </tbody>
@@ -629,6 +920,92 @@ const streamModeLabel: Record<string, string> = {
             <span>{{ usersPage }} / {{ usersPages }} 页 · 共 {{ fmt(usersTotal) }} 人</span>
             <button class="mini-btn" :disabled="usersPage >= usersPages" @click="usersPage++; loadUsers()">下一页</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ▼ 上游管理 ▼ -->
+      <div v-if="view === 'lines'" class="adm-view">
+        <div class="adm-head" style="margin: 0 0 14px">
+          <span class="dim" style="font-size: 12.5px">线路/密钥/模型改动即时热重载生效；密钥明文添加后仅脱敏展示；高危操作需管理密码确认。</span>
+          <span style="margin-left:auto; display:flex; gap:8px">
+            <button class="mini-btn" :disabled="reloading" @click="doLinesReload">
+              <AqIcon name="refresh" :size="12" /> {{ reloading ? '重载中…' : '重载内存配置' }}
+            </button>
+            <button class="btn tool-run" @click="lineNew = { open: true, id: '', name: '', mode: 'per_token', base_url: '', vip_num: '9', vip_den: '10', key_face: '', keys: '', pw: '' }; lineNewMsg = ''">
+              <AqIcon name="puzzle" :size="13" /> 新增线路
+            </button>
+          </span>
+        </div>
+        <p v-if="linesMsg" class="adm-msg bad">{{ linesMsg }}</p>
+        <p v-if="loadingLines && !linesItems.length" class="adm-empty">加载中…</p>
+        <div class="dash-sec" v-for="l in linesItems" :key="l.id">
+          <div class="adm-line-head" @click="openLine(l.id)">
+            <b class="nm">{{ l.name }} <code class="adm-line-id">{{ l.id }}</code></b>
+            <span class="adm-tag" :class="{ ok: l.mode !== 'free' }">{{ modeLabel(l.mode) }}</span>
+            <span class="adm-tag" :class="l.enabled ? 'ok' : 'bad'">{{ l.enabled ? '启用' : '停用' }}</span>
+            <span class="dim">钥 {{ l.keys_total - l.keys_dead }}/{{ l.keys_total }} · 模型 {{ l.models_total }} · 近1h {{ rate(l.calls_1h, l.ok_1h) }}%</span>
+            <span class="dim" v-if="l.face_initial_micro > 0">面值 ¥{{ yuan(l.face_used_micro) }} / ¥{{ yuan(l.face_initial_micro) }}</span>
+            <span style="margin-left:auto; display:flex; gap:6px" @click.stop>
+              <button class="mini-btn" :disabled="lineBusy === l.id" @click="doLineToggle(l.id, !l.enabled)">{{ l.enabled ? '停用' : '启用' }}</button>
+              <button v-if="!l.enabled" class="mini-btn danger" :disabled="lineBusy === l.id" @click="doLineDelete(l.id)">删除</button>
+            </span>
+          </div>
+
+          <template v-if="lineOpen === l.id && lineDetail[l.id]">
+            <!-- 密钥池 -->
+            <b style="font-size:13px; margin:6px 0 2px">密钥池（{{ lineDetail[l.id].keys.length }} 把存活）</b>
+            <table class="adm-table">
+              <thead><tr><th>#</th><th>密钥（脱敏）</th><th>状态</th><th class="num">面值已耗</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-if="!lineDetail[l.id].keys.length"><td colspan="5" class="adm-empty">暂无存活密钥，请添加</td></tr>
+                <tr v-for="k in lineDetail[l.id].keys" :key="k.idx">
+                  <td class="num">{{ k.idx }}</td>
+                  <td class="hs">{{ k.masked }}</td>
+                  <td><span class="adm-tag" :class="k.dead ? 'bad' : 'ok'">{{ k.dead ? '已停用' : '存活' }}</span></td>
+                  <td class="num">¥{{ yuan(k.face_used_micro) }}</td>
+                  <td class="ops">
+                    <button class="mini-btn" :disabled="keyBusy === k.idx" @click="doKeyDead(l.id, k.idx, !k.dead)">{{ k.dead ? '启用' : '停用' }}</button>
+                    <button class="mini-btn danger" :disabled="keyBusy === k.idx" @click="doKeyDelete(l.id, k.idx)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="adm-line-add">
+              <button class="mini-btn ok" @click="openKeyAdd(l.id)"><AqIcon name="key" :size="12" /> 批量添加密钥</button>
+            </div>
+            <p v-if="keyAdd.line === l.id && keyAddMsg" class="adm-msg" :class="{ ok: keyAddMsg.includes('已添加'), bad: !keyAddMsg.includes('已添加') }">{{ keyAddMsg }}</p>
+
+            <!-- 模型映射 -->
+            <b style="font-size:13px; margin:10px 0 2px">模型映射（站点模型 → 上游模型 + 计费）</b>
+            <table class="adm-table">
+              <thead>
+                <tr><th>站点模型</th><th>上游模型</th><th class="num">售/次</th><th class="num">成/次</th>
+                  <th class="num">入/百万</th><th class="num">缓存/百万</th><th class="num">出/百万</th><th>操作</th></tr>
+              </thead>
+              <tbody>
+                <tr v-if="!lineDetail[l.id].models.length"><td colspan="8" class="adm-empty">暂无模型映射</td></tr>
+                <tr v-for="m in lineDetail[l.id].models" :key="m.site_id">
+                  <td class="nm">{{ l.id }}/{{ m.site_id }}</td>
+                  <td class="hs">{{ m.upstream_id }}<span v-if="m.image" class="adm-tag">图</span></td>
+                  <td class="num">{{ m.per_call_sell ? '¥' + yuan(m.per_call_sell) : '—' }}</td>
+                  <td class="num">{{ m.per_call_cost ? '¥' + yuan(m.per_call_cost) : '—' }}</td>
+                  <td class="num" v-if="m.in_sell_rate10">¥{{ rate10(m.in_sell_rate10) }}</td>
+                  <td class="num" v-else>—</td>
+                  <td class="num" v-if="m.cache_sell_rate10">¥{{ rate10(m.cache_sell_rate10) }}</td>
+                  <td class="num" v-else>—</td>
+                  <td class="num" v-if="m.out_sell_rate10">¥{{ rate10(m.out_sell_rate10) }}</td>
+                  <td class="num" v-else>—</td>
+                  <td class="ops">
+                    <button class="mini-btn" @click="openModelEdit(l.id, m)">编辑</button>
+                    <button class="mini-btn danger" @click="doModelDelete(l.id, m.site_id)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="adm-line-add">
+              <button class="mini-btn ok" @click="openModelEdit(l.id)"><AqIcon name="puzzle" :size="12" /> 添加模型映射</button>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -1025,6 +1402,151 @@ const streamModeLabel: Record<string, string> = {
           <div class="adm-modal-ops"><button class="mini-btn" @click="detail!.open = false">关闭</button></div>
         </div>
       </div>
+
+      <!-- 新增线路弹窗 -->
+      <div v-if="lineNew.open" class="adm-mask" @click.self="lineNew.open = false">
+        <div class="adm-modal">
+          <h3>新增上游线路</h3>
+          <label>线路 ID（小写字母/数字/连字符，创建后不可改）<input v-model="lineNew.id" placeholder="如 nova" /></label>
+          <label>名称<input v-model="lineNew.name" placeholder="如 Nova 免费线" /></label>
+          <label>计费模式
+            <select v-model="lineNew.mode">
+              <option value="per_token">按量（三段价）</option>
+              <option value="per_call">按次</option>
+              <option value="free">免费</option>
+            </select>
+          </label>
+          <label>上游 BaseURL<input v-model="lineNew.base_url" placeholder="https://api.example.com" /></label>
+          <div class="adm-row2">
+            <label>VIP 分子<input v-model="lineNew.vip_num" type="number" min="0" /></label>
+            <label>VIP 分母<input v-model="lineNew.vip_den" type="number" min="0" /></label>
+          </div>
+          <label>密钥面值（元/把，按量线适用，可留 0）<input v-model="lineNew.key_face" type="number" min="0" step="0.001" /></label>
+          <label>上游密钥（逗号 / 换行分隔，自动去重）<textarea v-model="lineNew.keys" rows="3" placeholder="sk-xxx&#10;sk-yyy"></textarea></label>
+          <label>管理密码确认<input v-model="lineNew.pw" type="password" autocomplete="current-password" /></label>
+          <p v-if="lineNewMsg" class="adm-msg bad">{{ lineNewMsg }}</p>
+          <div class="adm-modal-ops">
+            <button class="mini-btn" @click="lineNew.open = false">取消</button>
+            <button class="btn tool-run" :disabled="lineCreating || !lineNew.id || !lineNew.pw" @click="doLineCreate">
+              {{ lineCreating ? '创建中…' : '创建线路' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模型映射弹窗 -->
+      <div v-if="modelEdit.open" class="adm-mask" @click.self="modelEdit.open = false">
+        <div class="adm-modal">
+          <h3>{{ modelEdit.line }} / 模型映射</h3>
+          <p class="adm-hint">站点模型 = 用户调用的 model（自动加线路前缀）；费率单位元/百万tokens（万分率÷10）。保存后自动播种 normal+vip 两组价目（不覆盖已调价）。</p>
+          <label>站点模型 ID<input v-model="modelEdit.site_id" placeholder="如 gpt-4o-mini" /></label>
+          <label>上游模型 ID（留空 = 同站点 ID）<input v-model="modelEdit.upstream_id" placeholder="vendor/gpt-4o-mini" /></label>
+          <div class="adm-row2">
+            <label>售单价（微元/次，按次线）<input v-model="modelEdit.per_call_sell" type="number" min="0" placeholder="3000 = ¥0.003/次" /></label>
+            <label>成单价（微元/次，成本台账）<input v-model="modelEdit.per_call_cost" type="number" min="0" /></label>
+          </div>
+          <div class="adm-row2">
+            <label>入售率10<input v-model="modelEdit.in_sell" type="number" min="0" placeholder="600000" /></label>
+            <label>入成率10<input v-model="modelEdit.in_cost" type="number" min="0" placeholder="120000" /></label>
+          </div>
+          <div class="adm-row2">
+            <label>缓存售率10<input v-model="modelEdit.cache_sell" type="number" min="0" /></label>
+            <label>缓存成率10<input v-model="modelEdit.cache_cost" type="number" min="0" /></label>
+          </div>
+          <div class="adm-row2">
+            <label>出售率10<input v-model="modelEdit.out_sell" type="number" min="0" /></label>
+            <label>出成率10<input v-model="modelEdit.out_cost" type="number" min="0" /></label>
+          </div>
+          <label class="adm-check"><input v-model="modelEdit.image" type="checkbox" /> 图像模型（走绘图计费）</label>
+          <label>管理密码确认<input v-model="modelEdit.pw" type="password" autocomplete="current-password" /></label>
+          <p v-if="modelEditMsg" class="adm-msg" :class="{ ok: modelEditMsg.includes('已保存'), bad: !modelEditMsg.includes('已保存') }">{{ modelEditMsg }}</p>
+          <div class="adm-modal-ops">
+            <button class="mini-btn" @click="modelEdit.open = false">取消</button>
+            <button class="btn tool-run" :disabled="modelSaving || !modelEdit.site_id || !modelEdit.pw" @click="doModelUpsert">
+              {{ modelSaving ? '保存中…' : '保存映射' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 批量加钥弹窗 -->
+      <div v-if="keyAdd.line" class="adm-mask" @click.self="keyAdd.line = ''">
+        <div class="adm-modal">
+          <h3>{{ keyAdd.line }} / 批量添加上游密钥</h3>
+          <p class="adm-hint">密钥明文只进不出：添加后仅脱敏展示，可随时停用/删除。重复密钥自动跳过。</p>
+          <label>密钥列表（逗号 / 换行 / 空白分隔）<textarea v-model="keyAdd.raw" rows="5" placeholder="sk-xxx&#10;sk-yyy, sk-zzz"></textarea></label>
+          <label>管理密码确认<input v-model="keyAdd.pw" type="password" autocomplete="current-password" /></label>
+          <p v-if="keyAddMsg" class="adm-msg" :class="{ ok: keyAddMsg.includes('已添加'), bad: !keyAddMsg.includes('已添加') }">{{ keyAddMsg }}</p>
+          <div class="adm-modal-ops">
+            <button class="mini-btn" @click="keyAdd.line = ''">取消</button>
+            <button class="btn tool-run" :disabled="keyAdding || !keyAdd.raw.trim() || !keyAdd.pw" @click="doKeysAdd">
+              {{ keyAdding ? '添加中…' : '确认添加' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 用户管理弹窗 -->
+      <div v-if="umgr.open" class="adm-mask" @click.self="umgr.open = false">
+        <div class="adm-modal">
+          <h3>#{{ umgr.uid }} {{ umgr.name }} · 用户管理</h3>
+          <p class="adm-hint">{{ umgr.email }} ·
+            <span v-if="umgr.status === 99" class="bad-txt">已注销（不可操作）</span>
+            <span v-else-if="umgr.status === 0" class="bad-txt">封禁中</span>
+            <span v-else class="ok-txt">正常</span>
+          </p>
+          <label>管理密码（本弹窗所有操作共用）<input v-model="umgr.pw" type="password" autocomplete="current-password" /></label>
+          <div class="adm-uops">
+            <button class="mini-btn danger" :disabled="!!umgr.loading || umgr.status !== 1" @click="doUserBan(true)">封禁</button>
+            <button class="mini-btn ok" :disabled="!!umgr.loading || umgr.status !== 0" @click="doUserBan(false)">解封</button>
+            <button class="mini-btn" :disabled="!!umgr.loading" @click="doUserKick">踢下线</button>
+            <button class="mini-btn" :disabled="!!umgr.loading" @click="doUserResetPwd">重置密码</button>
+          </div>
+          <div class="adm-row2">
+            <label>按次价目组
+              <select v-model="umgr.grpCall"><option value="normal">normal</option><option value="vip">vip</option></select>
+            </label>
+            <label>按量价目组
+              <select v-model="umgr.grpToken"><option value="normal">normal</option><option value="vip">vip</option></select>
+            </label>
+          </div>
+          <div class="adm-uops"><button class="mini-btn" :disabled="!!umgr.loading" @click="doUserGrp">保存价目组</button></div>
+          <p v-if="umgr.newPwd" class="adm-msg ok">新密码（仅本次显示，请立即交付用户）：<code>{{ umgr.newPwd }}</code></p>
+          <p v-if="umgr.msg" class="adm-msg" :class="umgr.msgOk ? 'ok' : 'bad'">{{ umgr.msg }}</p>
+          <div class="adm-uops del">
+            <input v-model="umgr.confirmEmail" placeholder="输入用户邮箱以确认注销" />
+            <button class="mini-btn danger" :disabled="!!umgr.loading || umgr.status === 99" @click="doUserDelete">注销账号（软删除）</button>
+          </div>
+          <p class="adm-hint">注销 = 软删除：账单流水完整保留，邮箱/用户名立即释放可重新注册，全部密钥吊销并强制下线。</p>
+          <div class="adm-modal-ops"><button class="mini-btn" @click="umgr.open = false">关闭</button></div>
+        </div>
+      </div>
+
+      <!-- 用户密钥弹窗 -->
+      <div v-if="ukeys.open" class="adm-mask" @click.self="ukeys.open = false">
+        <div class="adm-modal">
+          <h3>#{{ ukeys.uid }} {{ ukeys.name }} · API 密钥</h3>
+          <p v-if="ukeys.msg" class="adm-msg bad">{{ ukeys.msg }}</p>
+          <table class="adm-table">
+            <thead><tr><th class="num">ID</th><th>前缀</th><th>名称</th><th>分组</th><th>状态</th><th>创建</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-if="!ukeys.items.length"><td colspan="7" class="adm-empty">暂无密钥</td></tr>
+              <tr v-for="k in ukeys.items" :key="k.id">
+                <td class="num">{{ k.id }}</td>
+                <td class="hs">{{ k.prefix }}…</td>
+                <td>{{ k.name || '—' }}</td>
+                <td><span class="adm-tag" v-if="k.billing_grp">{{ k.billing_grp }}</span><span v-else class="dim">—</span></td>
+                <td><span class="adm-tag" :class="k.revoked ? 'bad' : 'ok'">{{ k.revoked ? '已吊销' : '有效' }}</span></td>
+                <td class="tm">{{ fmtTime(k.created_ts) }}</td>
+                <td class="ops">
+                  <button v-if="!k.revoked" class="mini-btn danger" @click="doUserKeyRevoke(k.id)">吊销</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="adm-modal-ops"><button class="mini-btn" @click="ukeys.open = false">关闭</button></div>
+        </div>
+      </div>
     </template>
   </section>
 </template>
@@ -1152,6 +1674,26 @@ const streamModeLabel: Record<string, string> = {
 .mini-btn { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; cursor: pointer; }
 .mini-btn.ok { border-color: #34d399; color: #34d399; }
 .mini-btn.danger { border-color: #f87171; color: #f87171; }
+.mini-btn.warn { border-color: #f59e0b; color: #f59e0b; }
+
+/* 上游管理 */
+.adm-line-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; cursor: pointer; padding: 2px 0; }
+.adm-line-id { font-family: var(--mono, monospace); font-size: 11px; color: var(--muted, #8a94a6); background: rgba(128,140,160,.12); border-radius: 6px; padding: 2px 6px; }
+.adm-line-add { display: flex; gap: 8px; align-items: stretch; margin: 8px 0 2px; }
+.adm-line-add textarea { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 12px; font-family: var(--mono, monospace); resize: vertical; }
+.adm-line-add textarea:focus, .adm-line-add input:focus { outline: none; border-color: var(--accent, #0b6cff); }
+.adm-line-add input[type="password"] { width: 130px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 12px; }
+
+/* 弹窗扩展 */
+.adm-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.adm-modal select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 14px; }
+.adm-modal textarea { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 13px; font-family: var(--mono, monospace); resize: vertical; }
+.adm-modal textarea:focus, .adm-modal select:focus { outline: none; border-color: var(--accent, #0b6cff); }
+.adm-check { flex-direction: row !important; align-items: center; gap: 8px !important; }
+.adm-check input { width: auto; }
+.adm-uops { display: flex; gap: 8px; flex-wrap: wrap; }
+.adm-uops.del { border-top: 1px dashed var(--border, rgba(128,140,160,.3)); padding-top: 10px; }
+.adm-uops.del input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 12.5px; }
 
 @media (max-width: 960px) {
   .adm-cards { grid-template-columns: repeat(2, 1fr); }

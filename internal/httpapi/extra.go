@@ -43,7 +43,7 @@ func (a *App) handleModelDetail(w http.ResponseWriter, r *http.Request) {
 
 	// 收费模型（含线前缀）：从列表条目取（VIP 价目回退口径与列表一致）
 	if lineID, siteID, hasPrefix := config.SplitModel(rawID); hasPrefix {
-		if l := a.Cfg.LineByID(lineID); l != nil && l.Mode != "free" {
+		if l := a.lineByID(lineID); l != nil && l.Mode != "free" {
 			for _, item := range a.modelListEntries(actx, created) {
 				if item["id"] == lineID+"/"+siteID {
 					jsonOut(w, 200, item)

@@ -21,7 +21,7 @@ const beijingOffset = int64(28800) // UTC+8
 // 统一前缀时代按 requests.resolved_line 归属实际线；旧数据（resolved_line=''）按模型前缀推断。
 func (a *App) paidLineCond(mode string) string {
 	id := ""
-	if l := a.Cfg.LineForMode(mode); l != nil {
+	if l := a.lineForMode(mode); l != nil {
 		id = l.ID
 	}
 	return fmt.Sprintf("(resolved_line='%s' OR (COALESCE(resolved_line,'')='' AND model LIKE '%s/%%'))", id, id)
@@ -29,7 +29,7 @@ func (a *App) paidLineCond(mode string) string {
 
 // paidLinePrefix 计费线模型前缀（Go 内存过滤用）
 func (a *App) paidLinePrefix(mode string) string {
-	if l := a.Cfg.LineForMode(mode); l != nil {
+	if l := a.lineForMode(mode); l != nil {
 		return l.ID + "/"
 	}
 	return "\x00none/"
@@ -246,7 +246,7 @@ func (a *App) perCallCostFor(fullModel string) int64 {
 	if !ok {
 		return 0
 	}
-	if l := a.Cfg.LineByID(lineID); l != nil {
+	if l := a.lineByID(lineID); l != nil {
 		for i := range l.Models {
 			if l.Models[i].SiteID == siteID && l.Models[i].PerCallCost > 0 {
 				return l.Models[i].PerCallCost
@@ -262,11 +262,12 @@ func (a *App) perCallCostFor(fullModel string) int64 {
 }
 
 func (a *App) perCallCostDefault() int64 {
-	for i := range a.Cfg.Lines {
-		if a.Cfg.Lines[i].Mode == "per_call" {
-			for j := range a.Cfg.Lines[i].Models {
-				if a.Cfg.Lines[i].Models[j].PerCallCost > 0 {
-					return a.Cfg.Lines[i].Models[j].PerCallCost
+	ls := a.linesSnap()
+	for i := range ls {
+		if ls[i].Mode == "per_call" {
+			for j := range ls[i].Models {
+				if ls[i].Models[j].PerCallCost > 0 {
+					return ls[i].Models[j].PerCallCost
 				}
 			}
 		}
@@ -276,7 +277,7 @@ func (a *App) perCallCostDefault() int64 {
 
 // tideFaceCap 单钥面值（tide 线 key_face_micro 配置）
 func (a *App) tideFaceCap() int64 {
-	if l := a.Cfg.LineByID("tide"); l != nil {
+	if l := a.lineByID("tide"); l != nil {
 		return l.KeyFaceMicro
 	}
 	return 0
@@ -328,8 +329,9 @@ func (a *App) currentPrices() ([]map[string]any, int64) {
 func (a *App) floorSafety() []map[string]any {
 	out := []map[string]any{}
 	now := time.Now().Unix()
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
+	ls := a.linesSnap()
+	for i := range ls {
+		l := &ls[i]
 		if l.Mode != "per_call" {
 			continue
 		}

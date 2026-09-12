@@ -56,7 +56,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
 	var line *config.Line
 	if hasPrefix && !unified {
-		line = a.Cfg.LineByID(lineID)
+		line = a.lineByID(lineID)
 	}
 	if !hasPrefix || (line == nil && !unified) || (line != nil && line.Mode == "free") {
 		// 绞杀者模式：免费线仍由旧网关承接（免 Go 鉴权，旧网关自管）
@@ -86,7 +86,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		if grp == "" {
 			grp = a.Cfg.Billing.DefaultGrp
 		}
-		line = a.Cfg.LineForMode(grp)
+		line = a.lineForMode(grp)
 		if line == nil {
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
 			return
@@ -505,7 +505,7 @@ func (a *App) clientFor(lineID string) *upstream.Client {
 	if c, ok := a.clients[lineID]; ok {
 		return c
 	}
-	l := a.Cfg.LineByID(lineID)
+	l := a.lineByID(lineID)
 	c := upstream.NewClient(l)
 	a.clients[lineID] = c
 	return c

@@ -142,6 +142,41 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/audit", a.handleAdminAudit)
 	mux.HandleFunc("GET /v1/admin/reconcile", a.handleAdminReconcile)
 	mux.HandleFunc("GET /v1/admin/supervision", a.handleAdminSupervision)
+	// —— 上游线路在线管理（DB 事实源 + 热重载；密钥/模型/线路 CRUD）——
+	mux.HandleFunc("GET /v1/admin/lines", a.handleAdminLines)
+	mux.HandleFunc("POST /v1/admin/lines/reload", a.handleAdminLinesReload)
+	mux.HandleFunc("POST /v1/admin/lines", a.handleAdminLineCreate)
+	mux.HandleFunc("POST /v1/admin/lines/{line}", a.handleAdminLineUpdate)
+	mux.HandleFunc("DELETE /v1/admin/lines/{line}", a.handleAdminLineDelete)
+	mux.HandleFunc("GET /v1/admin/lines/{line}/keys", a.handleAdminLineKeys)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/keys", a.handleAdminLineKeysAdd)
+	mux.HandleFunc("DELETE /v1/admin/lines/{line}/keys/{idx}", a.handleAdminLineKeyDelete)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/keys/{idx}/dead", a.handleAdminLineKeyDead)
+	mux.HandleFunc("GET /v1/admin/lines/{line}/models", a.handleAdminLineModels)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/models", a.handleAdminLineModelUpsert)
+	mux.HandleFunc("DELETE /v1/admin/lines/{line}/models/{site}", a.handleAdminLineModelDelete)
+	// —— 用户管理扩展（封禁/重置密码/价目组/踢下线/密钥管理/软删除）——
+	mux.HandleFunc("POST /v1/admin/users/{uid}/status", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserStatus(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("POST /v1/admin/users/{uid}/password", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserPassword(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("POST /v1/admin/users/{uid}/price-grp", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserPriceGrp(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("POST /v1/admin/users/{uid}/kick", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserKick(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("GET /v1/admin/users/{uid}/keys", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserKeys(w, r, r.PathValue("uid"))
+	})
+	mux.HandleFunc("POST /v1/admin/users/{uid}/keys/{kid}/revoke", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserKeyRevoke(w, r, r.PathValue("uid"), r.PathValue("kid"))
+	})
+	mux.HandleFunc("DELETE /v1/admin/users/{uid}", func(w http.ResponseWriter, r *http.Request) {
+		a.handleAdminUserDelete(w, r, r.PathValue("uid"))
+	})
 	// 系统更新（gitee 发行版源；config [update] enabled=true 才开放）
 	mux.HandleFunc("GET /v1/admin/update/check", a.handleAdminUpdateCheck)
 	mux.HandleFunc("POST /v1/admin/update/apply", a.handleAdminUpdateApply)
@@ -368,8 +403,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		}
 		merged := map[string][]grpPrice{}
 		var order []string
-		for i := range a.Cfg.Lines {
-			l := &a.Cfg.Lines[i]
+		mergedLines := a.linesSnap()
+		for i := range mergedLines {
+			l := &mergedLines[i]
 			if l.Mode == "free" {
 				continue
 			}
@@ -432,8 +468,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		}
 	} else {
 		// 线前缀直连模式（统一路由未启用）：按线逐条输出
-		for i := range a.Cfg.Lines {
-			l := &a.Cfg.Lines[i]
+		directLines := a.linesSnap()
+		for i := range directLines {
+			l := &directLines[i]
 			if l.Mode == "free" {
 				continue
 			}
@@ -472,8 +509,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 	}
 
 	// 免费线：全部模型列出（上游永久下线的隐藏）+ 动态目录
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
+	freeLines := a.linesSnap()
+	for i := range freeLines {
+		l := &freeLines[i]
 		if l.Mode != "free" {
 			continue
 		}
