@@ -410,7 +410,8 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		type grpPrice struct {
 			mode string
 			m    *config.Model
-			p    *billing.PricingInfo
+			p    *billing.PricingInfo // 用户实付价目（VIP 有 vip 价目 → vip 价；否则 normal 价）
+			base *billing.PricingInfo // 原价（normal）——仅 VIP 且存在 vip 价目时携带，供前端底部展示
 		}
 		merged := map[string][]grpPrice{}
 		var order []string
@@ -425,16 +426,31 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				m := &l.Models[j]
 				full := config.ModelFullName(l.ID, m.SiteID)
 				p := a.pricingFor(full, "normal")
-				if p == nil && vip {
-					p = a.pricingFor(full, "vip")
-				}
 				if p == nil {
+					// normal 价过期（下架）：VIP 回退 vip 组（保持原语义）
+					if vip {
+						p = a.pricingFor(full, "vip")
+					}
+					if p == nil {
+						continue
+					}
+					if _, ok := merged[m.SiteID]; !ok {
+						order = append(order, m.SiteID)
+					}
+					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p, nil})
 					continue
 				}
 				if _, ok := merged[m.SiteID]; !ok {
 					order = append(order, m.SiteID)
 				}
-				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p})
+				if vip {
+					if vp := a.pricingFor(full, "vip"); vp != nil {
+						// VIP 拿货价为主 + 附原价（normal），前端底部展示对比
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, vp, p})
+						continue
+					}
+				}
+				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p, nil})
 			}
 		}
 		for _, site := range order {
@@ -462,9 +478,19 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
 				item["out_price"] = float64(pt.p.OutRate10) / 10000
 				item["description"] = pricingDescription(pt.m, pt.p)
+				if pt.base != nil {
+					// VIP 用户：附原价（normal）供前端底部展示对比
+					item["base_floor_micro"] = pt.base.FloorMicro
+					item["base_in_price"] = float64(pt.base.InRate10) / 10000
+					item["base_cache_price"] = float64(pt.base.CacheRate10) / 10000
+					item["base_out_price"] = float64(pt.base.OutRate10) / 10000
+				}
 			}
 			if pc != nil {
 				item["price_micro"] = pc.p.PriceMicro
+				if pc.base != nil {
+					item["base_price_micro"] = pc.base.PriceMicro
+				}
 				if pt == nil {
 					item["description"] = pricingDescription(pc.m, pc.p)
 				}
@@ -473,6 +499,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				if gs[k].m.Image {
 					item["image"] = true
 					item["per_image"] = gs[k].p.PriceMicro
+					if gs[k].base != nil {
+						item["base_per_image"] = gs[k].base.PriceMicro
+					}
 				}
 			}
 			// 诊断 D4：该模型所有可用分组都标记降级 → /v1/models 透出（客户端提示换模型）

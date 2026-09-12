@@ -166,6 +166,14 @@ const paidModels = computed(() => orderedModels.value
     cachePrice: m.cache_price ?? 0,
     outPrice: m.out_price ?? 0,
     floor: m.floor_micro ?? 0,
+    // VIP 专享：后端对 VIP 用户附原价（base_*）；普通用户无这些字段
+    basePrice: (m as any).base_price_micro,
+    baseInPrice: (m as any).base_in_price,
+    baseCachePrice: (m as any).base_cache_price,
+    baseOutPrice: (m as any).base_out_price,
+    baseFloor: (m as any).base_floor_micro,
+    perImage: (m as any).per_image,
+    basePerImage: (m as any).base_per_image,
     subsidized: m.subsidized === true,
     isImage: m.type === 'image',
     health: healthOf(m),
@@ -231,11 +239,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
               <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
             </div>
-            <!-- 按次计费：单次正式价（默认，后端当前模式） -->
+            <!-- 按次计费：单次正式价（默认，后端当前模式）；VIP 用户展示拿货价 + 底部原价 -->
             <div v-if="m.mode === 'per_call'" class="pms-price">
               <b>¥{{ microYuan(m.price) }}</b><i>/次</i>
-              <span class="pms-price-tag" :class="{ promo: m.subsidized }">{{ m.subsidized ? '限时补贴' : '正常价' }}</span>
+              <span class="pms-price-tag" :class="{ promo: m.subsidized || m.basePrice != null }">{{ m.basePrice != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '正常价') }}</span>
             </div>
+            <div v-if="m.mode === 'per_call' && m.basePrice != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
             <!-- 按量计费：三段价 + 单次保底 + 补贴徽标 -->
             <div v-else class="pms-price pms-price-token">
               <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
@@ -258,17 +267,19 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
               <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
             </div>
-            <!-- 图片模型：按张计费 -->
-            <div v-if="m.isImage && m.mode === 'per_call'" class="pms-price">
-              <b>¥{{ microYuan(m.price) }}</b><i>/张</i>
-              <span class="pms-price-tag">按张计费</span>
+            <!-- 图片模型：按张计费（VIP 展示拿货价 + 底部原价） -->
+            <div v-if="m.isImage && m.perImage" class="pms-price">
+              <b>¥{{ microYuan(m.perImage) }}</b><i>/张</i>
+              <span class="pms-price-tag" :class="{ promo: m.basePerImage != null }">{{ m.basePerImage != null ? 'VIP 拿货价' : '按张计费' }}</span>
             </div>
+            <div v-if="m.isImage && m.perImage && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
             <!-- 按量计费：三段价（无保底；缓存命中更省） -->
             <div v-else class="pms-price pms-price-token">
               <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
               <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
+              <div v-if="m.baseInPrice != null" class="tp-base">VIP 拿货价已生效 · 原价：输入 ¥{{ perMYuan(m.baseInPrice) }} / 缓存 ¥{{ perMYuan(m.baseCachePrice) }} / 输出 ¥{{ perMYuan(m.baseOutPrice) }} 每百万tokens（保底 ¥{{ microYuan(m.baseFloor) }}）</div>
             </div>
             <div class="pms-actions">
               <CopyBtn :text="m.id" />
@@ -423,6 +434,10 @@ button.hub-tab { border: 0; background: none; font-family: inherit; cursor: poin
 .tp-subsidy { font-size: 10px; font-weight: 700; color: #16a34a; background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.32); border-radius: 999px; padding: 1px 7px; }
 .pms-price-tag { margin-left: auto; font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: rgba(148,163,184,.15); color: var(--muted); }
 .pms-price-tag.promo { background: linear-gradient(120deg, rgba(245,158,11,.2), rgba(251,191,36,.12)); color: #f59e0b; border: 1px solid rgba(245,158,11,.35); }
+.pms-base-price { font-size: 11px; color: var(--muted); margin-top: 4px; padding-top: 4px; border-top: 1px dashed rgba(148,163,184,.22); }
+.pms-base-price::before { content: "VIP "; font-weight: 700; color: #f59e0b; }
+.tp-base { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.tp-base::before { content: "VIP "; font-weight: 700; color: #f59e0b; }
 .pms-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pms-detail { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--accent); text-decoration: none; }
 .pms-detail:hover { text-decoration: underline; }
