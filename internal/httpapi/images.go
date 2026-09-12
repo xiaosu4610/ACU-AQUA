@@ -114,7 +114,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	client := a.clientFor(line.ID)
 	ctx, cancel := contextWithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
-	resp, key, err := client.Do(ctx, upBody, false, "/images/generations")
+	resp, key, err := client.DoKey(ctx, upBody, false, "/images/generations", model.KeyIdx)
 	if err != nil {
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)

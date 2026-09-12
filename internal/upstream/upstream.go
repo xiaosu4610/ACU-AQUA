@@ -122,6 +122,21 @@ func (p *KeyPool) Advance() {
 	p.cur = (p.cur + 1) % len(p.keys)
 }
 
+// AcquireFor 取指定池序的密钥（模型专属钥模式）：忽略粘性与冷却，dead 钥直接报错。
+// 池序 = 非 dead 密钥按 idx 排序后的位置（0 起），与 linesFromDB 装载顺序一致。
+func (p *KeyPool) AcquireFor(poolIdx int) (*KeyState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if poolIdx < 0 || poolIdx >= len(p.keys) {
+		return nil, fmt.Errorf("KEY_IDX_OUT_OF_RANGE(%d/%d)", poolIdx, len(p.keys))
+	}
+	k := p.keys[poolIdx]
+	if k.Dead {
+		return nil, fmt.Errorf("KEY_IDX_DEAD(%d)", poolIdx)
+	}
+	return k, nil
+}
+
 // ReportFace 累计面值消耗；超初始面值标记死钥（额度耗得差不多自动摘除）
 func (p *KeyPool) ReportFace(k *KeyState, faceMicro int64) {
 	p.mu.Lock()
@@ -345,6 +360,24 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 		lastErr = fmt.Errorf("KEY_POOL_EXHAUSTED")
 	}
 	return nil, nil, lastErr
+}
+
+// DoKey 带模型专属钥发起请求：keyIdx<0 走通用 Do（粘性换钥池）；
+// ≥0 锁定池序钥直发一次（不粘性、不判死、不换钥——专属钥仅服务对应模型，
+// 避免与其他模型的钥在同一池内互判死；错误码原样透传给上层转译）。
+func (c *Client) DoKey(ctx context.Context, body []byte, stream bool, path string, keyIdx int64) (*http.Response, *KeyState, error) {
+	if keyIdx < 0 {
+		return c.Do(ctx, body, stream, path)
+	}
+	k, err := c.Pool.AcquireFor(int(keyIdx))
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := c.send(ctx, k, body, stream, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, k, nil
 }
 
 // send 单次上游请求：注入密钥认证（bearer / x-api-key）

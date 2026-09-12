@@ -549,7 +549,7 @@ async function doKeyDelete(id: string, idx: number) {
 const modelEdit = ref({
   open: false, line: '', site_id: '', upstream_id: '', image: false,
   per_call_sell: '', per_call_cost: '',
-  in_sell: '', cache_sell: '', out_sell: '', in_cost: '', cache_cost: '', out_cost: '', pw: '',
+  in_sell: '', cache_sell: '', out_sell: '', in_cost: '', cache_cost: '', out_cost: '', key_idx: '', pw: '',
 })
 const modelEditMsg = ref('')
 const modelSaving = ref(false)
@@ -561,6 +561,7 @@ function openModelEdit(id: string, m?: any) {
     per_call_cost: m?.per_call_cost ? String(m.per_call_cost) : '',
     in_sell: m?.in_sell_rate10 ? String(m.in_sell_rate10) : '', cache_sell: m?.cache_sell_rate10 ? String(m.cache_sell_rate10) : '', out_sell: m?.out_sell_rate10 ? String(m.out_sell_rate10) : '',
     in_cost: m?.in_cost_rate10 ? String(m.in_cost_rate10) : '', cache_cost: m?.cache_cost_rate10 ? String(m.cache_cost_rate10) : '', out_cost: m?.out_cost_rate10 ? String(m.out_cost_rate10) : '',
+    key_idx: m?.key_idx != null && m.key_idx >= 0 ? String(m.key_idx) : '',
     pw: '',
   }
   modelEditMsg.value = ''
@@ -577,6 +578,7 @@ async function doModelUpsert() {
         per_call_sell: Number(m.per_call_sell) || 0, per_call_cost: Number(m.per_call_cost) || 0,
         in_sell_rate10: Number(m.in_sell) || 0, cache_sell_rate10: Number(m.cache_sell) || 0, out_sell_rate10: Number(m.out_sell) || 0,
         in_cost_rate10: Number(m.in_cost) || 0, cache_cost_rate10: Number(m.cache_cost) || 0, out_cost_rate10: Number(m.out_cost) || 0,
+        key_idx: m.key_idx.trim() === '' ? -1 : (Number(m.key_idx) ?? -1),
         confirm_password: m.pw,
       },
     })
@@ -1535,6 +1537,7 @@ async function doUserKeyRevoke(kid: number) {
             <label>出成率10<input v-model="modelEdit.out_cost" type="number" min="0" /></label>
           </div>
           <label class="adm-check"><input v-model="modelEdit.image" type="checkbox" /> 图像模型（走绘图计费）</label>
+          <label>专属密钥池序（按次线分工钥：0 起锁定第 N 把非停用密钥，留空 = 自动粘性池）<input v-model="modelEdit.key_idx" type="number" min="-1" placeholder="-1 = 自动" /></label>
           <label>管理密码确认<input v-model="modelEdit.pw" type="password" autocomplete="current-password" /></label>
           <p v-if="modelEditMsg" class="adm-msg" :class="{ ok: modelEditMsg.includes('已保存'), bad: !modelEditMsg.includes('已保存') }">{{ modelEditMsg }}</p>
           <div class="adm-modal-ops">

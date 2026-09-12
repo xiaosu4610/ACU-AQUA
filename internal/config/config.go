@@ -44,6 +44,9 @@ type Model struct {
 	PerCallCost      int64  `toml:"per_call_cost"`  // 按次线：成本（微元/次，保本线用）
 	PerCallSell      int64  `toml:"per_call_sell"`  // 按次线：售价（微元/次，普通组）
 	Degraded         bool   `toml:"degraded,omitempty"` // 降级标记（诊断 D4：上游故障时管理端手动标记，/v1/models 透出）
+	// KeyIdx 模型专属密钥池序：-1=自动（走粘性池）；≥0 锁定"非 dead 密钥按 idx 排序后"的第 N 把（0 起）。
+	// 用于专属钥按模型分工场景——注意 toml 种子零值即 0，走 toml 配置多钥分工时必须显式写 key_idx，线上以 DB 列为准。
+	KeyIdx int64 `toml:"key_idx,omitempty"`
 }
 
 // Line 一条上游线：独立的转发 + 计费体系。新增上游 = 追加一个 [[lines]] 块。

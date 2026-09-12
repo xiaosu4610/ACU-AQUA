@@ -155,7 +155,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	client := a.clientFor(line.ID)
 	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
-	resp, key, err := client.Do(ctx, upBody, req.Stream, "/chat/completions")
+	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")

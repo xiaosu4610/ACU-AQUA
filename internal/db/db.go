@@ -270,6 +270,7 @@ func InitTables(d *sql.DB) error {
 		{"api_keys", "billing_grp", "TEXT NOT NULL DEFAULT ''"},   // 密钥计费分组：''|per_call|per_token
 		{"requests", "resolved_line", "TEXT NOT NULL DEFAULT ''"}, // 统一前缀路由解析出的实际线（统计口径）
 		{"admin_line_models", "degraded", "INTEGER NOT NULL DEFAULT 0"}, // 降级标记（诊断 D4：上游故障手动标记）
+		{"admin_line_models", "key_idx", "INTEGER NOT NULL DEFAULT -1"}, // 模型专属密钥池序（-1=自动走粘性池；≥0 锁定非 dead 钥排序后的第 N 把，按模型分工钥）
 	}
 	for _, a := range alters {
 		var n int

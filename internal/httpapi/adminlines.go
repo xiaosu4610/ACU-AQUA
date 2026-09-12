@@ -132,7 +132,7 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	mrows, err := d.Query(
 		`SELECT line_id, site_id, upstream_id, image, per_call_sell, per_call_cost,
 		        per_image_sell, per_image_cost, in_sell_rate10, cache_sell_rate10, out_sell_rate10,
-		        in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0)
+		        in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1)
 		 FROM admin_line_models ORDER BY line_id, site_id`)
 	if err != nil {
 		return nil, err
@@ -140,9 +140,9 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	defer mrows.Close()
 	for mrows.Next() {
 		var lineID, siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx int64
 		if err := mrows.Scan(&lineID, &siteID, &upID, &image, &perCall, &perCallCost,
-			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded); err != nil {
+			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx); err != nil {
 			return nil, err
 		}
 		for i := range out {
@@ -153,7 +153,7 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 					PerImageSell: perImgSell, PerImageCost: perImgCost,
 					InSellRate10: inR, CacheSellRate10: cacheR, OutSellRate10: outR,
 					InCostRate10: inC, CacheCostRate10: cacheC, OutCostRate10: outC,
-					Degraded: degraded != 0,
+					Degraded: degraded != 0, KeyIdx: keyIdx,
 				})
 			}
 		}
@@ -566,7 +566,7 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	lineID := r.PathValue("line")
 	rows, err := a.DB.Query(
 		`SELECT site_id, upstream_id, image, per_call_sell, per_call_cost, per_image_sell, per_image_cost,
-		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0)
+		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1)
 		 FROM admin_line_models WHERE line_id=? ORDER BY site_id`, lineID)
 	if err != nil {
 		errAdmin(w, 500, "internal_error", "查询失败")
@@ -576,16 +576,16 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx int64
 		if rows.Scan(&siteID, &upID, &image, &perCall, &perCallCost, &perImgSell, &perImgCost,
-			&inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded) == nil {
+			&inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx) == nil {
 			items = append(items, map[string]any{
 				"site_id": siteID, "upstream_id": upID, "image": image != 0,
 				"per_call_sell": perCall, "per_call_cost": perCallCost,
 				"per_image_sell": perImgSell, "per_image_cost": perImgCost,
 				"in_sell_rate10": inR, "cache_sell_rate10": cacheR, "out_sell_rate10": outR,
 				"in_cost_rate10": inC, "cache_cost_rate10": cacheC, "out_cost_rate10": outC,
-				"degraded": degraded != 0,
+				"degraded": degraded != 0, "key_idx": keyIdx,
 			})
 		}
 	}
@@ -613,6 +613,8 @@ func (a *App) handleAdminLineModelUpsert(w http.ResponseWriter, r *http.Request)
 		InCostRate10    int64  `json:"in_cost_rate10"`
 		CacheCostRate10 int64  `json:"cache_cost_rate10"`
 		OutCostRate10   int64  `json:"out_cost_rate10"`
+		// KeyIdx 模型专属钥池序：nil/-1=自动；≥0 锁定非 dead 钥排序后的第 N 把。指针防 JSON 零值误绑 0
+		KeyIdx          *int64 `json:"key_idx"`
 		ConfirmPassword string `json:"confirm_password"`
 	}
 	if err := adminBody(r, 8192, &req); err != nil {
@@ -641,22 +643,26 @@ func (a *App) handleAdminLineModelUpsert(w http.ResponseWriter, r *http.Request)
 	if req.UpstreamID == "" {
 		req.UpstreamID = req.SiteID
 	}
+	keyIdx := int64(-1) // 缺省自动（粘性池）；nil 时归 -1，显式传值才锁定专属钥
+	if req.KeyIdx != nil {
+		keyIdx = *req.KeyIdx
+	}
 	now := time.Now().Unix()
 	if _, err := a.DB.Exec(
 		`INSERT INTO admin_line_models (line_id, site_id, upstream_id, image, per_call_sell, per_call_cost,
 		 per_image_sell, per_image_cost, in_sell_rate10, cache_sell_rate10, out_sell_rate10,
-		 in_cost_rate10, cache_cost_rate10, out_cost_rate10, updated_ts)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 in_cost_rate10, cache_cost_rate10, out_cost_rate10, key_idx, updated_ts)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(line_id, site_id) DO UPDATE SET upstream_id=excluded.upstream_id, image=excluded.image,
 		   per_call_sell=excluded.per_call_sell, per_call_cost=excluded.per_call_cost,
 		   per_image_sell=excluded.per_image_sell, per_image_cost=excluded.per_image_cost,
 		   in_sell_rate10=excluded.in_sell_rate10, cache_sell_rate10=excluded.cache_sell_rate10,
 		   out_sell_rate10=excluded.out_sell_rate10, in_cost_rate10=excluded.in_cost_rate10,
 		   cache_cost_rate10=excluded.cache_cost_rate10, out_cost_rate10=excluded.out_cost_rate10,
-		   updated_ts=excluded.updated_ts`,
+		   key_idx=excluded.key_idx, updated_ts=excluded.updated_ts`,
 		lineID, req.SiteID, req.UpstreamID, b2i(req.Image), req.PerCallSell, req.PerCallCost,
 		req.PerImageSell, req.PerImageCost, req.InSellRate10, req.CacheSellRate10, req.OutSellRate10,
-		req.InCostRate10, req.CacheCostRate10, req.OutCostRate10, now); err != nil {
+		req.InCostRate10, req.CacheCostRate10, req.OutCostRate10, keyIdx, now); err != nil {
 		errAdmin(w, 500, "internal_error", "保存失败")
 		return
 	}

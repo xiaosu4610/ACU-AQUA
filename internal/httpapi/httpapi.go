@@ -478,7 +478,6 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["in_price"] = float64(pt.p.InRate10) / 10000
 				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
 				item["out_price"] = float64(pt.p.OutRate10) / 10000
-				item["description"] = pricingDescription(pt.m, pt.p)
 				if pt.base != nil {
 					// VIP 用户：附原价（normal）供前端底部展示对比
 					item["base_floor_micro"] = pt.base.FloorMicro
@@ -492,9 +491,11 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				if pc.base != nil {
 					item["base_price_micro"] = pc.base.PriceMicro
 				}
-				if pt == nil {
-					item["description"] = pricingDescription(pc.m, pc.p)
-				}
+				// 描述跟随价格来源：双线同模（按次+按量并存）时 price_micro 取按次价，描述也必须按次，
+				// 避免"按次价 + 按量描述"混搭误导；纯按量模型（pc==nil）在下方回落按量描述
+				item["description"] = pricingDescription(pc.m, pc.p)
+			} else if pt != nil {
+				item["description"] = pricingDescription(pt.m, pt.p)
 			}
 			for k := range gs {
 				if gs[k].m.Image {
