@@ -7,6 +7,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import CopyBtn from '@/components/CopyBtn.vue'
 import { useModels, type ModelRow } from '@/composables/useModels'
+import { apiJson } from '@/composables/useApi'
 import { dsMaintenance, hideTag, platformLabel, typeLabel } from '@/composables/modelMeta'
 import CapabilitiesPage from './CapabilitiesPage.vue'
 import AqIcon from '@/components/AqIcon.vue'
@@ -49,8 +50,8 @@ const liveLoading = ref(false)
 async function loadLive() {
   liveLoading.value = true
   try {
-    const r = await fetch('/v1/models/status')
-    const j = await r.json()
+    // 走统一 API 基址（api.ltzy.top）——相对路径 fetch 在前端域名下会被 nginx SPA 接管
+    const j = await apiJson<{ data: LiveRow[]; generated_ts: number }>('/models/status')
     liveRows.value = (j.data || []).filter((x: LiveRow) => /^(aqua|acu)\//.test(x.model))
     liveTs.value = j.generated_ts || 0
   } catch { /* 静默：下一轮自动重试 */ }
@@ -83,8 +84,7 @@ const ratePromo = ref('')
 const rateNormal = ref('')
 async function loadRate() {
   try {
-    const r = await fetch('/v1/meta')
-    const j = await r.json()
+    const j = await apiJson<{ rate_promo?: string; rate_normal?: string }>('/meta')
     ratePromo.value = j.rate_promo || ''
     rateNormal.value = j.rate_normal || ''
   } catch { /* 静默：无配置不展示横幅 */ }

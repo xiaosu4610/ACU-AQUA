@@ -21,7 +21,7 @@ const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
         <router-link v-else class="cta-main" to="/console">进入我的控制台</router-link>
         <router-link class="cta-sub" to="/api">查看 API 文档</router-link>
       </div>
-      <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 免费模型注册即用；收费模型见模型中心（aqua/ 专线，按次或按量）</p>
+      <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 免费模型注册即用；收费模型见模型中心（aqua/ 专线，按量计费 0.2 倍率限时补贴）</p>
       <div class="badges">
         <a class="badge" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="text-decoration:none;" title="Gitee 仓库 · 去点个 Star">
           <span class="ic"><svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg></span>Gitee 仓库

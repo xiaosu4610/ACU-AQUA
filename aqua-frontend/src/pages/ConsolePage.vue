@@ -106,7 +106,7 @@ const dashoffset = (s: number) => CIRC * (1 - s / 100)
 /* ===== 密钥 ===== */
 const keys = ref<KeyItem[]>([])
 const newKeyName = ref('')
-const newKeyGrp = ref<BillingGrp>('per_call') // 创建分组，默认按次
+const newKeyGrp = ref<BillingGrp>('per_token') // 创建分组，默认按量（按次线临时下架）
 const creating = ref(false)
 const freshKey = ref('') // 仅创建后展示一次
 const keysMsg = ref('')
@@ -492,18 +492,15 @@ function fmtTime(ts: number): string {
             <div class="bal-main">
               <div class="bal-num">
                 <b>¥{{ yuan(balance?.balance_micro) }}</b>
-                <span>当前余额 · 仅用于收费模型 aqua/（按次计费分组与按量计费分组）专线（预充值、先付后用、用完即停）</span>
+                <span>当前余额 · 仅用于收费模型 aqua/（按量计费）专线（预充值、先付后用、用完即停）</span>
               </div>
               <div class="bal-sub">
                 <span>今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
                 <span>累计消费 ¥{{ yuan(balance?.total_cost_micro) }}</span>
-                <span v-if="balance?.price_micro != null" class="bal-price">
-                  收费模型按次计费（正式价）· 低至 ¥{{ yuan(balance.price_micro) }}/次
-                </span>
               </div>
             </div>
             <div class="bal-strip">
-              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按次或按量，由密钥计费分组决定），其余全部模型依然完全免费，无余额照样用</span>
+              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按量计费：输入 / 缓存命中 / 输出按 tokens 三段精算），其余全部模型依然完全免费，无余额照样用</span>
               <span>支持在线充值（支付金额 100% 全额到账，渠道手续费由本站承担）· 失败请求自动全额退回 · 每笔流水永久可查</span>
               <button class="mini-btn ok" @click="go('topup')"><AqIcon name="spark" :size="12" /> 余额充值</button>
               <button class="mini-btn" @click="go('billing')"><AqIcon name="bolt" :size="12" /> 消费账单</button>
@@ -603,8 +600,8 @@ function fmtTime(ts: number): string {
             <div class="key-create">
               <input v-model="newKeyName" maxlength="32" placeholder="密钥备注，如：我的笔记本 / 生产环境" @keydown.enter="doCreateKey" />
               <div class="grp-pick">
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" @click="newKeyGrp = 'per_call'">
-                  <b>免费 + 按次计费</b><span>按次一口价，结算简单</span>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" disabled title="按次计费已临时下架（仅按量计费开放），恢复后重新开放">
+                  <b>免费 + 按次计费</b><span>临时下架 · 暂不可选</span>
                 </button>
                 <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
                   <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
@@ -615,7 +612,7 @@ function fmtTime(ts: number): string {
               </div>
               <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">创建密钥</button>
             </div>
-            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按次分组密钥按次扣费、按量分组密钥按 tokens 扣费（免费模型不受影响）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
+            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按量分组密钥按 tokens 三段扣费（免费模型不受影响，当前仅按量计费开放）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
             <!-- 新密钥首次展示（之后可在列表随时复制） -->
             <div v-if="freshKey" class="fresh-key">
               <code>{{ freshKey }}</code>
@@ -655,8 +652,8 @@ function fmtTime(ts: number): string {
             <h3>切换密钥计费分组</h3>
             <p class="hint-line">密钥 <code>{{ grpEdit.prefix }}</code>（{{ grpEdit.name }}）——切换立即生效，无需重建密钥。</p>
             <div class="grp-pick vertical">
-              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" @click="grpEdit.grp = 'per_call'">
-                <b>免费 + 按次计费</b><span>收费模型按次一口价扣费</span>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" disabled title="按次计费已临时下架（仅按量计费开放），恢复后重新开放">
+                <b>免费 + 按次计费</b><span>临时下架 · 暂不可选</span>
               </button>
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_token' }" @click="grpEdit.grp = 'per_token'">
                 <b>免费 + 按量计费</b><span>收费模型按 tokens 三段计费，模型最全</span>
@@ -776,11 +773,11 @@ function fmtTime(ts: number): string {
         <div v-show="view === 'topup'" class="view">
           <div class="vhead">
             <span class="vic"><AqIcon name="spark" :size="17" /></span>
-            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 前缀，按次或按量由密钥分组决定）扣费，免费模型不受影响</p></div>
+            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 前缀，按量计费）扣费，免费模型不受影响</p></div>
           </div>
           <div class="dash-sec bal-strip" style="margin:0 0 14px">
             <span>当前余额 <b>¥{{ yuan(balance?.balance_micro) }}</b></span>
-            <span v-if="balance?.price_micro != null">收费模型<b>按次计费（正式价）</b>：单价低至 <b>¥{{ yuan(balance.price_micro) }}/次</b>，与生成长度无关，实时单价见「模型中心」</span>
+            <span>收费模型<b>按量计费</b>：输入 / 缓存命中 / 输出按 tokens 三段精算，用多少付多少，实时单价见「模型中心」</span>
             <span>余额不足时收费模型返回 402，免费模型照常可用</span>
           </div>
 
@@ -812,7 +809,7 @@ function fmtTime(ts: number): string {
               <button class="mini-btn" @click="manualCheck">我已支付，立即查询</button>
               <button class="mini-btn" @click="stopPolling(); payingOrder = null">取消检测</button>
             </div>
-            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按次/按量计费（实时单价见模型中心收费专区），余额低于阈值可开启邮件提醒。</p>
+            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按量计费（实时单价见模型中心收费专区），余额低于阈值可开启邮件提醒。</p>
             <div class="topup-help">
               <b>支付遇到问题？</b>已支付但余额未到账、重复扣款、金额有误——请勿重复支付，保留支付凭证（账单截图 / 商户单号），
               <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">加入 QQ 频道</a> 或
@@ -850,7 +847,7 @@ function fmtTime(ts: number): string {
         <div v-show="view === 'billing'" class="view">
           <div class="vhead">
             <span class="vic"><AqIcon name="bolt" :size="17" /></span>
-            <div><h2>消费账单</h2><p>收费模型（aqua/ 前缀，按次或按量由密钥分组决定）每笔扣费 / 退回 / 发放记录 · 预充值、先付后用、用完即停、失败自动退回 · 免费模型不产生任何账单</p></div>
+            <div><h2>消费账单</h2><p>收费模型（aqua/ 前缀，按量计费）每笔扣费 / 退回 / 发放记录 · 预充值、先付后用、用完即停、失败自动退回 · 免费模型不产生任何账单</p></div>
           </div>
 
           <div class="dash-sec">
@@ -858,7 +855,6 @@ function fmtTime(ts: number): string {
               <span>当前余额 <b>¥{{ yuan(balance?.balance_micro) }}</b></span>
               <span>今日消费 <b>¥{{ yuan(balance?.today_cost_micro) }}</b></span>
               <span>累计消费 <b>¥{{ yuan(balance?.total_cost_micro) }}</b></span>
-              <span v-if="balance?.price_micro != null">收费模型<b>按次计费</b> · 低至 ¥{{ yuan(balance.price_micro) }}/次</span>
               <button class="mini-btn ok" @click="go('topup')"><AqIcon name="spark" :size="12" /> 余额充值</button>
               <button class="mini-btn" :disabled="billLoading" @click="loadBilling">
                 <AqIcon name="refresh" :size="12" /> {{ billLoading ? '刷新中…' : '刷新' }}
@@ -878,7 +874,7 @@ function fmtTime(ts: number): string {
                 </thead>
                 <tbody>
                   <tr v-if="!billItems.length">
-                    <td colspan="6" class="hist-empty">{{ billLoading ? '加载中…' : (billMsg || '暂无账单——使用收费模型（aqua/ 前缀，按次或按量由密钥分组决定）后这里会出现记录') }}</td>
+                    <td colspan="6" class="hist-empty">{{ billLoading ? '加载中…' : (billMsg || '暂无账单——使用收费模型（aqua/ 前缀，按量计费）后这里会出现记录') }}</td>
                   </tr>
                   <tr v-for="(b, i) in billItems" :key="b.ts + '-' + i">
                     <td class="hist-time">{{ fmtTime(b.ts) }}</td>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /* 社区页：QQ 一群 / 二群 / 频道入群入口（数据来自 /v1/meta 配置，缺省兜底页脚同源信息） */
 import { onMounted, ref } from 'vue'
-import { copyText } from '@/composables/useApi'
+import { apiJson, copyText } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
 
 interface GroupInfo { name: string; no: string; url: string; desc: string }
@@ -17,8 +17,8 @@ onMounted(async () => {
   ]
   const fallbackChannel = { name: 'QQ 频道', no: 'pd57362562', url: 'https://pd.qq.com/s/e4ktxw1b8' }
   try {
-    const r = await fetch('/v1/meta')
-    const j = await r.json()
+    // 走统一 API 基址（api.ltzy.top）——相对路径 fetch 在前端域名下会被 nginx SPA 接管
+    const j = await apiJson<{ qq_group?: string; qq_group_url?: string; qq_group2?: string; qq_group_url2?: string }>('/meta')
     groups.value = [
       { name: 'QQ 一群', no: j.qq_group || fallback[0].no, url: j.qq_group_url || fallback[0].url, desc: fallback[0].desc },
       { name: 'QQ 二群', no: j.qq_group2 || fallback[1].no, url: j.qq_group_url2 || fallback[1].url, desc: fallback[1].desc },
