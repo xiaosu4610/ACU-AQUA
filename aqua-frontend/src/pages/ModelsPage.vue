@@ -365,7 +365,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div class="pms-grid">
             <div v-for="m in callLineRows" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }">
               <div class="pms-top">
-                <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
+                <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
                 <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
               </div>
               <div v-if="m.mode === 'per_call'" class="pms-price">
@@ -386,7 +386,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div class="pms-grid">
             <div v-for="m in tokenLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
               <div class="pms-top">
-                <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
+                <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
                 <span v-if="m.subsidized && ratePromo" class="pms-rate-badge" :title="'限时补贴倍率 ' + ratePromo + '×，活动结束后恢复 ' + rateNormal + '×'">{{ ratePromo }}×</span>
                 <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="pms-vip-badge" title="VIP 专享拿货价已生效">VIP</span>
               </div>
@@ -608,7 +608,9 @@ button.hub-tab { font-family: inherit; }
 .pms-card:hover::before { opacity: 1; }
 .pms-card.paused { opacity: .62; }
 .pms-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.pms-id { font-family: var(--mono, monospace); font-size: 13px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pms-id { font-family: var(--mono, monospace); font-size: 12px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 完整模型 ID：前缀弱色显示（全文可见可复制，避免用户复制到不完整 ID） */
+.pms-ns { color: var(--muted); font-weight: 600; }
 /* 倍率/VIP 角标 */
 .pms-rate-badge {
   flex: none; font-size: 11.5px; font-weight: 800; color: #fbbf24;
