@@ -270,7 +270,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <!-- 图片模型：按张计费（VIP 展示拿货价 + 底部原价） -->
             <div v-if="m.isImage && m.perImage" class="pms-price">
               <b>¥{{ microYuan(m.perImage) }}</b><i>/张</i>
-              <span class="pms-price-tag" :class="{ promo: m.basePerImage != null }">{{ m.basePerImage != null ? 'VIP 拿货价' : '按张计费' }}</span>
+              <span class="pms-price-tag" :class="{ promo: m.basePerImage != null || m.subsidized }">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
             </div>
             <div v-if="m.isImage && m.perImage && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
             <!-- 按量计费：三段价（无保底；缓存命中更省） -->

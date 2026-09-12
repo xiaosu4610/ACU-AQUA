@@ -15,6 +15,7 @@ type PricingInfo struct {
 	InRate10    int64  // 微元/千token×10
 	CacheRate10 int64
 	OutRate10   int64
+	EndsAt      int64 // 价目行截止时刻（0=永久生效；>0 为活动价，/v1/models 据此标限时补贴）
 }
 
 // Usage 三路 token（上游 usage 原值）
@@ -44,6 +45,7 @@ func CurrentPricing(d *sql.DB, model, grp string) (*PricingInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.EndsAt = ends.Int64
 	return &p, nil
 }
 

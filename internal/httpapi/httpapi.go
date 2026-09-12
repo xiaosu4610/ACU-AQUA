@@ -504,6 +504,23 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					}
 				}
 			}
+			// 限时补贴：生效价目行带截止时间（活动价时间窗）→ 透出角标与到期时刻
+			var promoEnds int64
+			if pt != nil && pt.p.EndsAt > promoEnds {
+				promoEnds = pt.p.EndsAt
+			}
+			if pc != nil && pc.p.EndsAt > promoEnds {
+				promoEnds = pc.p.EndsAt
+			}
+			for k := range gs {
+				if gs[k].p.EndsAt > promoEnds {
+					promoEnds = gs[k].p.EndsAt
+				}
+			}
+			if promoEnds > 0 {
+				item["subsidized"] = true
+				item["promo_ends_at"] = promoEnds
+			}
 			// 诊断 D4：该模型所有可用分组都标记降级 → /v1/models 透出（客户端提示换模型）
 			allDeg := true
 			for k := range gs {
