@@ -38,8 +38,9 @@ const listRows = computed<ModelRow[]>(() => {
 const options = computed<ModelRow[]>(() => listRows.value.map(r => ({
   id: r.id,
   label: r.id
-    + (r.paid && r.mode === 'per_token' && r.in_price != null ? ' · 按量 ¥' + r.in_price + '/百万tok 起' : '')
-    + (r.paid && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(3) + '/次' : '')
+    + (r.paid && r.mode === 'per_token' && r.in_price != null && r.per_image == null ? ' · 按量 ¥' + r.in_price + '/百万tok 起' : '')
+    + (r.paid && r.per_image != null ? ' · ¥' + (r.per_image / 1_000_000).toFixed(3) + '/张' : '')
+    + (r.paid && r.per_image == null && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(3) + '/次' : '')
     + (r.health && typeof r.health.score === 'number' ? ' · ' + r.health.score + '分' : ''),
 })))
 

@@ -24,6 +24,8 @@ export interface ModelRow {
   in_price?: number
   cache_price?: number
   out_price?: number
+  /** 按张计费单价（微元/张，仅图片模型；存在即按张计费） */
+  per_image?: number
   /** 按量计费：单次保底（微元） */
   floor_micro?: number
   /** 限时补贴档标记（v4-flash） */
@@ -69,6 +71,7 @@ export function useModels() {
           in_price: raw.in_price,
           cache_price: raw.cache_price,
           out_price: raw.out_price,
+          per_image: raw.per_image,
           floor_micro: raw.floor_micro,
           subsidized: raw.subsidized === true,
         }

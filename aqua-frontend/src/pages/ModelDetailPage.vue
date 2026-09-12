@@ -505,11 +505,11 @@ const example = computed(() => {
         <div class="md-tags">
           <span class="mtag" :class="'m-' + meta.platform">{{ platformLabel(meta.platform) }}</span>
           <span class="mtag" :class="'m-' + meta.platform">{{ profile.typeText }}</span>
-          <span v-if="row?.paid && row?.mode === 'per_token' && row?.in_price != null" class="mtag m-paid" :title="isTide ? '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明' : '按量计费：输入/缓存命中/输出分段计价，单次设最低消费，详见下方计费说明'">
+          <span v-if="row?.paid && row?.mode === 'per_token' && row?.in_price != null && row?.per_image == null" class="mtag m-paid" :title="isTide ? '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明' : '按量计费：输入/缓存命中/输出分段计价，单次设最低消费，详见下方计费说明'">
             收费模型 · 按量 ¥{{ perMYuan(row.in_price) }}/百万tokens 起{{ isTide ? '' : (row.subsidized ? ' · 限时补贴' : '') }}
           </span>
-          <span v-else-if="row?.paid && row?.price_micro" class="mtag m-paid" :title="isTideImage ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明'">
-            收费模型 · ¥{{ (row.price_micro / 1_000_000).toFixed(3) }}/{{ isTideImage ? '张' : '次' }} · 按{{ isTideImage ? '张' : '次' }}计费
+          <span v-else-if="row?.paid && (row?.price_micro || row?.per_image != null)" class="mtag m-paid" :title="isTideImage ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明'">
+            收费模型 · ¥{{ ((row.price_micro ?? row.per_image) / 1_000_000).toFixed(3) }}/{{ isTideImage ? '张' : '次' }} · 按{{ isTideImage ? '张' : '次' }}计费
           </span>
           <span v-else-if="meta.platform" class="mtag m-free" title="本站免费模型，不收一分钱">免费模型</span>
           <span v-if="statusTag" class="mtag" :class="statusTag.cls">{{ statusTag.text }}</span>
@@ -532,7 +532,7 @@ const example = computed(() => {
       <div v-if="row?.paid && (row?.mode === 'per_token' || row?.price_micro)" class="md-block md-billing">
         <h3>计费说明</h3>
         <div class="bill-price">
-          <template v-if="row?.mode === 'per_token'">
+          <template v-if="row?.mode === 'per_token' && row?.per_image == null">
             <b>¥{{ perMYuan(row.in_price) }}<span>/百万tokens（输入）</span></b>
             <span class="bill-promo">缓存命中 ¥{{ perMYuan(row.cache_price) }} · 输出 ¥{{ perMYuan(row.out_price) }}（元/百万tokens）{{ isTide ? ' · 无保底，用多少付多少' : ' · 单次最低消费 ¥' + microYuan(row.floor_micro) }}{{ row.subsidized ? ' · 官方限时补贴价' : '' }}</span>
           </template>
@@ -546,7 +546,7 @@ const example = computed(() => {
           </template>
         </div>
         <ul class="md-limits">
-          <li v-if="row?.mode === 'per_token'">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>{{ isTide ? '；重复对话前缀命中缓存价，输入成本大幅更低' : '' }}</li>
+          <li v-if="row?.mode === 'per_token' && row?.per_image == null">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>{{ isTide ? '；重复对话前缀命中缓存价，输入成本大幅更低' : '' }}</li>
           <li v-else-if="isTideImage">按张计费：每次成功请求按 <code>n</code>（张数）扣费，失败自动全额退回</li>
           <li v-else>按次计费（正式价）：每次<b>成功</b>请求扣一次，与生成长度无关（写一句话和写一千字同价）</li>
           <li v-if="isTide">先付后用：发起请求按预估预扣（输入 + <code>max_tokens</code> 输出上限），完成后<b>多退少补</b>；可在请求中调小 <code>max_tokens</code> 降低单次预扣</li>

@@ -103,7 +103,7 @@ const quotaPct = computed(() => {
 })
 /** 最低输入三段价（元/百万tokens，当前计费档主卡显示） */
 const minInPrice = computed<number | null>(() => {
-  const arr = (stats.value?.prices || []).filter((p: any) => p?.mode === 'per_token' && p.in_price != null)
+  const arr = (stats.value?.prices || []).filter((p: any) => p?.mode === 'per_token' && p.in_price > 0)
   return arr.length ? Math.min(...arr.map((p: any) => p.in_price)) : null
 })
 /** 保底安全自检（后端 floor_safety：每款生效价目保底 vs 含手续费保本线） */
