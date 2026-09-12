@@ -1,9 +1,15 @@
 # ===== 仓库结构：Go 网关源码在仓库根目录 =====
-# 本地工作区中的旧 Rust 版/前端/文档/脚本/备份均不入库
+# 本地工作区中的旧 Rust 版/文档/脚本/备份不入库；前端源码与 Go 网关源码均入库
 
-# 旧版与前端（本地保留，不入库）
+# 旧版 Rust（本地保留，不入库）
 /aqua-server/
-/aqua-frontend/
+
+# 前端源码入库；仅排除依赖/构建产物/本地旧仓库备份
+/aqua-frontend/node_modules/
+/aqua-frontend/dist/
+/aqua-frontend/.git_bak/
+
+# 根目录杂项（本地保留，不入库）
 /docs/
 /scripts/
 /node_modules/

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f8fc">
+  <meta name="description" content="AQUA — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。">
+  <link rel="icon" href="./favicon.ico">
+  <title>AQUA — 免费 AI API 网关 · ACU 工程系列</title>
+  <style>/* 首屏关键样式：主题背景色先于 JS 生效，避免闪白；boot 为 JS 就绪前的骨架占位（Vue 挂载后自动替换） */html{background:#f5f8fc}html[data-theme="dark"]{background:#04111f}
+.boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:system-ui,-apple-system,sans-serif}
+.boot-logo{font-size:34px;font-weight:800;letter-spacing:.12em;color:#0b63c5;animation:boot-pulse 1.4s ease-in-out infinite}
+.boot-bar{width:120px;height:3px;border-radius:2px;background:rgba(11,99,197,.18);overflow:hidden}
+.boot-bar i{display:block;width:40%;height:100%;border-radius:2px;background:#0b63c5;animation:boot-slide 1.1s ease-in-out infinite}
+@keyframes boot-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes boot-slide{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
+@media (prefers-reduced-motion:reduce){.boot-logo,.boot-bar i{animation:none}}</style>
+  <script>/* 主题预置：CSS 生效前定稿，彻底消除闪白；默认亮色，仅用户主动切换过才用暗色 */try{var t=localStorage.getItem("aqua-theme");if(t!=="light"&&t!=="dark")t="light";document.documentElement.setAttribute("data-theme",t);var mc=document.querySelector('meta[name="theme-color"]');if(mc)mc.content=(t==="dark")?"#04111f":"#f5f8fc"}catch(e){}</script>
+  <script>/* boot 自愈：JS 挂载成功会置 window.__AQUA_BOOTED 并清标记；8 秒未置位 = 资源加载失败（多为缓存旧 HTML），强刷一次自愈；刷过仍失败则停，防死循环 */
+  (function(){var K="aqua_boot_reload";setTimeout(function(){try{if(window.__AQUA_BOOTED){sessionStorage.removeItem(K);return}if(sessionStorage.getItem(K))return;sessionStorage.setItem(K,"1")}catch(e){return}location.reload()},8000)})();
+  </script>
+</head>
+<body>
+  <div id="app"><div class="boot"><div class="boot-logo">AQUA</div><div class="boot-bar"><i></i></div></div></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
