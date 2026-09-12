@@ -27,8 +27,8 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer) })
 
 const row = computed(() => models.value.find(m => m.id === id.value))
 const meta = computed(() => row.value ? { platform: row.value.platform, type: row.value.type } : classifyModel(id.value))
-/** 高级计量通道（tide/ 按量线）：无保底、先付后用、缓存价引导 */
-const isTide = computed(() => id.value.startsWith('tide/'))
+/** 按量计费模型（按价目 mode 判断；统一 aqua/ 前缀后按量线模型 ID 也是 aqua/）：无保底、先付后用、缓存价引导 */
+const isTide = computed(() => row.value?.mode === 'per_token')
 const isTideImage = computed(() => isTide.value && meta.value.type === 'image')
 /** 微元 → 元字符串（去尾零：2000→"0.002"） */
 const microYuan = (v?: number) => (v == null ? '--' : (v / 1e6).toFixed(6).replace(/0+$/, '').replace(/\.$/, ''))
@@ -333,45 +333,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /bge-large-en/, ctx: "0.5K", size: "326M", dims: 1024, released: "2023-06" },
   { re: /bge-reranker-v2-m3/, ctx: "8K", size: "568M", dims: 0, released: "2024-01" },
   { re: /bce-reranker/, ctx: "0.5K", size: "278M", dims: 0, released: "2023-09" },
-  // ── Gitee AI 国产模型 ──
-  { re: /huatuogpt-o1-7b/, ctx: "8K", size: "7B", released: "2024-08" },
-  { re: /lingshu-32b/, ctx: "32K", size: "32B", released: "2024-09" },
-  { re: /deepseek-prover-v2-7b/, ctx: "32K", size: "7B", released: "2024-04" },
-  { re: /healthgpt-l14/, ctx: "8K", size: "14B", released: "2024-07" },
-  { re: /glm-4-9b-0414|thudm\/glm-4-9b-0414/, ctx: "128K", size: "9B", released: "2024-04" },
-  { re: /glm-4-9b-chat/, ctx: "32K", size: "9B", released: "2024-01" },
-  { re: /qwen3-8b/, ctx: "128K", size: "8B", released: "2024-12" },
-  { re: /qwen3-4b/, ctx: "128K", size: "4B", released: "2024-12" },
-  { re: /qwen3-0\.6b/, ctx: "128K", size: "0.6B", released: "2024-12" },
-  { re: /qwen2-7b-instruct/, ctx: "32K", size: "7B", released: "2024-09" },
-  { re: /internlm3-8b-instruct/, ctx: "32K", size: "8B", released: "2024-10" },
-  { re: /deepseek-r1-distill-qwen-1\.5b/, ctx: "128K", size: "1.5B", released: "2025-01" },
-  { re: /glm-asr/, ctx: "30s", size: "—", dims: 0 },
-  { re: /sensevoicesmall/, ctx: "30s", size: "234M" },
-  { re: /spark-tts/, ctx: "—", size: "0.5B" },
-  { re: /qwen3-embedding-4b/, ctx: "8K", size: "4B", dims: 2560, released: "2024-12" },
-  { re: /qwen3-reranker-4b/, ctx: "8K", size: "4B", released: "2024-12" },
-  { re: /qwen3-reranker-0\.6b/, ctx: "8K", size: "0.6B", released: "2024-12" },
-  { re: /qwen3guard/, ctx: "8K", size: "0.6B", released: "2024-12" },
-  { re: /nonescape-v0/, ctx: "4K", size: "—", released: "2024-09" },
-  { re: /security.*filter|nsfw-classifier/, ctx: "4K", size: "—", released: "2024-08" },
-  { re: /ip-location/, ctx: "—", size: "—" },
-  // ── SiliconFlow ──
-  { re: /hunyuan-mt-7b/, ctx: "32K", size: "7B", released: "2024-10" },
-  { re: /paddleocr-vl/, ctx: "—", size: "—", released: "2024-08" },
-  { re: /teleasr|telespeech/, ctx: "30s", size: "—", released: "2024-06" },
-  // ── 智谱 GLM ──
-  { re: /glm-4\.7-flash/, ctx: "128K", size: "~10B", released: "2025-06" },
-  { re: /glm-4-flash-250414/, ctx: "128K", size: "~10B", released: "2025-04" },
-  { re: /glm-z1-flash$/, ctx: "128K", size: "~10B", released: "2025-01" },
-  { re: /glm-4-flash$/, ctx: "128K", size: "~10B", released: "2024-01" },
-  { re: /glm-4\.6v-flash/, ctx: "32K", size: "~10B", released: "2025-10" },
-  { re: /glm-4v-flash/, ctx: "8K", size: "~9B", released: "2024-07" },
-  { re: /glm-4\.1v-thinking-flash/, ctx: "32K", size: "~10B", released: "2025-02" },
-  { re: /cogview-3-flash/, ctx: "—", size: "—", dims: 0, released: "2024-06" },
-  { re: /cogvideox-flash/, ctx: "—", size: "5B", dims: 0, released: "2024-08" },
-  // ── 讯飞星火（Spark）──
-  { re: /spark-lite/, ctx: "8K", size: "—", released: "2023-05" }
 ]
 function modelSpec(id: string): ModelSpec | null {
   for (const s of MODEL_SPECS) {
@@ -403,13 +364,6 @@ const MODEL_NOTES: ModelNote[] = [
   { match: /mistral-large/, name: "Mistral Large", desc: "Mistral 高端旗舰，多语言能力强，适合复杂推理任务。" },
   { match: /mixtral/, name: "Mixtral", desc: "Mistral 多专家稀疏模型（MoE），推理高效。" },
   { match: /qwen|qwen2\.5|qwq/, name: "通义千问 Qwen", desc: "阿里巴巴开源系列，中文能力出色的全能模型。" },
-  { match: /chatglm|glm-4|glm-z/, name: "智谱 GLM", desc: "智谱 AI 开源对话模型，中文优化，指令跟随稳定。" },
-  { match: /spark-lite/, name: "讯飞星火 Spark", desc: "科大讯飞星火认知大模型 Lite 版，轻量快速，中文对话流畅，适合日常问答与轻量任务。" },
-  { match: /bge-m3|bge-large|bge-/, name: "BGE 向量系列", desc: "BAAI 开源向量/重排模型，检索领域标杆，中文/多语检索表现优秀。" },
-  { match: /sensevoice|glm-asr/, name: "语音识别（ASR）", desc: "中文语音识别专项模型，抗噪能力强，支持多方言。" },
-  { match: /spark-tts|melotts/, name: "语音合成（TTS）", desc: "自然语音合成模型，支持多种音色与情感，部分支持声音克隆。" },
-  { match: /cogview/, name: "智谱 CogView", desc: "智谱文生图模型，中文提示词理解好，可生成风格化图片。" },
-  { match: /cogvideox/, name: "智谱 CogVideoX", desc: "智谱文生视频模型，根据描述生成短视频片段。" },
   { match: /guard|nsfw|nonescape|security.*filter/, name: "安全风控", desc: "内容安全检测模型，用于识别违规、有害、敏感内容。" }
 ]
 
@@ -496,18 +450,10 @@ const profile = computed(() => {
   const desc = (note ? note.name + "。" + note.desc + " " : "") + base.desc
   const limits = base.limits.slice()
   // 平台特定限制
-  if (m.platform === 'zhipu') {
-    limits.unshift("由智谱开放平台免费提供")
-  } else if (m.platform === 'spark') {
-    limits.unshift("由讯飞星火（Spark）免费提供")
-  } else if (acu) {
+  if (acu) {
     // 官方自营专线：完全按官方参数与限制展示（覆盖通用 chat 模板）
     limits.length = 0
     limits.push(...acu.limits)
-  } else if (m.platform === 'gitee') {
-    limits.unshift("由 Gitee AI（模力方舟）提供")
-  } else if (m.platform === 'siliconflow') {
-    limits.unshift("由 SiliconFlow（硅基流动）提供")
   } else if (m.platform === 'nvidia') {
     limits.unshift("由 Nvidia NIM 提供，网关密钥池自动轮换（单密钥 38 次/分钟）")
   }
@@ -609,7 +555,7 @@ const example = computed(() => {
           <li>账目透明：每次扣费、余额、请求明细在<router-link to="/console" style="color:var(--accent);">个人控制台</router-link>实时可查，流水永久留存</li>
           <li>调用方式与免费模型完全一致：同一接口、同一密钥，<code>model</code> 填本模型 ID 即可；需注册登录并使用个人密钥</li>
         </ul>
-        <p class="md-desc" style="margin-top:8px;">除本模型外，<b>本站其他全部模型完全免费</b>，且今后也不会收费——免费与收费互不影响，放心使用。</p>
+        <p class="md-desc" style="margin-top:8px;">除本模型外的<b>免费模型注册即用、不收一分钱</b>（完整清单见模型中心），免费与收费互不影响，放心使用。</p>
       </div>
       <div class="md-block"><h3>支持的请求参数</h3>
         <div class="md-table-wrap"><table class="md-table"><thead><tr><th>参数名</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead><tbody>

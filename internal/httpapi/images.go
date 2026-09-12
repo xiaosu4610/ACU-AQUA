@@ -187,6 +187,7 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 	Model string `json:"model"`
 	N     int64  `json:"n"`
 }, uid int64, keyHash string) {
+	start := time.Now()
 	model := config.NormalizeModel(req.Model)
 	fline, fm := a.Cfg.FindFreeModel(model)
 	if fm == nil || !fm.Image {
@@ -238,7 +239,7 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 		d.URL = "/v1/images/file/" + localID
 		d.B64JSON = ""
 	}
-	a.okFreeRequest(rid, billing.Usage{}, 200, "estimated")
+	a.okFreeRequest(rid, billing.Usage{}, 200, "estimated", time.Since(start).Milliseconds())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(stripSensitive(jsonMarshal(jr)))

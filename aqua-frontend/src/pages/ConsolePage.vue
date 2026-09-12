@@ -471,7 +471,7 @@ function fmtTime(ts: number): string {
             <div class="bal-main">
               <div class="bal-num">
                 <b>¥{{ yuan(balance?.balance_micro) }}</b>
-                <span>当前余额 · 仅用于收费模型 aqua/（按次）与 tide/（按量）专线（预充值、先付后用、用完即停）</span>
+                <span>当前余额 · 仅用于收费模型 aqua/（按次计费分组与按量计费分组）专线（预充值、先付后用、用完即停）</span>
               </div>
               <div class="bal-sub">
                 <span>今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
@@ -482,7 +482,7 @@ function fmtTime(ts: number): string {
               </div>
             </div>
             <div class="bal-strip">
-              <span>余额只影响收费模型 <b>aqua/ 加速通道</b>（按次）与 <b>tide/ 高级计量通道</b>（按量，24 款含文生图），其余全部模型依然完全免费，无余额照样用</span>
+              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按次 2 款 / 按量 21 款含文生图，由密钥计费分组决定），其余全部模型依然完全免费，无余额照样用</span>
               <span>支持在线充值（支付金额 100% 全额到账，渠道手续费由本站承担）· 失败请求自动全额退回 · 每笔流水永久可查</span>
               <button class="mini-btn ok" @click="go('topup')"><AqIcon name="spark" :size="12" /> 余额充值</button>
               <button class="mini-btn" @click="go('billing')"><AqIcon name="bolt" :size="12" /> 消费账单</button>
@@ -727,7 +727,7 @@ function fmtTime(ts: number): string {
         <div v-show="view === 'topup'" class="view">
           <div class="vhead">
             <span class="vic"><AqIcon name="spark" :size="17" /></span>
-            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 按次、tide/ 按量）扣费，免费模型不受影响</p></div>
+            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 前缀，按次或按量由密钥分组决定）扣费，免费模型不受影响</p></div>
           </div>
           <div class="dash-sec bal-strip" style="margin:0 0 14px">
             <span>当前余额 <b>¥{{ yuan(balance?.balance_micro) }}</b></span>
@@ -763,7 +763,7 @@ function fmtTime(ts: number): string {
               <button class="mini-btn" @click="manualCheck">我已支付，立即查询</button>
               <button class="mini-btn" @click="stopPolling(); payingOrder = null">取消检测</button>
             </div>
-            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按次计费（正式价 ¥0.004~0.006/次，与生成长度无关），余额低于阈值可开启邮件提醒。</p>
+            <p class="topup-hint">支付成功后自动入账；到账前请勿关闭本页。收费模型按次计费（正式价 ¥0.004~0.005/次，与生成长度无关），余额低于阈值可开启邮件提醒。</p>
             <div class="topup-help">
               <b>支付遇到问题？</b>已支付但余额未到账、重复扣款、金额有误——请勿重复支付，保留支付凭证（账单截图 / 商户单号），
               <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">加入 QQ 频道</a> 或
@@ -801,7 +801,7 @@ function fmtTime(ts: number): string {
         <div v-show="view === 'billing'" class="view">
           <div class="vhead">
             <span class="vic"><AqIcon name="bolt" :size="17" /></span>
-            <div><h2>消费账单</h2><p>收费模型（aqua/ 按次、tide/ 按量）每笔扣费 / 退回 / 发放记录 · 预充值、先付后用、用完即停、失败自动退回 · 免费模型不产生任何账单</p></div>
+            <div><h2>消费账单</h2><p>收费模型（aqua/ 前缀，按次或按量由密钥分组决定）每笔扣费 / 退回 / 发放记录 · 预充值、先付后用、用完即停、失败自动退回 · 免费模型不产生任何账单</p></div>
           </div>
 
           <div class="dash-sec">
@@ -829,7 +829,7 @@ function fmtTime(ts: number): string {
                 </thead>
                 <tbody>
                   <tr v-if="!billItems.length">
-                    <td colspan="6" class="hist-empty">{{ billLoading ? '加载中…' : (billMsg || '暂无账单——使用收费模型（aqua/ 按次、tide/ 按量）后这里会出现记录') }}</td>
+                    <td colspan="6" class="hist-empty">{{ billLoading ? '加载中…' : (billMsg || '暂无账单——使用收费模型（aqua/ 前缀，按次或按量由密钥分组决定）后这里会出现记录') }}</td>
                   </tr>
                   <tr v-for="(b, i) in billItems" :key="b.ts + '-' + i">
                     <td class="hist-time">{{ fmtTime(b.ts) }}</td>

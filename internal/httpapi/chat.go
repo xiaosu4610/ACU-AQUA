@@ -40,6 +40,7 @@ type usageJSON struct {
 // 鉴权 → 收费线路由（统一前缀按密钥分组选线 / 线前缀显式直连）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
 //  → 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")
@@ -174,15 +175,14 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model)
+		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start)
 		return
 	}
-	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model)
+	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model, start)
 }
 
 // serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写
-func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
-	start := time.Now()
+func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		a.settleSafely(uid, prehold, 0, rid, 0, "read_error")
@@ -246,7 +246,7 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 }
 
 // serveStreamChat SSE 流式：逐行转发 + 首尾事件计费
-func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
+func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		a.settleSafely(uid, prehold, 0, rid, 0, "no_flusher")
@@ -258,7 +258,6 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(200)
-	start := time.Now()
 
 	var u billing.Usage
 	final := int64(0)
@@ -487,11 +486,15 @@ func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stre
 
 // okRequest 成功回写：usage + 金额 + 面值成本 + bill_state='billed'
 // src=usage 来源口径（actual=上游实发 / estimated=保底估算）；latMs/sc 回写观测口径，
-// 消除生产旧表列默认值（usage_source='estimated'/status_code=200）造成的统计失真
+// tps=输出 tokens/秒（生成速度，非流式为总耗时口径）；消除生产旧表列默认值造成的统计失真
 func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int) {
+	tps := 0.0
+	if latMs > 0 {
+		tps = float64(u.CompletionTokens) * 1000 / float64(latMs)
+	}
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=? WHERE rowid=?",
-		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, rid)
+		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=?, tps=? WHERE rowid=?",
+		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, tps, rid)
 }
 
 // failRequest 失败回写（诊断 D2：reason 必填区分失败原因，status_code 回写真实状态码供统计）

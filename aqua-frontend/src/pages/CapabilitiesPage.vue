@@ -177,45 +177,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /bge-large-en/, ctx: "0.5K", size: "326M", dims: 1024, released: "2023-06" },
   { re: /bge-reranker-v2-m3/, ctx: "8K", size: "568M", dims: 0, released: "2024-01" },
   { re: /bce-reranker/, ctx: "0.5K", size: "278M", dims: 0, released: "2023-09" },
-  // ── Gitee AI 国产模型 ──
-  { re: /huatuogpt-o1-7b/, ctx: "8K", size: "7B", released: "2024-08" },
-  { re: /lingshu-32b/, ctx: "32K", size: "32B", released: "2024-09" },
-  { re: /deepseek-prover-v2-7b/, ctx: "32K", size: "7B", released: "2024-04" },
-  { re: /healthgpt-l14/, ctx: "8K", size: "14B", released: "2024-07" },
-  { re: /glm-4-9b-0414|thudm\/glm-4-9b-0414/, ctx: "128K", size: "9B", released: "2024-04" },
-  { re: /glm-4-9b-chat/, ctx: "32K", size: "9B", released: "2024-01" },
-  { re: /qwen3-8b/, ctx: "128K", size: "8B", released: "2024-12" },
-  { re: /qwen3-4b/, ctx: "128K", size: "4B", released: "2024-12" },
-  { re: /qwen3-0\.6b/, ctx: "128K", size: "0.6B", released: "2024-12" },
-  { re: /qwen2-7b-instruct/, ctx: "32K", size: "7B", released: "2024-09" },
-  { re: /internlm3-8b-instruct/, ctx: "32K", size: "8B", released: "2024-10" },
-  { re: /deepseek-r1-distill-qwen-1\.5b/, ctx: "128K", size: "1.5B", released: "2025-01" },
-  { re: /glm-asr/, ctx: "30s", size: "—", dims: 0 },
-  { re: /sensevoicesmall/, ctx: "30s", size: "234M" },
-  { re: /spark-tts/, ctx: "—", size: "0.5B" },
-  { re: /qwen3-embedding-4b/, ctx: "8K", size: "4B", dims: 2560, released: "2024-12" },
-  { re: /qwen3-reranker-4b/, ctx: "8K", size: "4B", released: "2024-12" },
-  { re: /qwen3-reranker-0\.6b/, ctx: "8K", size: "0.6B", released: "2024-12" },
-  { re: /qwen3guard/, ctx: "8K", size: "0.6B", released: "2024-12" },
-  { re: /nonescape-v0/, ctx: "4K", size: "—", released: "2024-09" },
-  { re: /security.*filter|nsfw-classifier/, ctx: "4K", size: "—", released: "2024-08" },
-  { re: /ip-location/, ctx: "—", size: "—" },
-  // ── SiliconFlow ──
-  { re: /hunyuan-mt-7b/, ctx: "32K", size: "7B", released: "2024-10" },
-  { re: /paddleocr-vl/, ctx: "—", size: "—", released: "2024-08" },
-  { re: /teleasr|telespeech/, ctx: "30s", size: "—", released: "2024-06" },
-  // ── 智谱 GLM ──
-  { re: /glm-4\.7-flash/, ctx: "128K", size: "~10B", released: "2025-06" },
-  { re: /glm-4-flash-250414/, ctx: "128K", size: "~10B", released: "2025-04" },
-  { re: /glm-z1-flash$/, ctx: "128K", size: "~10B", released: "2025-01" },
-  { re: /glm-4-flash$/, ctx: "128K", size: "~10B", released: "2024-01" },
-  { re: /glm-4\.6v-flash/, ctx: "32K", size: "~10B", released: "2025-10" },
-  { re: /glm-4v-flash/, ctx: "8K", size: "~9B", released: "2024-07" },
-  { re: /glm-4\.1v-thinking-flash/, ctx: "32K", size: "~10B", released: "2025-02" },
-  { re: /cogview-3-flash/, ctx: "—", size: "—", dims: 0, released: "2024-06" },
-  { re: /cogvideox-flash/, ctx: "—", size: "5B", dims: 0, released: "2024-08" },
-  // ── 讯飞星火（Spark）──
-  { re: /spark-lite/, ctx: "8K", size: "—", released: "2023-05" }
 ]
 function modelSpec(id: string): ModelSpec {
   for (const s of MODEL_SPECS) {
@@ -336,7 +297,7 @@ const stats = computed(() => {
   <section class="route-page">
     <div v-if="!props.embedded" class="models-page-head">
       <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>模型中心</h1>
-      <p>全线模型一览与能力总览的统一入口：由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营平台实时提供。</p>
+      <p>全线模型一览与能力总览的统一入口：由 Nvidia NIM 与官方自营专线实时提供。</p>
     </div>
     <nav v-if="!props.embedded" class="hub-subnav" aria-label="模型中心子导航">
       <router-link class="hub-tab" to="/models" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span>模型列表</router-link>

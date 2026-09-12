@@ -129,9 +129,9 @@ func (a *App) freeForwardPath(w http.ResponseWriter, r *http.Request, body []byt
 	if okCall {
 		var j map[string]any
 		if json.Unmarshal(raw, &j) == nil {
-			a.okFreeRequest(rid, usageFromUpstreamJSON(j), resp.StatusCode, "actual")
+			a.okFreeRequest(rid, usageFromUpstreamJSON(j), resp.StatusCode, "actual", lat)
 		} else if rid != 0 {
-			a.okFreeRequest(rid, billing.Usage{}, resp.StatusCode, "estimated")
+			a.okFreeRequest(rid, billing.Usage{}, resp.StatusCode, "estimated", lat)
 		}
 	} else if rid != 0 {
 		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode), resp.StatusCode)

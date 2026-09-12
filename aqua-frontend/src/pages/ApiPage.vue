@@ -8,7 +8,7 @@ import AqIcon from '@/components/AqIcon.vue'
 const codeQuickCurl = `curl https://api.ltzy.top/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
-  -d '{"model": "glm-4-flash", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`
+  -d '{"model": "gpt-oss-20b", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`
 
 /* 按次计费分组调用示例（计费说明章节用） */
 const codePaidCurl = `curl https://api.ltzy.top/v1/chat/completions \\
@@ -29,7 +29,7 @@ client = OpenAI(
     base_url="https://api.ltzy.top/v1",                   # 注意结尾带 /v1
 )
 r = client.chat.completions.create(
-    model="glm-4-flash",                            # 去模型中心随便抄一个
+    model="gpt-oss-20b",                            # 去模型中心随便抄一个
     messages=[{"role": "user", "content": "用一句话介绍你自己"}],
 )
 print(r.choices[0].message.content)                       # 打印 AI 的回答`
@@ -41,7 +41,7 @@ const client = new OpenAI({
   baseURL: "https://api.ltzy.top/v1",                     // 结尾带 /v1
 });
 const r = await client.chat.completions.create({
-  model: "glm-4-flash",
+  model: "gpt-oss-20b",
   messages: [{ role: "user", content: "用一句话介绍你自己" }],
 });
 console.log(r.choices[0].message.content);`
@@ -53,11 +53,11 @@ messages = [
   {"role": "assistant", "content": "列表像一个能装任何东西的收纳盒…"}, # 第 1 答（也要带上！）
   {"role": "user",     "content": "那字典呢？"}                    # 第 2 问
 ]
-r = client.chat.completions.create(model="glm-4-flash", messages=messages)`
+r = client.chat.completions.create(model="gpt-oss-20b", messages=messages)`
 
 const codeStreamPy = `# Python：一行开启流式
 stream = client.chat.completions.create(
-    model="glm-4-flash",
+    model="gpt-oss-20b",
     messages=[{"role": "user", "content": "讲个冷笑话"}],
     stream=True,                          # ← 打字机开关
 )
@@ -69,7 +69,7 @@ const codeStreamJs = `// JS（浏览器原生 SSE，无需任何库）
 const res = await fetch("https://api.ltzy.top/v1/chat/completions", {
   method: "POST",
   headers: { "Content-Type": "application/json", "Authorization": "Bearer sk-你的密钥" },
-  body: JSON.stringify({ model: "glm-4-flash", stream: true,
+  body: JSON.stringify({ model: "gpt-oss-20b", stream: true,
     messages: [{ role: "user", content: "讲个冷笑话" }] }),
 });
 const reader = res.body.getReader(), dec = new TextDecoder();
@@ -92,15 +92,15 @@ console.log(full);`
 
 const codeApiModelsResp = `{"object": "list",
   "data": [{
-    "id": "glm-4-flash",
+    "id": "gpt-oss-20b",
     "object": "model",
-    "owned_by": "zhipu"
+    "owned_by": "nvidia"
   }]}`
 
 const codeApiModelsCurl = `curl https://api.ltzy.top/v1/models
   -H "Authorization: Bearer sk-****"`
 
-const codeApiChatBody = `{"model": "glm-4-flash",
+const codeApiChatBody = `{"model": "gpt-oss-20b",
   "messages": [
     {"role": "system", "content": "你是 AQUA 助手"},
     {"role": "user", "content": "你好"}
@@ -112,41 +112,17 @@ const codeApiChatBody = `{"model": "glm-4-flash",
 const codeApiChatPy = `from openai import OpenAI
 client = OpenAI(api_key="sk-****", base_url="https://api.ltzy.top/v1")
 r = client.chat.completions.create(
-  model="glm-4-flash",
+  model="gpt-oss-20b",
   messages=[{"role": "user", "content": "你好"}])
 print(r.choices[0].message.content)`
 
-const codeApiEmb = `curl https://api.ltzy.top/v1/embeddings \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "bge-m3", "input": "AQUA 网关"}'`
-
-const codeApiRerank = `curl https://api.ltzy.top/v1/rerank \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "bge-reranker-v2-m3", "query": "你好", "documents": ["A", "B"]}'`
-
-const codeApiAsr = `curl https://api.ltzy.top/v1/audio/transcriptions \\
-  -F "file=@audio.wav" \\
-  -F "model=glm-asr"`
-
-const codeApiTts = `curl https://api.ltzy.top/v1/audio/speech \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "spark-tts-0.5b", "input": "你好，欢迎使用 AQUA"}'`
-
 const codeApiMod = `curl https://api.ltzy.top/v1/moderations \\
   -H "Content-Type: application/json" \\
-  -d '{"model": "qwen3guard-gen-0.6b", "input": "待检测文本"}'`
+  -d '{"model": "llama-3.1-nemoguard-8b-content-safety", "input": "待检测文本"}'`
 
 const codeApiImg = `curl https://api.ltzy.top/v1/images/generations \\
   -H "Content-Type: application/json" \\
-  -d '{"model": "cogview-3-flash", "prompt": "一只坐在沙发上的橘猫", "size": "1024x1024"}'`
-
-const codeApiVid = `curl https://api.ltzy.top/v1/videos/generations \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "cogvideox-flash", "prompt": "一只小狗在草地上奔跑"}'`
-
-const codeApiIp = `curl https://api.ltzy.top/v1/ip_location \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "ip-location", "ip": "8.8.8.8"}'`
+  -d '{"model": "aqua/qwen-image-2.0", "prompt": "一只坐在沙发上的橘猫", "size": "1024x1024"}'`
 
 const codeApiAsset = `curl https://api.ltzy.top/assets/2026/08/abc123.png \\
   -H "Authorization: Bearer sk-****"`
@@ -183,7 +159,7 @@ const codeApiErr = `{"error": {
         <h3>API 是什么？——一家「自动点餐」的餐厅</h3>
         <p class="desc">想象一家餐厅：<b>你（你的程序）</b>写好一份<b>点菜单（请求）</b>递给<b>服务员（API）</b>，服务员把单子送进<b>后厨（AI 模型）</b>，做好菜再把<b>结果（回复）</b>端出来。你不需要知道后厨怎么炒的——会递单子、能接菜，就够了。<b>API 就是这套「递单子 → 出菜」的规矩</b>，大家按同一个规矩来，程序之间就能互相使唤。</p>
         <h3>API 网关是什么？——前台总服务台</h3>
-        <p class="desc">AQUA 就是那个前台。后面有十几家后厨（Nvidia、智谱、SiliconFlow、官方自营……几十个模型），但你只跟前台一个窗口打交道：<b>报一个菜名（模型 ID），前台自动转给对应的后厨</b>。菜名全部小写、不带商家前缀（比如 <code>glm-4-flash</code>、<code>qwen3-8b</code>），前台拿着菜名查自己的「菜单目录」，就知道该送往哪家后厨。</p>
+        <p class="desc">AQUA 就是那个前台。后面有几家后厨（Nvidia NIM、官方自营专线……几十个模型），但你只跟前台一个窗口打交道：<b>报一个菜名（模型 ID），前台自动转给对应的后厨</b>。免费模型的菜名是小写短 ID（比如 <code>gpt-oss-20b</code>），官方自营收费模型带 <code>aqua/</code> 前缀（比如 <code>aqua/deepseek-v4-flash</code>），前台拿着菜名查自己的「菜单目录」，就知道该送往哪家后厨。</p>
         <h3>API Key（密钥）是什么？——一张自助领取的门票</h3>
         <p class="desc">大部分网站的 API Key 像<b>演唱会门票</b>：要实名申请、要花钱、丢了要补办。AQUA 的 Key 是一张<b>自助领取的门票</b>：<b>注册登录后，进「个人控制台」一键创建</b>，立刻可用——<b>注册免费、创建自助、随时吊销重建</b>。每个密钥有独立备注和用量统计，丢了就吊销重发，不用问任何人。</p>
         <h3>一次调用的完整旅程</h3>
@@ -213,7 +189,7 @@ const codeApiErr = `{"error": {
         <pre><CopyBtn class="pre-copy" :text="codeQuickCurl" /><code id="code-quick-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/chat/completions \
   -H <span class="str">"Content-Type: application/json"</span> \
   -H <span class="str">"Authorization: Bearer sk-你的密钥"</span> \
-  -d <span class="str">'{"model": "glm-4-flash", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'</span></code></pre>
+  -d <span class="str">'{"model": "gpt-oss-20b", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'</span></code></pre>
         <p class="desc"><b>方式二：Python</b>（先 <code>pip install openai</code>）：</p>
         <pre><CopyBtn class="pre-copy" :text="codeQuickPy" /><code id="code-quick-py"><span class="kwd">from</span> openai <span class="kwd">import</span> OpenAI
 
@@ -222,7 +198,7 @@ client = OpenAI(
     base_url=<span class="str">"https://api.ltzy.top/v1"</span>,                   <span class="tok"># 注意结尾带 /v1</span>
 )
 r = client.chat.completions.create(
-    model=<span class="str">"glm-4-flash"</span>,                            <span class="tok"># 去模型中心随便抄一个</span>
+    model=<span class="str">"gpt-oss-20b"</span>,                            <span class="tok"># 去模型中心随便抄一个</span>
     messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"用一句话介绍你自己"</span>}],
 )
 <span class="kwd">print</span>(r.choices[<span class="tok">0</span>].message.content)                       <span class="tok"># 打印 AI 的回答</span></code></pre>
@@ -234,18 +210,18 @@ r = client.chat.completions.create(
   baseURL: <span class="str">"https://api.ltzy.top/v1"</span>,                     <span class="tok">// 结尾带 /v1</span>
 });
 <span class="kwd">const</span> r = <span class="kwd">await</span> client.chat.completions.create({
-  model: <span class="str">"glm-4-flash"</span>,
+  model: <span class="str">"gpt-oss-20b"</span>,
   messages: [{ role: <span class="str">"user"</span>, content: <span class="str">"用一句话介绍你自己"</span> }],
 });
 console.log(r.choices[<span class="tok">0</span>].message.content);</code></pre>
         <h3>第 3 步：看懂返回结果（每个字段是什么）</h3>
         <pre><code>{
   <span class="str">"id"</span>: <span class="str">"chatcmpl-xxxx"</span>,          <span class="tok">// 这次对话的编号（流水号，出问题反馈时报它）</span>
-  <span class="str">"model"</span>: <span class="str">"glm-4-flash"</span>,   <span class="tok">// 实际干活的模型</span>
+  <span class="str">"model"</span>: <span class="str">"gpt-oss-20b"</span>,   <span class="tok">// 实际干活的模型</span>
   <span class="str">"choices"</span>: [{                    <span class="tok">// 回答在这里（数组，一般只取第 0 个）</span>
     <span class="str">"message"</span>: {
       <span class="str">"role"</span>: <span class="str">"assistant"</span>,         <span class="tok">// 说话的人是 AI</span>
-      <span class="str">"content"</span>: <span class="str">"你好！我是智谱 GLM…"</span>  <span class="tok">// 注意：你要的答案就是它</span>
+      <span class="str">"content"</span>: <span class="str">"你好！我是 GPT-OSS-20B…"</span>  <span class="tok">// 注意：你要的答案就是它</span>
     },
     <span class="str">"finish_reason"</span>: <span class="str">"stop"</span>        <span class="tok">// stop=正常说完；length=字数到上限被截断</span>
   }],
@@ -292,7 +268,7 @@ console.log(r.choices[<span class="tok">0</span>].message.content);</code></pre>
         <p class="desc">先把结论说清楚：<b>本站绝大多数模型完全免费，且会一直免费</b>。收费的只有<b>官方自营收费系列</b>——统一使用 <code>aqua/</code> 前缀，<b>按次还是按量，由你密钥的计费分组决定</b>（控制台创建密钥时二选一：「免费 + 按次计费」或「免费 + 按量计费」）。下面把免费、收费、怎么充值、错误怎么算账，一次讲明白。</p>
         <h3>哪些免费？——除它之外全部免费</h3>
         <ul class="tips">
-          <li>Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营<b>免费通道</b>的全部模型（对话/视觉/语音/向量/重排）：<b>不收一分钱</b>，注册即可用。</li>
+          <li>Nvidia NIM 与官方自营<b>免费通道</b>的全部模型（对话/视觉/风控等）：<b>不收一分钱</b>，注册即可用。</li>
           <li>免费模型的用量统计照常记录，但<b>仅用于你在控制台查看</b>，不产生任何费用，今后也不会对这些模型收费。</li>
           <li>没有余额、不充值，免费模型<b>照样随便用</b>，二者互不影响。</li>
         </ul>
@@ -302,7 +278,7 @@ console.log(r.choices[<span class="tok">0</span>].message.content);</code></pre>
   -H <span class="str">"Content-Type: application/json"</span> \
   -H <span class="str">"Authorization: Bearer sk-你的密钥"</span> \
   -d <span class="str">'{"model": "aqua/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}]}'</span>   <span class="tok"># 只换了 model，其余一字不差</span></code></pre>
-        <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。上方示例即<b>按次计费分组密钥</b>的效果（正式价 ¥0.004~0.006/次）——每次成功请求按模型单价扣一次，与生成长度无关。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>price_micro</code> 字段；换用按量分组密钥调用同一模型 ID，则自动转为按量计费。</p>
+        <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。上方示例即<b>按次计费分组密钥</b>的效果（正式价 ¥0.004~0.005/次）——每次成功请求按模型单价扣一次，与生成长度无关。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>price_micro</code> 字段；换用按量分组密钥调用同一模型 ID，则自动转为按量计费。</p>
         <h3>另一种计费——按量计费分组（三段价，用多少付多少）</h3>
         <p class="desc">创建密钥时选择「<b>免费 + 按量计费</b>」分组即按 tokens 计量：<b>三段价</b>——输入 / 缓存命中 / 输出分开计价（元 / 百万 tokens），用多少付多少、无保底。按量分组覆盖最全，含 <code>aqua/qwen-image-2.0</code>、<code>aqua/wan2.7-image</code> 两款文生图模型。与按次分组<b>同一个接口、同一套前缀</b>，同一个模型 ID 换用按量密钥即按量计费：</p>
         <pre><CopyBtn class="pre-copy" :text="codeVolCurl" /><code id="code-vol-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/chat/completions \
@@ -314,7 +290,7 @@ console.log(r.choices[<span class="tok">0</span>].message.content);</code></pre>
         <div class="md-table-wrap"><table class="md-table">
           <thead><tr><th>规则</th><th>具体内容</th><th>对你的意义</th></tr></thead>
           <tbody>
-            <tr><td><b>按次计费</b></td><td><b>按次分组密钥</b>：每次<b>成功</b>请求按所用模型单价扣一次，正式价 <b>¥0.004~0.006/次</b>，与生成长度无关。</td><td>价格公开透明，写一句话和写一千字同价</td></tr>
+            <tr><td><b>按次计费</b></td><td><b>按次分组密钥</b>：每次<b>成功</b>请求按所用模型单价扣一次，正式价 <b>¥0.004~0.005/次</b>，与生成长度无关。</td><td>价格公开透明，写一句话和写一千字同价</td></tr>
             <tr><td><b>按量计费</b></td><td><b>按量分组密钥</b>：按 tokens 三段计价（输入 / 缓存命中 / 输出），请求前预估预扣，完成后<b>多退少补</b>。</td><td>用多少付多少，缓存命中更省，无保底</td></tr>
             <tr><td><b>预充值制</b></td><td>余额<b>在线充值即时到账</b>，每次请求前预扣，余额不足直接返回 <code>402</code>，绝不透支。</td><td>永远不可能「不知不觉欠费」</td></tr>
             <tr><td><b>失败不扣费</b></td><td>上游失败、网络中断、服务异常——预扣金额<b>自动全额退回</b>，错误请求一分钱不收。</td><td>只为成功的结果付费</td></tr>
@@ -352,7 +328,7 @@ messages = [
   {<span class="str">"role"</span>: <span class="str">"assistant"</span>, <span class="str">"content"</span>: <span class="str">"列表像一个能装任何东西的收纳盒…"</span>}, <span class="tok"># 第 1 答（也要带上！）</span>
   {<span class="str">"role"</span>: <span class="str">"user"</span>,     <span class="str">"content"</span>: <span class="str">"那字典呢？"</span>}                    <span class="tok"># 第 2 问</span>
 ]
-r = client.chat.completions.create(model=<span class="str">"glm-4-flash"</span>, messages=messages)</code></pre>
+r = client.chat.completions.create(model=<span class="str">"gpt-oss-20b"</span>, messages=messages)</code></pre>
         <ul class="tips">
           <li><b>AI 回答「失忆」了？</b>九成是没把历史 messages 带回去。</li>
           <li>记录太长会超出上下文窗口——常规做法：只带<b>最近 10~20 条</b>，或把更早的内容总结成一条。</li>
@@ -362,7 +338,7 @@ r = client.chat.completions.create(model=<span class="str">"glm-4-flash"</span>,
         <p class="desc">请求里加 <code>"stream": true</code>，服务器就会通过 SSE 小水管一段段推送。每一段都是一个标准 JSON（<code>data: {...}</code>），你把 <code>choices[0].delta.content</code> 拼接到界面上即可：</p>
         <pre><CopyBtn class="pre-copy" :text="codeStreamPy" /><code id="code-stream-py"><span class="tok"># Python：一行开启流式</span>
 stream = client.chat.completions.create(
-    model=<span class="str">"glm-4-flash"</span>,
+    model=<span class="str">"gpt-oss-20b"</span>,
     messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"讲个冷笑话"</span>}],
     stream=<span class="kwd">True</span>,                          <span class="tok"># ← 打字机开关</span>
 )
@@ -373,7 +349,7 @@ stream = client.chat.completions.create(
 <span class="kwd">const</span> res = <span class="kwd">await</span> fetch(<span class="str">"https://api.ltzy.top/v1/chat/completions"</span>, {
   method: <span class="str">"POST"</span>,
   headers: { <span class="str">"Content-Type"</span>: <span class="str">"application/json"</span>, <span class="str">"Authorization"</span>: <span class="str">"Bearer sk-你的密钥"</span> },
-  body: JSON.stringify({ model: <span class="str">"glm-4-flash"</span>, stream: <span class="kwd">true</span>,
+  body: JSON.stringify({ model: <span class="str">"gpt-oss-20b"</span>, stream: <span class="kwd">true</span>,
     messages: [{ role: <span class="str">"user"</span>, content: <span class="str">"讲个冷笑话"</span> }] }),
 });
 <span class="kwd">const</span> reader = res.body.getReader(), dec = <span class="kwd">new</span> TextDecoder();
@@ -398,13 +374,13 @@ console.log(full);</code></pre>
 
       <div class="api-card api-anchor">
         <h2><span class="api-method">GET</span><span class="api-endpoint">/v1/models</span></h2>
-        <p class="desc">获取可用模型列表。返回 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营的全部模型。</p>
+        <p class="desc">获取可用模型列表。返回 Nvidia NIM 与官方自营专线的全部模型。</p>
         <h3>响应结构</h3>
         <pre><CopyBtn class="pre-copy" :text="codeApiModelsResp" /><code id="code-api-models-resp">{<span class="str">"object"</span>: <span class="str">"list"</span>,
   <span class="str">"data"</span>: [{
-    <span class="str">"id"</span>: <span class="str">"glm-4-flash"</span>,
+    <span class="str">"id"</span>: <span class="str">"gpt-oss-20b"</span>,
     <span class="str">"object"</span>: <span class="str">"model"</span>,
-    <span class="str">"owned_by"</span>: <span class="str">"zhipu"</span>
+    <span class="str">"owned_by"</span>: <span class="str">"nvidia"</span>
   }]}</code></pre>
         <h3>curl</h3>
         <pre><CopyBtn class="pre-copy" :text="codeApiModelsCurl" /><code id="code-api-models-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/models
@@ -415,7 +391,7 @@ console.log(full);</code></pre>
         <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/chat/completions</span></h2>
         <p class="desc">对话补全，支持流式（SSE）。根据填入的模型 ID 自动路由到对应上游。</p>
         <h3>请求体</h3>
-        <pre><CopyBtn class="pre-copy" :text="codeApiChatBody" /><code id="code-api-chat-body">{<span class="str">"model"</span>: <span class="str">"glm-4-flash"</span>,
+        <pre><CopyBtn class="pre-copy" :text="codeApiChatBody" /><code id="code-api-chat-body">{<span class="str">"model"</span>: <span class="str">"gpt-oss-20b"</span>,
   <span class="str">"messages"</span>: [
     {<span class="str">"role"</span>: <span class="str">"system"</span>, <span class="str">"content"</span>: <span class="str">"你是 AQUA 助手"</span>},
     {<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"你好"</span>}
@@ -427,73 +403,25 @@ console.log(full);</code></pre>
         <pre><CopyBtn class="pre-copy" :text="codeApiChatPy" /><code id="code-api-chat-py"><span class="kwd">from</span> openai <span class="kwd">import</span> OpenAI
 client = OpenAI(api_key=<span class="str">"sk-****"</span>, base_url=<span class="str">"https://api.ltzy.top/v1"</span>)
 r = client.chat.completions.create(
-  model=<span class="str">"glm-4-flash"</span>,
+  model=<span class="str">"gpt-oss-20b"</span>,
   messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"你好"</span>}])
 print(r.choices[<span class="tok">0</span>].message.content)</code></pre>
       </div>
 
       <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/embeddings</span></h2>
-        <p class="desc">向量化。向量模型（如 bge-m3）由 Gitee AI / SiliconFlow 提供。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiEmb" /><code id="code-api-emb"><span class="kwd">curl</span> https://api.ltzy.top/v1/embeddings \
-  -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "bge-m3", "input": "AQUA 网关"}'</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/rerank</span></h2>
-        <p class="desc">重排。用于 RAG 检索结果排序，支持 bge-reranker-v2-m3 等重排模型。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiRerank" /><code id="code-api-rerank"><span class="kwd">curl</span> https://api.ltzy.top/v1/rerank \
-  -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "bge-reranker-v2-m3", "query": "你好", "documents": ["A", "B"]}'</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/audio/transcriptions</span></h2>
-        <p class="desc">语音识别（ASR）。使用 multipart/form-data 上传音频文件，内容类型透传；支持 glm-asr、sensevoice-small 等。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiAsr" /><code id="code-api-asr"><span class="kwd">curl</span> https://api.ltzy.top/v1/audio/transcriptions \
-  -F <span class="str">"file=@audio.wav"</span> \
-  -F <span class="str">"model=glm-asr"</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/audio/speech</span></h2>
-        <p class="desc">语音合成（TTS）。部分 TTS 模型的文本合成能力取决于上游平台；可携带 prompt_audio / prompt_audio_url 参考音频（语音克隆类模型）。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiTts" /><code id="code-api-tts"><span class="kwd">curl</span> https://api.ltzy.top/v1/audio/speech \
-  -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "spark-tts-0.5b", "input": "你好，欢迎使用 AQUA"}'</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
         <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/moderations</span></h2>
-        <p class="desc">内容安全检测。支持 qwen3guard-gen-0.6b、nonescape-v0、nsfw-classifier 等风控模型。</p>
+        <p class="desc">内容安全检测。支持 llama-3.1-nemoguard-8b-content-safety、nemotron-3.5-content-safety、llama-guard-4-12b 等风控模型（Nvidia NIM 免费提供）。</p>
         <pre><CopyBtn class="pre-copy" :text="codeApiMod" /><code id="code-api-mod"><span class="kwd">curl</span> https://api.ltzy.top/v1/moderations \
   -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "qwen3guard-gen-0.6b", "input": "待检测文本"}'</span></code></pre>
+  -d <span class="str">'{"model": "llama-3.1-nemoguard-8b-content-safety", "input": "待检测文本"}'</span></code></pre>
       </div>
 
       <div class="api-card api-anchor">
         <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/images/generations</span></h2>
-        <p class="desc">文生图。由智谱 CogView 系列免费提供，模型 ID 如 <code>cogview-3-flash</code>。</p>
+        <p class="desc">文生图。由官方自营专线提供，模型 ID 如 <code>aqua/qwen-image-2.0</code>、<code>aqua/wan2.7-image</code>（按张计费，需余额充足）。</p>
         <pre><CopyBtn class="pre-copy" :text="codeApiImg" /><code id="code-api-img"><span class="kwd">curl</span> https://api.ltzy.top/v1/images/generations \
   -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "cogview-3-flash", "prompt": "一只坐在沙发上的橘猫", "size": "1024x1024"}'</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/videos/generations</span></h2>
-        <p class="desc">文生视频。由智谱 CogVideoX 免费提供（如 <code>cogvideox-flash</code>）。视频生成耗时较长，客户端超时建议设置 5 分钟以上。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiVid" /><code id="code-api-vid"><span class="kwd">curl</span> https://api.ltzy.top/v1/videos/generations \
-  -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "cogvideox-flash", "prompt": "一只小狗在草地上奔跑"}'</span></code></pre>
-      </div>
-
-      <div class="api-card api-anchor">
-        <h2><span class="api-method">POST</span><span class="api-endpoint">/v1/ip_location</span></h2>
-        <p class="desc">IP 归属地查询。模型 ID 为 <code>ip-location</code>，由 Gitee AI 提供。</p>
-        <pre><CopyBtn class="pre-copy" :text="codeApiIp" /><code id="code-api-ip"><span class="kwd">curl</span> https://api.ltzy.top/v1/ip_location \
-  -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"model": "ip-location", "ip": "8.8.8.8"}'</span></code></pre>
+  -d <span class="str">'{"model": "aqua/qwen-image-2.0", "prompt": "一只坐在沙发上的橘猫", "size": "1024x1024"}'</span></code></pre>
       </div>
 
       <div class="api-card api-anchor">
@@ -507,11 +435,9 @@ print(r.choices[<span class="tok">0</span>].message.content)</code></pre>
         <h2>特殊模型说明</h2>
         <ul class="tips">
           <li><b>Auto 路由</b>：填入 <code>auto</code>（旧写法 <code>acu/auto-models</code> 仍兼容），网关自动从 Nvidia 候选池随机命中一个主流模型。</li>
-          <li><b>智谱 GLM</b>：模型 ID 如 <code>glm-4-flash</code>（直接用小写短 ID，无需前缀），含 CogView 绘图 / CogVideo 视频，同样免费。</li>
-          <li><b>讯飞星火</b>：模型 ID 如 <code>spark-lite</code>，由科大讯飞免费提供。</li>
-          <li><b>官方自营</b>：模型 ID 如 <code>deepseek-v4-flash</code>，由 AQUA 官方自营专线通道提供，长期服务、稳定可靠。</li>
+          <li><b>官方自营（收费）</b>：模型 ID 带 <code>aqua/</code> 前缀（如 <code>aqua/deepseek-v4-flash</code>），由 AQUA 官方自营专线通道提供，按次或按量计费（由密钥计费分组决定），长期服务、稳定可靠。</li>
           <li><b>专线排队</b>：专线通道有并发保护，高峰期会自动排队等待（先到先得）；排队超时会返回提示，请稍后重试，不要重复提交。</li>
-          <li><b>非标准端点</b>：embedding / rerank / asr / tts 等特殊模型已适配为标准 OpenAI SDK 端点，可直接用官方 SDK 调用。</li>
+          <li><b>非标准端点</b>：付费图像模型（<code>/v1/images/generations</code>）等特殊能力已适配为标准 OpenAI SDK 端点，可直接用官方 SDK 调用。</li>
           <li><b>账号制密钥</b>：注册登录后在个人控制台创建密钥（<code>sk-****</code>）即可调用——注册免费、创建自助、随时吊销重建。大版本更新与公告在 QQ 频道（频道号 pd57362562）通知。</li>
         </ul>
       </div>
@@ -659,7 +585,7 @@ print(r.choices[<span class="tok">0</span>].message.content)</code></pre>
           <thead><tr><th>症状</th><th>病因</th><th>处方</th></tr></thead>
           <tbody>
             <tr><td>404 Not Found / 401</td><td>base_url 的 <code>/v1</code> 多了或少了</td><td>OpenAI SDK 类填<b>带 <code>/v1</code></b>（它自己再拼 /chat/completions）；NextChat 等「填域名」类填<b>不带</b>。两种各试一次</td></tr>
-            <tr><td><code>MODEL_NOT_FOUND</code></td><td>模型 ID 抄错（大小写、多空格、前缀漏了）</td><td>去模型中心复制完整 ID，如 <code>glm-4-flash</code> 不能只写 <code>glm-4-flash</code></td></tr>
+            <tr><td><code>MODEL_NOT_FOUND</code></td><td>模型 ID 抄错（大小写、多空格、前缀漏了）</td><td>去模型中心复制完整 ID，如 <code>aqua/deepseek-v4-flash</code> 不能只写 <code>deepseek-v4-flash</code></td></tr>
             <tr><td>连不上 / 超时</td><td>域名写错、本地网络拦截</td><td>核对 <code>api.ltzy.top</code>；浏览器先开 <code>https://api.ltzy.top/v1/models</code> 能看到 JSON 说明网络通</td></tr>
             <tr><td><code>INVALID_JSON</code></td><td>请求体不是合法 JSON（多了逗号、用了单引号）</td><td>用 JSON 校验器检查；字符串一律双引号</td></tr>
             <tr><td>中文显示乱码</td><td>没按 UTF-8 解码</td><td>响应头是 <code>charset=utf-8</code>；自写代码请用 UTF-8 读流</td></tr>
@@ -677,11 +603,11 @@ print(r.choices[<span class="tok">0</span>].message.content)</code></pre>
         <details><summary><b>密钥到底怎么获取？要申请吗？</b></summary><p class="desc">自助领取，不用找任何人申请。<b>注册登录后进「个人控制台」一键创建</b>——形如 <code>sk-****</code>，注册免费、创建即用、随时吊销重建。每个密钥的完整明文只在创建时展示一次，请保存好；丢了就吊销重新创建。</p></details>
         <details><summary><b>真的免费吗？有没有隐藏收费？</b></summary><p class="desc">除官方自营收费系列（<code>aqua/</code> 前缀，预充值计费——按次还是按量由密钥的计费分组决定，见上方「计费说明」章节）外，本站全部模型与工具均免费使用，无隐藏收费。个别通道有并发/额度保护（如部分通道日额度、收费通道并发限流），是为了让所有人都能公平使用，不是收费墙。免费模型不涉及任何余额与扣费，今后也不会收费。</p></details>
         <details><summary><b>有官方 SDK 吗？</b></summary><p class="desc">不需要专门的 SDK——AQUA 完整兼容 OpenAI 协议，<b>直接用 OpenAI 官方 SDK</b>（Python / JS / Go / Java 全平台都有），只改 <code>base_url</code> 和 <code>api_key</code> 两个参数即可（见「三分钟跑通第一条请求」）。</p></details>
-        <details><summary><b>模型这么多，我该用哪个？</b></summary><p class="desc">按场景选：<b>日常聊天</b>→<code>glm-4-flash</code> 或 <code>deepseek-v4-flash</code>；<b>写代码</b>→ DeepSeek / Qwen Coder 系列；<b>长文写作</b>→ GLM / Qwen 长文本模型；<b>画图</b>→ <code>cogview-3-flash</code>；<b>语音转文字</b>→ <code>glm-asr</code>；<b>读文字出语音</b>→ Spark-TTS 系列。选哪个都不亏，自由试。</p></details>
+        <details><summary><b>模型这么多，我该用哪个？</b></summary><p class="desc">按场景选：<b>日常聊天</b>→<code>gpt-oss-20b</code>（免费）或 <code>aqua/deepseek-v4-flash</code>（按次计费）；<b>写代码</b>→<code>aqua/kimi-k2.7-code</code>、<code>aqua/deepseek-v4-pro-0813</code>；<b>长文写作</b>→<code>aqua/glm-5.1</code>、<code>aqua/qwen3.8-max</code>；<b>画图</b>→<code>aqua/qwen-image-2.0</code>（按张计费）。选哪个都不亏，自由试。</p></details>
         <details><summary><b>为什么 AI 不记得上一句说了什么？</b></summary><p class="desc">AI 没有记忆，每次调用都是全新开始。要多轮对话，请把历史聊天记录放进 <code>messages</code> 数组一起传回（详见「对话接口进阶 · 多轮对话」）。</p></details>
         <details><summary><b>报 429 / 排队怎么办？</b></summary><p class="desc">429 = 限流或额度保护，不是封禁。等 10 秒~1 分钟重试；高峰期换其他平台模型；程序里建议加「指数退避」重试（第一次等 1 秒、第二次 2 秒、第三次 4 秒…）。不要连续狂点，那样只会更堵。</p></details>
         <details><summary><b>支持联网搜索 / 文件上传吗？</b></summary><p class="desc">模型本身的能力决定：通用 chat 模型不做实时联网。需要最新信息时，把内容直接粘贴进问题里（RAG 思路：先给资料再提问）。</p></details>
-        <details><summary><b>我想自己部署一套 AQUA 可以吗？</b></summary><p class="desc">可以！AQUA 是 ACU 工程系列开源项目（AGPL-3.0），Rust→WASM 编译，一条命令部署到 Cloudflare Workers。仓库：<a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> / <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a>，README 有完整自部署教程。</p></details>
+        <details><summary><b>我想自己部署一套 AQUA 可以吗？</b></summary><p class="desc">可以！AQUA 是 ACU 工程系列开源项目（AGPL-3.0），Go 语言实现的 OpenAI 兼容网关，编译为单二进制，部署到任意 VPS 即可运行（Nginx/Caddy 反代 + HTTPS 即完成上线）。仓库：<a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> / <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a>，README 有完整自部署教程。</p></details>
         <details><summary><b>调用出错时，怎么向社区求助最有效？</b></summary><p class="desc">带上三样东西：① 完整的错误 JSON（里面有 <code>error.code</code> 和 <code>hint</code>）；② 你请求的模型 ID 和端点；③ 时间点。发到 QQ 一群 1103667832 / 二群 1006740220 或频道 pd57362562，一般很快有人响应。</p></details>
       </div>
     </div>

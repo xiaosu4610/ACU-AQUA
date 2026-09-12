@@ -37,8 +37,8 @@ const q = ref('')
 /* ---- 智能排序：国产/大参数/高智能模型排前（旧 smartSort 平移） ---- */
 function modelPriority(id: string): number {
   const l = id.toLowerCase()
-  // 官方自营通道最前
-  if (/^acu\//.test(l)) return -1
+  // 官方自营收费专线最前（统一 aqua/ 前缀；旧 acu/ 兼容）
+  if (/^(aqua|acu)\//.test(l)) return -1
   // 国产模型最前（含 Kimi/豆包/月之暗面 等）
   if (/deepseek|qwen|qwq|chatglm|thudm|baichuan|01-ai|yi-large|zhipu|glm|bigmodel|kimi|moonshot|doubao|moonshotai/.test(l)) return 0
   // Nvidia 旗舰 Nemotron
@@ -52,8 +52,6 @@ function modelPriority(id: string): number {
   // Microsoft Phi
   if (/phi-4|phi-3\.5/.test(l)) return 5
   if (/phi-3/.test(l)) return 6
-  // Gitee AI 模型
-  if (/^[A-Z]/.test(id) || /^ip-location$/.test(id) || /^nsfw|^nonescape|^security/i.test(id)) return 7
   // 其他
   return 8
 }
@@ -195,7 +193,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
   <section class="route-page">
     <div class="models-page-head">
       <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>模型中心</h1>
-      <p>全线模型一览与能力总览的统一入口：由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营平台实时提供。</p>
+      <p>全线模型一览与能力总览的统一入口：由 Nvidia NIM 与官方自营专线实时提供。</p>
     </div>
     <nav class="hub-subnav" aria-label="模型中心子导航">
       <button type="button" class="hub-tab" :class="{ active: view === 'free' }" @click="setView('free')"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>免费模型</button>
@@ -204,7 +202,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
     </nav>
     <div class="hub-pane">
       <template v-if="view === 'free'">
-      <p class="hub-desc">以下为<b>全站免费模型</b>，由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营免费通道提供——<b>注册即可使用、永久免费</b>。官方自营收费模型（统一 <code>aqua/</code> 前缀）请切换到「收费模型」页查看。点击「复制」即可获取模型 ID，填入客户端使用。</p>
+      <p class="hub-desc">以下为<b>全站免费模型</b>，由 Nvidia NIM 提供——<b>注册即可使用、永久免费</b>。官方自营收费模型（统一 <code>aqua/</code> 前缀）请切换到「收费模型」页查看。点击「复制」即可获取模型 ID，填入客户端使用。</p>
       <div class="repo-banner">
         <svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg>
         <span><b>AQUA · ACU 工程系列开源项目</b>（网关 + 前台全量源码）—— 喜欢就给作者点个 Star 吧</span>
@@ -291,7 +289,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <span class="pp-no pp-no-free">1</span>
             <div>
               <b>全站绝大多数模型完全免费，而且会一直免费</b>
-              <p>Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火以及官方自营免费通道的全部模型——对话、视觉、语音、向量、重排统统<b>不收一分钱</b>，注册即可使用，用量照常统计但仅用于展示，<b>今后也不会对这些模型收费</b>。</p>
+              <p>Nvidia NIM 免费通道的全部模型——对话、视觉、语音、向量、重排统统<b>不收一分钱</b>，注册即可使用，用量照常统计但仅用于展示，<b>今后也不会对这些模型收费</b>。</p>
             </div>
           </div>
           <div class="pp-item">
@@ -302,7 +300,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <div class="pp-rules">
                 <span>计费方式：<b>按次分组密钥</b>——每次<b>成功</b>请求按所用模型单价扣一次，<b>与生成长度无关</b>（各模型实时单价见上方专区）</span>
                 <span>计费方式：<b>按量分组密钥</b>——输入 / 缓存命中 / 输出分段计价，<b>用多少付多少、无保底</b>；重复前缀命中缓存价，输入成本大幅更低</span>
-                <span>模型兼容：旧 <code>tide/</code> 前缀仍可显式按量调用，不受密钥分组影响</span>
                 <span>先付后用：发起请求即按预估预扣（可在请求中调小 <code>max_tokens</code> 降低单次预扣），完成后<b>多退少补</b>；余额用完自动停止，<b>绝不透支、绝无欠费</b></span>
                 <span>请求失败自动全额退回，<b>错误请求不扣费</b></span>
                 <span>每次扣费与余额在<b>个人控制台</b>实时可查，流水永久留存；余额不足前可在控制台开启<b>邮件提醒</b></span>
@@ -325,10 +322,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <div class="filters" id="platform-filter">
           <button class="pill" :class="{ active: curPlatform === 'all' }" data-platform="all" @click="curPlatform = 'all'">全部</button>
           <button class="pill" :class="{ active: curPlatform === 'nvidia' }" data-platform="nvidia" @click="curPlatform = 'nvidia'">Nvidia NIM</button>
-          <button class="pill" :class="{ active: curPlatform === 'gitee' }" data-platform="gitee" @click="curPlatform = 'gitee'">Gitee AI</button>
-          <button class="pill" :class="{ active: curPlatform === 'siliconflow' }" data-platform="siliconflow" @click="curPlatform = 'siliconflow'">SiliconFlow</button>
-          <button class="pill" :class="{ active: curPlatform === 'zhipu' }" data-platform="zhipu" @click="curPlatform = 'zhipu'">智谱 GLM</button>
-          <button class="pill" :class="{ active: curPlatform === 'spark' }" data-platform="spark" @click="curPlatform = 'spark'">讯飞星火</button>
           <button class="pill" :class="{ active: curPlatform === 'acu' }" data-platform="acu" @click="curPlatform = 'acu'">官方自营</button>
         </div>
       </div>

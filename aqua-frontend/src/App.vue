@@ -139,7 +139,7 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
   </div>
 
   <footer>
-    <p>AQUA · <b>ACU 工程系列</b>开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营提供 · 仅用于技术学习与交流</p>
+    <p>AQUA · <b>ACU 工程系列</b>开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</p>
     <p style="margin-top:8px;">
       <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">Gitee <AqIcon name="star" :size="13" /></a> ·
       <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">GitHub <AqIcon name="star" :size="13" /></a> ·

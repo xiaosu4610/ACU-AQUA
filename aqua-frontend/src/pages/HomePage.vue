@@ -14,14 +14,14 @@ const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
         <img src="/favicon.ico" alt="AQUA" width="60" height="60" style="border-radius:14px;" class="hero-logo">
         <span class="brand grad-flow">AQUA</span>
       </div>
-      <p class="tagline">免费 · 极速 · 注册即用 —— 一个接口接入六大模型平台的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）</p>
+      <p class="tagline">免费 · 极速 · 注册即用 —— 一个接口接入 Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）</p>
       <!-- CTA 主行动区：注册/登录入口第一眼可见 -->
       <div class="hero-cta">
         <router-link v-if="!isLoggedIn()" class="cta-main" to="/login">注册 / 登录 · 创建密钥</router-link>
         <router-link v-else class="cta-main" to="/console">进入我的控制台</router-link>
         <router-link class="cta-sub" to="/api">查看 API 文档</router-link>
       </div>
-      <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 除一个自营加速通道（按次计费）外全部模型永久免费</p>
+      <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 免费模型注册即用；收费模型见模型中心（aqua/ 专线，按次或按量）</p>
       <div class="badges">
         <a class="badge" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="text-decoration:none;" title="Gitee 仓库 · 去点个 Star">
           <span class="ic"><svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg></span>Gitee 仓库

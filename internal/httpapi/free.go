@@ -582,7 +582,7 @@ func (a *App) serveFreeJSONChat(w http.ResponseWriter, resp *http.Response, rid 
 		if jr.Usage != nil {
 			src = "actual"
 		}
-		a.okFreeRequest(rid, u, resp.StatusCode, src)
+		a.okFreeRequest(rid, u, resp.StatusCode, src, lat)
 	} else {
 		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode), resp.StatusCode)
 	}
@@ -649,7 +649,7 @@ func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start t
 	ok := u.PromptTokens > 0 || u.CompletionTokens > 0
 	a.recordHealth(model, ok, healthResultType(ok, 200), 200, lat)
 	if ok {
-		a.okFreeRequest(rid, u, 200, "actual")
+		a.okFreeRequest(rid, u, 200, "actual", lat)
 	} else {
 		a.failRequest(rid, "stream_incomplete", 502)
 	}
@@ -663,9 +663,13 @@ func healthResultType(ok bool, code int) string {
 	return healthErrType(code)
 }
 
-// okFreeRequest 免费模型成功回写（usage 照记，不计费；src=usage 来源口径 actual/estimated）
-func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int, src string) {
+// okFreeRequest 免费模型成功回写（usage 照记，不计费；src=usage 来源口径；tps=输出 tokens/秒）
+func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int, src string, latMs int64) {
+	tps := 0.0
+	if latMs > 0 {
+		tps = float64(u.CompletionTokens) * 1000 / float64(latMs)
+	}
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=? WHERE rowid=?",
-		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, src, rid)
+		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=?, tps=? WHERE rowid=?",
+		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, src, tps, rid)
 }
