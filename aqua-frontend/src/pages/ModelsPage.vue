@@ -284,6 +284,15 @@ function microYuan(v?: number): string {
   if (v == null) return '--'
   return (v / 1e6).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
 }
+/** 官方原价 → 现价 的实际倍率角标（数据驱动：VIP 0.13× / 普通 0.2×；非促销无对照不显示） */
+function rateBadgeOf(m: { baseInPrice?: number | null; basePerImage?: number | null; inPrice: number; perImage?: number | null }): string {
+  const base = m.baseInPrice ?? m.basePerImage
+  const cur = m.inPrice ?? m.perImage
+  if (!base || !cur) return ''
+  const v = Math.round((cur / base) * 100) / 100
+  if (v <= 0 || v >= 1) return ''
+  return (v < 0.095 ? v.toFixed(2) : v.toFixed(1)) + '×'
+}
 /** 元/百万tokens 价显示（0.05 → "0.05"，0.005 → "0.005"） */
 function perMYuan(v?: number): string {
   if (v == null) return '--'
@@ -387,7 +396,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <div v-for="m in tokenLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
               <div class="pms-top">
                 <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
-                <span v-if="m.subsidized && ratePromo" class="pms-rate-badge" :title="'限时补贴倍率 ' + ratePromo + '×，活动结束后恢复 ' + rateNormal + '×'">{{ ratePromo }}×</span>
+                <span v-if="m.subsidized && rateBadgeOf(m)" class="pms-rate-badge" title="官方原价 × 补贴倍率 = 现价，活动结束后恢复原价">{{ rateBadgeOf(m) }}</span>
                 <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="pms-vip-badge" title="VIP 专享拿货价已生效">VIP</span>
               </div>
               <!-- 实时状态灯行：30 分钟真实请求聚合（20 秒轮询） -->
@@ -402,13 +411,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <span class="pms-price-tag" :class="{ promo: m.basePerImage != null || m.subsidized }">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
               </div>
               <div v-if="m.perImage != null && m.basePerImage != null" class="pms-base-price">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
-              <!-- 按量计费：三段价（无保底；缓存命中更省；图片按张卡不渲染 token 行，避免 ¥0 误读为免费） -->
+              <!-- 按量计费：三段价 + 官方原价划线对照（促销生效时后端下发 base_*） -->
               <div v-if="m.perImage == null" class="pms-price pms-price-token">
-                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><s v-if="m.baseInPrice != null" title="官方原价">¥{{ perMYuan(m.baseInPrice) }}</s><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><s v-if="m.baseCachePrice != null" title="官方原价">¥{{ perMYuan(m.baseCachePrice) }}</s><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><s v-if="m.baseOutPrice != null" title="官方原价">¥{{ perMYuan(m.baseOutPrice) }}</s><i class="tp-unit">/百万tokens</i></div>
                 <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
-                <div v-if="m.baseInPrice != null" class="tp-base">VIP 拿货价已生效 · 原价：输入 ¥{{ perMYuan(m.baseInPrice) }} / 缓存 ¥{{ perMYuan(m.baseCachePrice) }} / 输出 ¥{{ perMYuan(m.baseOutPrice) }} 每百万tokens（保底 ¥{{ microYuan(m.baseFloor) }}）</div>
               </div>
               <!-- 实时指标：平均时延 / 生成速度 / 成功率（30 分钟窗口聚合） -->
               <div class="pms-live-metrics" :title="'近 30 分钟真实计费请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
@@ -651,6 +659,8 @@ button.hub-tab { font-family: inherit; }
 .pms-price-token .tp-row { display: flex; align-items: baseline; gap: 6px; }
 .pms-price-token .tp-row i { font-style: normal; font-size: 11.5px; color: var(--muted); min-width: 48px; }
 .pms-price-token .tp-row b { font-size: 16.5px; font-weight: 800; color: #f59e0b; font-variant-numeric: tabular-nums; }
+/* 官方原价划线对照 */
+.pms-price-token .tp-row s { font-size: 11px; font-weight: 600; color: var(--muted); opacity: .75; }
 .pms-price-token .tp-unit { font-size: 10.5px; min-width: 0; }
 .pms-price-token .tp-floor { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin-top: 2px; padding-top: 5px; border-top: 1px dashed rgba(148,163,184,.28); }
 .tp-subsidy { font-size: 10px; font-weight: 700; color: #16a34a; background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.32); border-radius: 999px; padding: 1px 7px; }
@@ -658,8 +668,6 @@ button.hub-tab { font-family: inherit; }
 .pms-price-tag.promo { background: linear-gradient(120deg, rgba(245,158,11,.2), rgba(251,191,36,.12)); color: #f59e0b; border: 1px solid rgba(245,158,11,.35); }
 .pms-base-price { font-size: 11px; color: var(--muted); margin-top: 4px; padding-top: 4px; border-top: 1px dashed rgba(148,163,184,.22); }
 .pms-base-price::before { content: "VIP "; font-weight: 700; color: #f59e0b; }
-.tp-base { font-size: 11px; color: var(--muted); margin-top: 3px; }
-.tp-base::before { content: "VIP "; font-weight: 700; color: #f59e0b; }
 .pms-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pms-detail { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--accent); text-decoration: none; }
 .pms-detail:hover { text-decoration: underline; }

@@ -23,9 +23,11 @@ type Site struct {
 	QQGroup2    string `toml:"qq_group2"`
 	QQGroupURL2 string `toml:"qq_group_url2"`
 	// 计费倍率展示口径（仅宣传展示，不参与计费——计费以 pricing 表为准）：
-	// rate_promo=当前促销倍率（如 "0.2"），rate_normal=促销结束后恢复倍率（如 "0.5"）
-	RatePromo  string `toml:"rate_promo"`
-	RateNormal string `toml:"rate_normal"`
+	// rate_promo=当前促销倍率（如 "0.2"），rate_normal=促销结束后恢复倍率（如 "0.5"），
+	// rate_promo_vip=VIP 促销倍率（如 "0.13"）——促销生效时 /v1/models 据此折算"原价"对照下发
+	RatePromo    string `toml:"rate_promo"`
+	RateNormal   string `toml:"rate_normal"`
+	RatePromoVip string `toml:"rate_promo_vip"`
 }
 
 // Database 数据库配置

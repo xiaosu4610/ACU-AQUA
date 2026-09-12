@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -388,16 +390,40 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// statusModelNorm 模型名规范化映射：站内统一 ID（前缀/site_id）。
+// requests.model 历史存在三种记录口径并存：aqua/xxx（统一前缀）、tide/xxx（线前缀直连）、
+// 裸名 site_id（旧网关遗留流量）——全部归并到统一前缀全名，保证模型卡片实时指标能对上。
+func (a *App) statusModelNorm() map[string]string {
+	m := map[string]string{}
+	up := a.Cfg.Billing.UnifiedPrefix
+	if up == "" {
+		return m
+	}
+	for _, l := range a.linesSnap() {
+		if l.Mode == "free" {
+			continue
+		}
+		for j := range l.Models {
+			u := up + "/" + l.Models[j].SiteID
+			m[config.ModelFullName(l.ID, l.Models[j].SiteID)] = u // 线前缀名 tide/xxx → aqua/xxx
+			m[l.Models[j].SiteID] = u                             // 裸名（旧网关口径）→ aqua/xxx
+		}
+	}
+	return m
+}
+
 // handleModelsStatus 模型实时状态（公开匿名聚合，30 分钟窗口）：
-// 每模型请求数/成功率/平均时延/平均输出速度，供模型中心"实时状态"页展示。
-// 只输出聚合运行指标，不含成本/渠道/用户信息。
+// 每模型请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
+// 只输出聚合运行指标，不含成本/渠道/用户信息；模型名统一规范化后合并聚合。
 func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	win := int64(1800)
 	since := time.Now().Unix() - win
 	rows, err := a.DB.Query(`
 		SELECT model, COUNT(*), COALESCE(SUM(ok),0),
-		       COALESCE(AVG(CASE WHEN ok=1 THEN latency_ms END),0),
-		       COALESCE(AVG(CASE WHEN ok=1 AND tps>0 THEN tps END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN 1 ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN tps ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN 1 ELSE 0 END),0),
 		       COALESCE(MAX(ts),0)
 		FROM requests WHERE ts>=? GROUP BY model`, since)
 	if err != nil {
@@ -405,17 +431,46 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	items := []map[string]any{}
+	norm := a.statusModelNorm()
+	type stAgg struct {
+		total, okN, latN, tpsN, lastTs int64
+		latSum, tpsSum                 float64
+	}
+	agg := map[string]*stAgg{}
+	order := []string{}
 	for rows.Next() {
 		var model string
-		var total, okN, lastTs int64
-		var avgLat, avgTps float64
-		if rows.Scan(&model, &total, &okN, &avgLat, &avgTps, &lastTs) != nil {
+		var total, okN, latN, tpsN, lastTs int64
+		var latSum, tpsSum float64
+		if rows.Scan(&model, &total, &okN, &latSum, &latN, &tpsSum, &tpsN, &lastTs) != nil {
 			continue
 		}
+		name, ok := norm[model]
+		if !ok {
+			continue // 免费线与未知模型不输出
+		}
+		g := agg[name]
+		if g == nil {
+			g = &stAgg{}
+			agg[name] = g
+			order = append(order, name)
+		}
+		g.total += total
+		g.okN += okN
+		g.latSum += latSum
+		g.latN += latN
+		g.tpsSum += tpsSum
+		g.tpsN += tpsN
+		if lastTs > g.lastTs {
+			g.lastTs = lastTs
+		}
+	}
+	items := []map[string]any{}
+	for _, name := range order {
+		g := agg[name]
 		rate := 0.0
-		if total > 0 {
-			rate = float64(okN) / float64(total)
+		if g.total > 0 {
+			rate = float64(g.okN) / float64(g.total)
 		}
 		status := "ok"
 		switch {
@@ -425,14 +480,14 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 			status = "degraded"
 		}
 		it := map[string]any{
-			"model": model, "samples": total, "ok": okN, "ok_rate": rate,
-			"status": status, "last_ts": lastTs, "window_sec": win,
+			"model": name, "samples": g.total, "ok": g.okN, "ok_rate": rate,
+			"status": status, "last_ts": g.lastTs, "window_sec": win,
 		}
-		if avgLat > 0 {
-			it["avg_latency_ms"] = int64(avgLat)
+		if g.latN > 0 {
+			it["avg_latency_ms"] = int64(math.Round(g.latSum / float64(g.latN)))
 		}
-		if avgTps > 0 {
-			it["avg_tps"] = avgTps
+		if g.tpsN > 0 {
+			it["avg_tps"] = g.tpsSum / float64(g.tpsN)
 		}
 		items = append(items, it)
 	}
@@ -448,6 +503,29 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	data := a.modelListEntries(actx, created)
 	jsonOut(w, 200, map[string]any{"object": "list", "created": created, "data": data})
+}
+
+// promoBase 促销期"官方原价"折算：原价 = 用户实付价目 ÷ 促销倍率（[site] rate_promo / rate_promo_vip）。
+// 仅当生效价目行是活动价（EndsAt>0）且配置了对应倍率时折算；p 为用户实付行，isVip 选 VIP 倍率。
+// 折算结果与上游官方标价一致（如 qwen3.8-27b 输入 0.60/0.2=¥3.00、VIP 0.39/0.13=¥3.00），供前端划线对照。
+func (a *App) promoBase(p *billing.PricingInfo, isVip bool) *billing.PricingInfo {
+	if p == nil || p.EndsAt <= 0 {
+		return nil
+	}
+	rs := a.Cfg.Site.RatePromo
+	if isVip {
+		rs = a.Cfg.Site.RatePromoVip
+	}
+	rate, err := strconv.ParseFloat(strings.TrimSpace(rs), 64)
+	if err != nil || rate <= 0 || rate >= 1 {
+		return nil
+	}
+	div := func(v int64) int64 { return int64(math.Round(float64(v) / rate)) }
+	return &billing.PricingInfo{
+		Mode: p.Mode, PriceMicro: div(p.PriceMicro), FloorMicro: div(p.FloorMicro),
+		InRate10: div(p.InRate10), CacheRate10: div(p.CacheRate10), OutRate10: div(p.OutRate10),
+		EndsAt: p.EndsAt,
+	}
 }
 
 // modelListEntries 全量模型条目（/v1/models 与 /v1/models/{id} 共用）
@@ -538,7 +616,13 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["in_price"] = float64(pt.p.InRate10) / 10000
 				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
 				item["out_price"] = float64(pt.p.OutRate10) / 10000
-				if pt.base != nil {
+				// 原价对照：促销生效时按倍率折算官方原价（所有用户下发，前端划线展示）；非促销期仅 VIP 附 normal 行
+				if pb := a.promoBase(pt.p, pt.base != nil); pb != nil {
+					item["base_floor_micro"] = pb.FloorMicro
+					item["base_in_price"] = float64(pb.InRate10) / 10000
+					item["base_cache_price"] = float64(pb.CacheRate10) / 10000
+					item["base_out_price"] = float64(pb.OutRate10) / 10000
+				} else if pt.base != nil {
 					// VIP 用户：附原价（normal）供前端底部展示对比
 					item["base_floor_micro"] = pt.base.FloorMicro
 					item["base_in_price"] = float64(pt.base.InRate10) / 10000
@@ -548,7 +632,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			}
 			if pc != nil {
 				item["price_micro"] = pc.p.PriceMicro
-				if pc.base != nil {
+				if pb := a.promoBase(pc.p, pc.base != nil); pb != nil {
+					item["base_price_micro"] = pb.PriceMicro
+				} else if pc.base != nil {
 					item["base_price_micro"] = pc.base.PriceMicro
 				}
 				// 描述跟随价格来源：双线同模（按次+按量并存）时 price_micro 取按次价，描述也必须按次，
