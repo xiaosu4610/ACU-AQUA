@@ -300,13 +300,15 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 			case sc == 200:
 				c.Pool.ReportSuccess(k)
 				return resp, k, nil
-			case sc == 401 || sc == 403:
-				// 密钥无效/欠费：立即判死并换钥
+			case sc == 401 || sc == 403 || sc == 402:
+				// 密钥无效 / 欠费 / 上游面值耗尽：立即判死并换钥。
+				// 402 尤其关键：面值耗尽的钥在上游永远不会再成功，粘住它的用户会反复 402/502
+				// ——判死后粘性自动漂移到下一把可用钥并重试本次请求。
 				lastErr = fmt.Errorf("UPSTREAM_STATUS_%d", sc)
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 				_ = resp.Body.Close()
 				c.Pool.ReportDead(k)
-				log.Printf("[upstream] line=%s key=%d 状态%d，判死换钥", c.Line.ID, k.Idx, sc)
+				log.Printf("[upstream] line=%s key=%d 状态%d（无效/欠费/面值耗尽），判死换钥", c.Line.ID, k.Idx, sc)
 			case sc == 429 || sc >= 500:
 				// 读错误体（小），判断是否模型级错误
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -363,8 +365,10 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 }
 
 // DoKey 带模型专属钥发起请求：keyIdx<0 走通用 Do（粘性换钥池）；
-// ≥0 锁定池序钥直发一次（不粘性、不判死、不换钥——专属钥仅服务对应模型，
+// ≥0 锁定池序钥直发一次（不粘性、不换钥——专属钥仅服务对应模型，
 // 避免与其他模型的钥在同一池内互判死；错误码原样透传给上层转译）。
+// 上游 402（面值耗尽）仍判死该钥：专属钥耗尽后 AcquireFor 直接报 KEY_IDX_DEAD，
+// 上层转译为明确的"专属通道余额耗尽"，不再反复打上游。
 func (c *Client) DoKey(ctx context.Context, body []byte, stream bool, path string, keyIdx int64) (*http.Response, *KeyState, error) {
 	if keyIdx < 0 {
 		return c.Do(ctx, body, stream, path)
@@ -376,6 +380,10 @@ func (c *Client) DoKey(ctx context.Context, body []byte, stream bool, path strin
 	resp, err := c.send(ctx, k, body, stream, path)
 	if err != nil {
 		return nil, nil, err
+	}
+	if resp.StatusCode == 402 {
+		c.Pool.ReportDead(k)
+		log.Printf("[upstream] line=%s key=%d 专属钥状态402 面值耗尽，判死", c.Line.ID, k.Idx)
 	}
 	return resp, k, nil
 }

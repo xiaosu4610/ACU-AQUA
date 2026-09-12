@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -18,6 +19,12 @@ import (
 	"acu-aqua/gateway/internal/config"
 	"acu-aqua/gateway/internal/upstream"
 )
+
+// readerBody 把 bufio.Reader 包装成 ReadCloser（首帧探测后缓冲数据自然衔接后续读取）
+type readerBody struct {
+	io.Reader
+	io.Closer
+}
 
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
@@ -170,7 +177,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
-		errOut(w, 502, "upstream_error", "上游服务暂时不可用，请稍后重试")
+		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 		return
 	}
 	defer resp.Body.Close()
@@ -185,6 +192,42 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
+		// 首帧探测 + 断流换钥重试：上游 200 后、首字节前瞬断（排队失败/渠道抖动）时，
+		// 客户端尚未收到任何内容 → 透明换钥重试，用户无感；首帧后断流属生成中断，无法重试
+		for probe := 0; probe < 3; probe++ {
+			br := bufio.NewReader(resp.Body)
+			if _, perr := br.Peek(1); perr == nil {
+				resp.Body = readerBody{Reader: br, Closer: resp.Body}
+				break
+			}
+			resp.Body.Close()
+			if probe == 2 {
+				log.Printf("[chat] 首帧前断流 model=%s line=%s，重试耗尽", req.Model, line.ID)
+				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				a.failRequest(rid, "upstream_error", 502)
+				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+				return
+			}
+			log.Printf("[chat] 首帧前断流 model=%s line=%s，换钥重试(%d/2)", req.Model, line.ID, probe+1)
+			client.Pool.Advance()
+			time.Sleep(300 * time.Millisecond)
+			resp, key, err = client.DoKey(ctx, upBody, true, "/chat/completions", model.KeyIdx)
+			if err != nil {
+				log.Printf("[chat] 重试仍失败 model=%s line=%s err=%v", req.Model, line.ID, err)
+				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				a.failRequest(rid, "upstream_error", 502)
+				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+				return
+			}
+			if resp.StatusCode != 200 {
+				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+				_ = resp.Body.Close()
+				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
+				a.failRequest(rid, "upstream_status", resp.StatusCode)
+				upstreamErrOut(w, resp.StatusCode, eb)
+				return
+			}
+		}
 		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start)
 		return
 	}

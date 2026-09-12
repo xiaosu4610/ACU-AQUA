@@ -107,8 +107,13 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// keys
-	krows, err := d.Query(`SELECT line_id, idx, key FROM admin_line_keys WHERE dead=0 ORDER BY line_id, idx`)
+	// keys（剔除 dead 钥；台账 used>=initial 的超卖钥也不进池——上游面值已耗尽，
+	// 留在池里只会反复 402/502，直到管理台恢复 dead 标记或补台账）
+	krows, err := d.Query(
+		`SELECT k.line_id, k.idx, k.key FROM admin_line_keys k
+		 LEFT JOIN line_keys f ON f.line_id=k.line_id AND f.idx=k.idx
+		 WHERE k.dead=0 AND NOT (COALESCE(f.initial_micro,0)>0 AND COALESCE(f.used_micro,0)>=COALESCE(f.initial_micro,0))
+		 ORDER BY k.line_id, k.idx`)
 	if err != nil {
 		return nil, err
 	}

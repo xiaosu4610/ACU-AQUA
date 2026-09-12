@@ -127,7 +127,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
-		errOut(w, 502, "upstream_error", "上游服务暂时不可用，请稍后重试")
+		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 		return
 	}
 	defer resp.Body.Close()
