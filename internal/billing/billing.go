@@ -152,7 +152,9 @@ func Settle(d *sql.DB, userID, preheld, final int64, requestID int64, unitPrice 
 		flowType := "billed"
 		amount := -final
 		if final == 0 {
-			flowType, amount = "refunded", 0
+			// 全额退回：amount 记 +delta（实际退回量）。余额重放公式对 refunded 按 +amount 计入，
+			// 若记 0 则每笔全额退款都会把预扣额永久放大进重放（对账 mismatch 主因，诊断 D1）
+			flowType, amount = "refunded", delta
 		}
 		return insertFlow(tx, userID, requestID, flowType, amount, balance+delta, unitPrice, note)
 	})

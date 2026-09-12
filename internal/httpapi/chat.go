@@ -141,9 +141,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
 		if errors.Is(err, billing.ErrInsufficientBalance) {
+			a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写，不留 (empty) 盲区
 			errOut(w, 429, "insufficient_quota", "余额不足，请先到控制台充值（先付后用，绝不透支）")
 			return
 		}
+		a.failRequest(rid, "prehold_error", 500)
 		errOut(w, 500, "internal_error", "预扣失败")
 		return
 	}
@@ -155,8 +157,8 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	resp, key, err := client.Do(ctx, upBody, req.Stream, "/chat/completions")
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "upstream_error")
-		a.failRequest(rid, "upstream_error")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "上游服务暂时不可用，请稍后重试")
 		return
 	}
@@ -164,8 +166,8 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode != 200 {
 		eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
-		a.failRequest(rid, "upstream_status")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
+		a.failRequest(rid, "upstream_status", resp.StatusCode)
 		// 信息隔离：上游报错转译为站点标准错误码，不透传原文
 		upstreamErrOut(w, resp.StatusCode, eb)
 		return
@@ -182,8 +184,8 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "read_error")
-		a.failRequest(rid, "read_error")
+		a.settleSafely(uid, prehold, 0, rid, 0, "read_error")
+		a.failRequest(rid, "read_error", 502)
 		errOut(w, 502, "upstream_error", "上游响应读取失败")
 		return
 	}
@@ -195,8 +197,8 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		Error   json.RawMessage   `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil || (len(probe.Choices) == 0 && len(probe.Error) == 0) {
-		_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "upstream_malformed")
-		a.failRequest(rid, "upstream_malformed")
+		a.settleSafely(uid, prehold, 0, rid, 0, "upstream_malformed")
+		a.failRequest(rid, "upstream_malformed", 502)
 		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
 		return
 	}
@@ -225,7 +227,7 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		face = 0
 	}
 	// 结算（多退少补）+ 面值台账 + 请求回写
-	_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
+	a.settleSafely(uid, prehold, final, rid, final, "billed")
 	if face > 0 && key != nil {
 		c.Pool.ReportFace(key, face)
 		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
@@ -242,7 +244,8 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "no_flusher")
+		a.settleSafely(uid, prehold, 0, rid, 0, "no_flusher")
+		a.failRequest(rid, "no_flusher", 500)
 		errOut(w, 500, "internal_error", "流式不可用")
 		return
 	}
@@ -275,12 +278,12 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				c.Pool.ReportFace(key, faceTotal)
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
-			_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
+			a.settleSafely(uid, prehold, final, rid, final, "billed")
 			a.okRequest(rid, u, final, faceTotal)
 		} else if interrupted {
 			// 一帧有效内容都没有且上游异常中断：全额退回
-			_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "stream_incomplete")
-			a.failRequest(rid, "stream_incomplete")
+			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.failRequest(rid, "stream_incomplete", 502)
 		} else if p != nil {
 			// 上游正常收尾但未发 usage：按保底/单价收（与原口径一致，防薅羊毛）
 			if p.Mode == "per_call" {
@@ -288,11 +291,11 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 			} else {
 				final = p.FloorMicro
 			}
-			_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
+			a.settleSafely(uid, prehold, final, rid, final, "billed")
 			a.okRequest(rid, u, final, faceTotal)
 		} else {
-			_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "stream_incomplete")
-			a.failRequest(rid, "stream_incomplete")
+			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.failRequest(rid, "stream_incomplete", 502)
 		}
 	}
 	defer settle()
@@ -483,9 +486,9 @@ func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64) {
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, rid)
 }
 
-// failRequest 失败回写
-func (a *App) failRequest(rid int64, reason string) {
-	_, _ = a.DB.Exec("UPDATE requests SET ok=0, error=?, bill_state='refunded' WHERE rowid=?", reason, rid)
+// failRequest 失败回写（诊断 D2：reason 必填区分失败原因，status_code 回写真实状态码供统计）
+func (a *App) failRequest(rid int64, reason string, statusCode int) {
+	_, _ = a.DB.Exec("UPDATE requests SET ok=0, error=?, status_code=?, bill_state='refunded' WHERE rowid=?", reason, statusCode, rid)
 }
 
 func boolToInt(b bool) int64 {

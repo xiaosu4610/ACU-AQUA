@@ -37,7 +37,12 @@ func New(c *config.Cfg, d *db.DBx) *App {
 		// 种子/加载失败不阻断启动：保留 toml 配置继续服务
 		log.Printf("[lines] 上游线路 DB 加载失败（回退 toml 配置）: %v", err)
 	}
-	return &App{Cfg: c, DB: d, Mail: mail.New(c.SMTP), AvatarsDir: avatars}
+	app := &App{Cfg: c, DB: d, Mail: mail.New(c.SMTP), AvatarsDir: avatars}
+	// 诊断 D2：站点 5xx 统一落错误中心（error_events）
+	errSink = func(kind, detail string) { app.logError("api_"+kind, "", 0, 0, detail) }
+	// 诊断 D1：资金补偿任务（悬空预扣退款 / orphan billed 补台账）
+	app.startCompensator()
+	return app
 }
 
 // lineByID 线查找（读锁）

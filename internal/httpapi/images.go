@@ -97,6 +97,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	rid := a.insertRequestLine(actx.UserID, actx.KeyHash, "images", req.Model, false, line.ID)
 	prehold := pricing.PriceMicro * req.N
 	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
+		a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写
 		errOut(w, 429, "insufficient_quota", "余额不足，请先到控制台充值（先付后用，绝不透支）")
 		return
 	}
@@ -104,7 +105,8 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	// 上游
 	upBody, err := replaceModel(body, model.UpstreamID)
 	if err != nil {
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "internal")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "internal")
+		a.failRequest(rid, "internal_error", 500)
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
 	}
@@ -113,22 +115,22 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	resp, key, err := client.Do(ctx, upBody, false, "/images/generations")
 	if err != nil {
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "upstream_error")
-		a.failRequest(rid, "upstream_error")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "上游服务暂时不可用，请稍后重试")
 		return
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "upstream_status")
-		a.failRequest(rid, "upstream_status")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_status")
+		a.failRequest(rid, "read_error", 502)
 		errOut(w, 502, "upstream_error", "上游服务错误，请稍后重试")
 		return
 	}
 	if resp.StatusCode != 200 {
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "upstream_status")
-		a.failRequest(rid, "upstream_status")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_status")
+		a.failRequest(rid, "upstream_status", resp.StatusCode)
 		// 信息隔离：上游报错转译为站点标准错误码，不透传原文
 		upstreamErrOut(w, resp.StatusCode, raw)
 		return
@@ -142,8 +144,8 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if err := jsonUnmarshal(raw, &jr); err != nil || len(jr.Data) == 0 {
-		_ = billing.Settle(a.DB.DB, actx.UserID, prehold, 0, rid, 0, "bad_response")
-		a.failRequest(rid, "bad_response")
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "bad_response")
+		a.failRequest(rid, "bad_response", 502)
 		errOut(w, 502, "upstream_error", "上游响应异常，请稍后重试")
 		return
 	}
@@ -164,7 +166,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	if count > 0 {
 		face = model.PerImageCost * count
 	}
-	_ = billing.Settle(a.DB.DB, actx.UserID, prehold, final, rid, final, "billed_images")
+	a.settleSafely(actx.UserID, prehold, final, rid, final, "billed_images")
 	// 面值台账（按张成本）
 	if face > 0 && key != nil {
 		client.Pool.ReportFace(key, face)
@@ -220,7 +222,7 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 		} `json:"data"`
 	}
 	if err := jsonUnmarshal(raw, &jr); err != nil || len(jr.Data) == 0 {
-		a.failRequest(rid, "bad_response")
+		a.failRequest(rid, "bad_response", 502)
 		errOut(w, 502, "upstream_error", "上游响应异常，请稍后重试")
 		return
 	}

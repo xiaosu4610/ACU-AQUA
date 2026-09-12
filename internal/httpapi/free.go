@@ -437,7 +437,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp, cancel := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp == nil {
 			a.recordHealth(model, false, "network_error", 0, time.Since(start).Milliseconds())
-			a.failRequest0(uid, keyHash, model, req.Stream)
+			a.failRequest0(uid, keyHash, model, req.Stream, "upstream_error", 502)
 			errOut(w, 502, "upstream_error", "免费通道暂时不可用，请稍后重试")
 			return
 		}
@@ -540,10 +540,10 @@ func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line 
 }
 
 // failRequest0 免费转发前置失败（未拿到响应）：记一条失败请求（0 计费）
-func (a *App) failRequest0(uid int64, keyHash, model string, stream bool) {
+func (a *App) failRequest0(uid int64, keyHash, model string, stream bool, reason string, statusCode int) {
 	rid := a.insertRequest(uid, keyHash, "chat", model, stream)
 	if rid != 0 {
-		a.failRequest(rid, "upstream_error")
+		a.failRequest(rid, reason, statusCode)
 	}
 }
 
@@ -566,7 +566,7 @@ func (a *App) serveFreeJSONChat(w http.ResponseWriter, resp *http.Response, rid 
 	lat := time.Since(start).Milliseconds()
 	if err != nil {
 		a.recordHealth(model, false, "network_error", 0, lat)
-		a.failRequest(rid, "read_error")
+		a.failRequest(rid, "read_error", 502)
 		errOut(w, 502, "upstream_error", "上游响应读取失败")
 		return
 	}
@@ -580,7 +580,7 @@ func (a *App) serveFreeJSONChat(w http.ResponseWriter, resp *http.Response, rid 
 	if ok {
 		a.okFreeRequest(rid, u, resp.StatusCode)
 	} else {
-		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode))
+		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode), resp.StatusCode)
 	}
 	// 状态/头透传（信息隔离：剥除成本/追踪类字段）
 	for _, k := range []string{"Content-Type", "X-Request-Id"} {
@@ -597,7 +597,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 	defer resp.Body.Close()
 	flusher, okF := w.(http.Flusher)
 	if !okF {
-		a.failRequest(rid, "no_flusher")
+		a.failRequest(rid, "no_flusher", 500)
 		errOut(w, 500, "internal_error", "流式不可用")
 		return
 	}
@@ -647,7 +647,7 @@ func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start t
 	if ok {
 		a.okFreeRequest(rid, u, 200)
 	} else {
-		a.failRequest(rid, "stream_incomplete")
+		a.failRequest(rid, "stream_incomplete", 502)
 	}
 }
 

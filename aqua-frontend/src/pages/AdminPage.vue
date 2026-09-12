@@ -601,6 +601,68 @@ async function doLinesReload() {
   reloading.value = false
 }
 
+/* 渠道连通测试（诊断 D5：上游故障一屏定位） */
+const lineTesting = ref('')                          // 正在测试的线 id；'__all__' = 全量
+const lineTestResult = ref<Record<string, any>>({})  // line id → { ok, status_code, latency_ms, upstream_models }
+const testAllBusy = ref(false)
+async function doLineTest(id: string) {
+  lineTesting.value = id
+  try {
+    const j = await apiJson<any>(`/admin/lines/${id}/test`, { method: 'POST', key: token.value })
+    lineTestResult.value = { ...lineTestResult.value, [id]: j }
+  } catch (e) { linesMsg.value = errText(e) }
+  lineTesting.value = ''
+}
+async function doLinesTestAll() {
+  testAllBusy.value = true
+  try {
+    const j = await apiJson<any>('/admin/lines/test-all', { method: 'POST', key: token.value })
+    const map: Record<string, any> = {}
+    for (const it of (j.items || [])) map[it.line] = it
+    lineTestResult.value = map
+  } catch (e) { linesMsg.value = errText(e) }
+  testAllBusy.value = false
+}
+function testLabel(id: string): string {
+  const r = lineTestResult.value[id]
+  if (!r) return ''
+  return `${r.ok ? '✓ 连通' : '✗ 异常'}${r.latency_ms != null ? ` ${r.latency_ms}ms` : ''}${r.status_code ? ` HTTP${r.status_code}` : ''}${r.upstream_models != null ? ` · 上游 ${r.upstream_models} 模型` : ''}`
+}
+
+/* 模型降级标记（诊断 D4：上游故障时手动标记，用户端 /v1/models 显示降级） */
+const degradedBusy = ref('')
+async function doModelDegraded(id: string, site: string, degraded: boolean) {
+  const pw = prompt(`将模型 ${site} ${degraded ? '标记为降级（用户端显示"该模型上游异常"，请尽快切换渠道或修复）' : '恢复正常'}：请输入管理密码确认`)
+  if (!pw) return
+  degradedBusy.value = site
+  try {
+    await apiJson(`/admin/lines/${id}/models/${site}/degraded`, { method: 'POST', key: token.value, body: { degraded, confirm_password: pw } })
+    await refreshLine(id)
+  } catch (e) { linesMsg.value = errText(e) }
+  degradedBusy.value = ''
+}
+
+/* 未定价判定：无按次价、无按量费率、无图价 → 用户侧 404，需补价 */
+function isUnpriced(m: any): boolean {
+  return !m.per_call_sell && !m.in_sell_rate10 && !m.out_sell_rate10 && !m.per_image_sell
+}
+
+/* 上游模型拉取（诊断 D5/A6：添加映射时直选上游 ID，免去手抄） */
+const upModels = ref({ open: false, line: '', items: [] as string[], msg: '' })
+async function openUpModels(id: string) {
+  upModels.value = { open: true, line: id, items: [], msg: '拉取中…' }
+  try {
+    const j = await apiJson<any>(`/admin/lines/${id}/upstream-models`, { key: token.value })
+    upModels.value.items = j.models || []
+    upModels.value.msg = upModels.value.items.length ? '' : '上游未返回任何模型'
+  } catch (e) { upModels.value.msg = errText(e) }
+}
+function pickUpModel(mid: string) {
+  modelEdit.value.upstream_id = mid
+  if (!modelEdit.value.site_id) modelEdit.value.site_id = mid.split('/').pop() || mid
+  upModels.value.open = false
+}
+
 /* ===== 用户管理操作（封禁/重置密码/价目组/踢下线/密钥/注销） ===== */
 const umgr = ref({
   open: false, uid: 0, name: '', email: '', status: 1,
@@ -928,6 +990,9 @@ async function doUserKeyRevoke(kid: number) {
         <div class="adm-head" style="margin: 0 0 14px">
           <span class="dim" style="font-size: 12.5px">线路/密钥/模型改动即时热重载生效；密钥明文添加后仅脱敏展示；高危操作需管理密码确认。</span>
           <span style="margin-left:auto; display:flex; gap:8px">
+            <button class="mini-btn" :disabled="testAllBusy" @click="doLinesTestAll">
+              <AqIcon name="bolt" :size="12" /> {{ testAllBusy ? '测速中…' : '全部测速' }}
+            </button>
             <button class="mini-btn" :disabled="reloading" @click="doLinesReload">
               <AqIcon name="refresh" :size="12" /> {{ reloading ? '重载中…' : '重载内存配置' }}
             </button>
@@ -945,7 +1010,9 @@ async function doUserKeyRevoke(kid: number) {
             <span class="adm-tag" :class="l.enabled ? 'ok' : 'bad'">{{ l.enabled ? '启用' : '停用' }}</span>
             <span class="dim">钥 {{ l.keys_total - l.keys_dead }}/{{ l.keys_total }} · 模型 {{ l.models_total }} · 近1h {{ rate(l.calls_1h, l.ok_1h) }}%</span>
             <span class="dim" v-if="l.face_initial_micro > 0">面值 ¥{{ yuan(l.face_used_micro) }} / ¥{{ yuan(l.face_initial_micro) }}</span>
+            <span class="adm-tag" v-if="lineTestResult[l.id]" :class="lineTestResult[l.id].ok ? 'ok' : 'bad'">{{ testLabel(l.id) }}</span>
             <span style="margin-left:auto; display:flex; gap:6px" @click.stop>
+              <button class="mini-btn" :disabled="lineTesting === l.id" @click="doLineTest(l.id)">{{ lineTesting === l.id ? '测速中…' : '测速' }}</button>
               <button class="mini-btn" :disabled="lineBusy === l.id" @click="doLineToggle(l.id, !l.enabled)">{{ l.enabled ? '停用' : '启用' }}</button>
               <button v-if="!l.enabled" class="mini-btn danger" :disabled="lineBusy === l.id" @click="doLineDelete(l.id)">删除</button>
             </span>
@@ -985,8 +1052,8 @@ async function doUserKeyRevoke(kid: number) {
               <tbody>
                 <tr v-if="!lineDetail[l.id].models.length"><td colspan="8" class="adm-empty">暂无模型映射</td></tr>
                 <tr v-for="m in lineDetail[l.id].models" :key="m.site_id">
-                  <td class="nm">{{ l.id }}/{{ m.site_id }}</td>
-                  <td class="hs">{{ m.upstream_id }}<span v-if="m.image" class="adm-tag">图</span></td>
+                  <td class="nm">{{ l.id }}/{{ m.site_id }}<span v-if="isUnpriced(m)" class="adm-tag warn" title="未配置任何售价，用户调用将 404，请补价">未定价</span></td>
+                  <td class="hs">{{ m.upstream_id }}<span v-if="m.image" class="adm-tag">图</span><span v-if="m.degraded" class="adm-tag bad">降级</span></td>
                   <td class="num">{{ m.per_call_sell ? '¥' + yuan(m.per_call_sell) : '—' }}</td>
                   <td class="num">{{ m.per_call_cost ? '¥' + yuan(m.per_call_cost) : '—' }}</td>
                   <td class="num" v-if="m.in_sell_rate10">¥{{ rate10(m.in_sell_rate10) }}</td>
@@ -997,6 +1064,7 @@ async function doUserKeyRevoke(kid: number) {
                   <td class="num" v-else>—</td>
                   <td class="ops">
                     <button class="mini-btn" @click="openModelEdit(l.id, m)">编辑</button>
+                    <button class="mini-btn" :class="{ warn: !m.degraded }" :disabled="degradedBusy === m.site_id" @click="doModelDegraded(l.id, m.site_id, !m.degraded)">{{ m.degraded ? '恢复' : '降级' }}</button>
                     <button class="mini-btn danger" @click="doModelDelete(l.id, m.site_id)">删除</button>
                   </td>
                 </tr>
@@ -1441,6 +1509,11 @@ async function doUserKeyRevoke(kid: number) {
           <p class="adm-hint">站点模型 = 用户调用的 model（自动加线路前缀）；费率单位元/百万tokens（万分率÷10）。保存后自动播种 normal+vip 两组价目（不覆盖已调价）。</p>
           <label>站点模型 ID<input v-model="modelEdit.site_id" placeholder="如 gpt-4o-mini" /></label>
           <label>上游模型 ID（留空 = 同站点 ID）<input v-model="modelEdit.upstream_id" placeholder="vendor/gpt-4o-mini" /></label>
+          <div class="adm-line-add" style="margin: -6px 0 8px">
+            <button class="mini-btn" type="button" @click="openUpModels(modelEdit.line)">
+              <AqIcon name="refresh" :size="12" /> 从上游拉取模型列表直选
+            </button>
+          </div>
           <div class="adm-row2">
             <label>售单价（微元/次，按次线）<input v-model="modelEdit.per_call_sell" type="number" min="0" placeholder="3000 = ¥0.003/次" /></label>
             <label>成单价（微元/次，成本台账）<input v-model="modelEdit.per_call_cost" type="number" min="0" /></label>
@@ -1465,6 +1538,21 @@ async function doUserKeyRevoke(kid: number) {
             <button class="btn tool-run" :disabled="modelSaving || !modelEdit.site_id || !modelEdit.pw" @click="doModelUpsert">
               {{ modelSaving ? '保存中…' : '保存映射' }}
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 上游模型直选弹窗（诊断 D5：拉取上游 /models 一键选 ID） -->
+      <div v-if="upModels.open" class="adm-mask" @click.self="upModels.open = false">
+        <div class="adm-modal">
+          <h3>{{ upModels.line }} / 上游模型列表</h3>
+          <p class="adm-hint">点击任一模型填入"上游模型 ID"；站点 ID 留空时自动取上游 ID 末段。</p>
+          <p v-if="upModels.msg" class="adm-msg bad">{{ upModels.msg }}</p>
+          <div v-if="upModels.items.length" style="max-height: 46vh; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px">
+            <button v-for="mid in upModels.items" :key="mid" class="mini-btn" @click="pickUpModel(mid)">{{ mid }}</button>
+          </div>
+          <div class="adm-modal-ops">
+            <button class="mini-btn" @click="upModels.open = false">关闭</button>
           </div>
         </div>
       </div>

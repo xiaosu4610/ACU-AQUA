@@ -411,6 +411,73 @@ func TestAdminLinesUserOps(t *testing.T) {
 		t.Fatalf("原邮箱应可重新注册: %d %s", rec.Code, rec.Body.String())
 	}
 
+	// J2. 渠道测试端点 + degraded 标记 + Prehold 失败回写（诊断 D2/D4/D5 回归）
+	rec, out = doJSON2("POST", "/v1/admin/lines/x/test", "", at)
+	if rec.Code != 200 {
+		t.Fatalf("单线测试应 200: %d %v", rec.Code, out)
+	}
+	if out["ok"] != true {
+		t.Fatalf("上游测试应连通: %v", out)
+	}
+	rec, _ = doJSON2("POST", "/v1/admin/lines/test-all", "", at)
+	if rec.Code != 200 {
+		t.Fatalf("全量测试应 200: %d", rec.Code)
+	}
+	rec, _ = doJSON2("GET", "/v1/admin/lines/x/upstream-models", "", at)
+	if rec.Code != 200 {
+		t.Fatalf("上游模型拉取应 200: %d %s", rec.Code, rec.Body.String())
+	}
+	// degraded 标记 → 模型清单透出 → 不影响路由调用
+	rec, _ = doJSON2("POST", "/v1/admin/lines/x/models/xm/degraded", `{"degraded":true,"confirm_password":"testpw"}`, at)
+	if rec.Code != 200 {
+		t.Fatalf("degraded 标记应 200: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, out = doJSON2("GET", "/v1/admin/lines/x/models", "", at)
+	m0 := out["models"].([]any)[0].(map[string]any)
+	if m0["degraded"] != true {
+		t.Fatalf("模型清单应带 degraded=true: %v", m0)
+	}
+	rec, out = doJSON2("GET", "/v1/models", "", "")
+	for _, d := range out["data"].([]any) {
+		if item, ok := d.(map[string]any); ok && strings.Contains(item["id"].(string), "xm") {
+			if item["degraded"] != true {
+				t.Fatalf("/v1/models 应透出 degraded: %v", item)
+			}
+		}
+	}
+	// zerobal 用户（先注册供 degraded 路由测试，充一次调用费扣完恰好归零供 429 测试）
+	rec, out = doJSON2("POST", "/v1/user/register", `{"username":"zerobal","email":"zerobal@t.dev","password":"pw123456"}`, "")
+	if rec.Code != 200 {
+		t.Fatalf("注册 zerobal 失败: %d %v", rec.Code, out)
+	}
+	rec, out = doJSON2("POST", "/v1/my/keys", `{"name":"z"}`, out["token"].(string))
+	zkey := out["key"].(string)
+	// degraded 后调用仍应 200（标记不参与路由）：给 zerobal 充一次调用费，扣完恰好归零供下段 429 测试
+	if _, err := app.DB.Exec("UPDATE users SET balance_micro=3000 WHERE email='zerobal@t.dev'"); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = doJSON2("POST", "/v1/chat/completions", `{"model":"x/xm","messages":[{"role":"user","content":"hi"}]}`, zkey)
+	if rec.Code != 200 {
+		t.Fatalf("degraded 后调用仍应 200（标记不参与路由）: %d", rec.Code)
+	}
+	rec, _ = doJSON2("POST", "/v1/admin/lines/x/models/xm/degraded", `{"degraded":false,"confirm_password":"testpw"}`, at)
+	if rec.Code != 200 {
+		t.Fatalf("degraded 恢复应 200: %d", rec.Code)
+	}
+	// Prehold 失败路径回写（D2：余额已归零 → 429 + requests.error=insufficient_quota）
+	rec, _ = doJSON2("POST", "/v1/chat/completions", `{"model":"x/xm","messages":[{"role":"user","content":"hi"}]}`, zkey)
+	if rec.Code != 429 {
+		t.Fatalf("0 余额应 429: %d %s", rec.Code, rec.Body.String())
+	}
+	var errCol string
+	var sc int64
+	if err := app.DB.QueryRow("SELECT error, status_code FROM requests WHERE model='x/xm' AND ok=0 ORDER BY rowid DESC LIMIT 1").Scan(&errCol, &sc); err != nil {
+		t.Fatalf("Prehold 失败应有 requests 回写行: %v", err)
+	}
+	if errCol != "insufficient_quota" || sc != 429 {
+		t.Fatalf("Prehold 失败应回写 insufficient_quota/429，得 %q/%d", errCol, sc)
+	}
+
 	// K. 删除线路（须先停用）
 	rec, _ = doJSON2("POST", "/v1/admin/lines/x", `{"enabled":false,"confirm_password":"testpw"}`, at)
 	rec, _ = doJSON2("DELETE", "/v1/admin/lines/x", `{"confirm_password":"testpw"}`, at)

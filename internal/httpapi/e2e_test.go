@@ -23,8 +23,12 @@ func newTestApp(t *testing.T) (*App, *httptest.Server, string) {
 	t.Helper()
 	tmp := t.TempDir()
 
-	// 模拟上游：非流式 chat 返回 usage；流式返回 SSE（末帧含泄露字段验证剥层）
+	// 模拟上游：非流式 chat 返回 usage；流式返回 SSE（末帧含泄露字段验证剥层）；/models 返回标准模型列表
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" || r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"vendor-m1"},{"id":"vendor-pc1"}]}`))
+			return
+		}
 		if r.URL.Path != "/chat/completions" && r.URL.Path != "/v1/chat/completions" {
 			w.WriteHeader(404)
 			return

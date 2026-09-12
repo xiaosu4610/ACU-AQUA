@@ -43,6 +43,7 @@ type Model struct {
 	OutSellRate10    int64  `toml:"out_sell_rate10"`
 	PerCallCost      int64  `toml:"per_call_cost"`  // 按次线：成本（微元/次，保本线用）
 	PerCallSell      int64  `toml:"per_call_sell"`  // 按次线：售价（微元/次，普通组）
+	Degraded         bool   `toml:"degraded,omitempty"` // 降级标记（诊断 D4：上游故障时管理端手动标记，/v1/models 透出）
 }
 
 // Line 一条上游线：独立的转发 + 计费体系。新增上游 = 追加一个 [[lines]] 块。

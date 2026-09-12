@@ -155,6 +155,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/lines/{line}/models", a.handleAdminLineModels)
 	mux.HandleFunc("POST /v1/admin/lines/{line}/models", a.handleAdminLineModelUpsert)
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}/models/{site}", a.handleAdminLineModelDelete)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/models/{site}/degraded", a.handleAdminLineModelDegraded)
+	// —— 渠道测试与上游模型拉取（诊断 D5）——
+	mux.HandleFunc("POST /v1/admin/lines/test-all", a.handleAdminLinesTestAll)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/test", a.handleAdminLineTest)
+	mux.HandleFunc("GET /v1/admin/lines/{line}/upstream-models", a.handleAdminLineUpstreamModels)
 	// —— 用户管理扩展（封禁/重置密码/价目组/踢下线/密钥管理/软删除）——
 	mux.HandleFunc("POST /v1/admin/users/{uid}/status", func(w http.ResponseWriter, r *http.Request) {
 		a.handleAdminUserStatus(w, r, r.PathValue("uid"))
@@ -277,8 +282,14 @@ var errTypes = map[string]string{
 	"overloaded_error":    "overloaded_error", // 上游渠道级不可用（OpenAI 官方 type）
 }
 
+// errSink 5xx 错误中心埋点钩子（诊断 D2：App 构造时注入，5xx 统一落 error_events）
+var errSink func(kind, detail string)
+
 // errOut 站点统一错误（国际标准 OpenAI 风格；信息隔离：不透传上游原文）
 func errOut(w http.ResponseWriter, code int, ecode, msg string) {
+	if code >= 500 && errSink != nil {
+		errSink(ecode, msg)
+	}
 	t, ok := errTypes[ecode]
 	if !ok {
 		if code >= 500 {
@@ -464,6 +475,17 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					item["per_image"] = gs[k].p.PriceMicro
 				}
 			}
+			// 诊断 D4：该模型所有可用分组都标记降级 → /v1/models 透出（客户端提示换模型）
+			allDeg := true
+			for k := range gs {
+				if !gs[k].m.Degraded {
+					allDeg = false
+					break
+				}
+			}
+			if allDeg && len(gs) > 0 {
+				item["degraded"] = true
+			}
 			data = append(data, item)
 		}
 	} else {
@@ -502,6 +524,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				if m.Image {
 					item["image"] = true
 					item["per_image"] = p.PriceMicro
+				}
+				if m.Degraded {
+					item["degraded"] = true // 诊断 D4：降级标记透出
 				}
 				data = append(data, item)
 			}

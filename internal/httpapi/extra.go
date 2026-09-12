@@ -115,7 +115,7 @@ func (a *App) freeForwardPath(w http.ResponseWriter, r *http.Request, body []byt
 		a.recordHealth(norm, false, "network_error", 0, time.Since(start).Milliseconds())
 		rid := a.insertRequest(uid, keyHash, endpoint, norm, false)
 		if rid != 0 {
-			a.failRequest(rid, "upstream_error")
+			a.failRequest(rid, "upstream_error", 502)
 		}
 		errOut(w, 502, "upstream_error", "上游服务暂时不可用，请稍后重试")
 		return
@@ -134,7 +134,7 @@ func (a *App) freeForwardPath(w http.ResponseWriter, r *http.Request, body []byt
 			a.okFreeRequest(rid, billing.Usage{}, resp.StatusCode)
 		}
 	} else if rid != 0 {
-		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode))
+		a.failRequest(rid, fmt.Sprintf("upstream_%d", resp.StatusCode), resp.StatusCode)
 	}
 
 	ct := resp.Header.Get("Content-Type")

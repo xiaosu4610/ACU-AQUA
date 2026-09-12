@@ -365,7 +365,7 @@ func (a *App) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		        u.price_grp_call, u.price_grp_token,
 		        COALESCE((SELECT SUM(amount_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type IN ('topup','prehold') AND f.amount_micro>0),0),
 		        COALESCE((SELECT SUM(unit_price_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='billed'),0),
-		        COALESCE((SELECT SUM(-amount_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='refunded'),0),
+		        COALESCE((SELECT SUM(amount_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='refunded'),0),
 		        COALESCE((SELECT COUNT(*) FROM requests rq WHERE rq.user_id=u.id),0)
 		 FROM users u WHERE `+where+" ORDER BY u.id DESC LIMIT ? OFFSET ?",
 		append(args, pageSize, (page-1)*pageSize)...)
@@ -424,7 +424,7 @@ func (a *App) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, uidS
 	_ = a.DB.QueryRow(`SELECT
 			COALESCE(SUM(CASE WHEN type IN ('topup','prehold') AND amount_micro>0 THEN amount_micro END),0),
 			COALESCE(SUM(CASE WHEN type='billed' THEN unit_price_micro END),0),
-			COALESCE(SUM(CASE WHEN type='refunded' THEN -amount_micro END),0)
+			COALESCE(SUM(CASE WHEN type='refunded' THEN amount_micro END),0)
 		 FROM balance_flows WHERE user_id=?`, uid).Scan(&topup, &cost, &refund)
 	_ = a.DB.QueryRow("SELECT COUNT(*) FROM requests WHERE user_id=?", uid).Scan(&calls)
 	var flowTotal int64
@@ -514,7 +514,13 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 		errAdmin(w, 400, "bad_request", "扣减后余额不能为负")
 		return
 	}
-	if _, err := a.DB.Exec("UPDATE users SET balance_micro=? WHERE id=?", after, uid); err != nil {
+	tx, err := a.DB.Begin() // 诊断 D1：余额变更与流水必须原子（非事务曾致账实分离风险）
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "事务失败")
+		return
+	}
+	if _, err := tx.Exec("UPDATE users SET balance_micro=? WHERE id=?", after, uid); err != nil {
+		_ = tx.Rollback()
 		errAdmin(w, 500, "internal_error", "更新失败")
 		return
 	}
@@ -522,10 +528,18 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 	if req.AmountMicro < 0 {
 		fType = "deduct"
 	}
-	_, _ = a.DB.Exec(
+	if _, err := tx.Exec(
 		`INSERT INTO balance_flows (user_id, request_id, type, amount_micro, balance_before_micro, balance_after_micro, unit_price_micro, note, operator, ts)
 		 VALUES (?,0,?,?,?,?,0,?,'admin',?)`,
-		uid, fType, req.AmountMicro, before, after, req.Note, time.Now().Unix())
+		uid, fType, req.AmountMicro, before, after, req.Note, time.Now().Unix()); err != nil {
+		_ = tx.Rollback()
+		errAdmin(w, 500, "internal_error", "流水写入失败")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		errAdmin(w, 500, "internal_error", "提交失败")
+		return
+	}
 	a.auditAppend("balance_"+fType, uid, fmt.Sprintf("%s：%+d 微元（%d→%d）", req.Note, req.AmountMicro, before, after), ip)
 	jsonOut(w, 200, map[string]any{"ok": true, "before_micro": before, "after_micro": after})
 }
@@ -572,6 +586,7 @@ func (a *App) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 	// 1) 余额重放：流水四类型求和 vs users.balance
 	mismatch := int64(0)
+	var replayDiffSum, replayDiffMax int64
 	rows, err := a.DB.Query(
 		`SELECT u.id, u.balance_micro,
 		        COALESCE((SELECT SUM(CASE WHEN f.type IN ('topup','prehold') AND f.amount_micro>0 THEN f.amount_micro
@@ -585,6 +600,14 @@ func (a *App) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 			var id, balance, replay int64
 			if rows.Scan(&id, &balance, &replay) == nil && balance != replay {
 				mismatch++
+				d := balance - replay
+				if d < 0 {
+					d = -d
+				}
+				replayDiffSum += d
+				if d > replayDiffMax {
+					replayDiffMax = d
+				}
 			}
 		}
 		rows.Close()
@@ -594,8 +617,11 @@ func (a *App) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 	_ = a.DB.QueryRow("SELECT COUNT(*) FROM requests WHERE bill_state='billed'").Scan(&billedReq)
 	_ = a.DB.QueryRow("SELECT COUNT(*) FROM balance_flows WHERE type='billed'").Scan(&billedFlow)
 	// 3) 上游交叉：billed 请求数 vs 上游 used_calls 合计
+	// 判定改阈值（诊断 D3）：上游配额池未覆盖全部渠道，口径天然不等；
+	// 按 billed ≤ used×1.2 + 500 判定（20% 余量 + 500 笔免赔额度）
 	var usedCalls sql.NullInt64
 	_ = a.DB.QueryRow("SELECT SUM(used_calls) FROM upstream_quota WHERE provider!='pool'").Scan(&usedCalls)
+	upstreamOK := usedCalls.Valid && billedReq <= usedCalls.Int64*12/10+500
 	// 4) 审计哈希链全量重放
 	brokenAt := int64(0)
 	chainOK := true
@@ -623,9 +649,9 @@ func (a *App) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 		chainRows.Close()
 	}
 	jsonOut(w, 200, map[string]any{
-		"balance_replay": map[string]any{"ok": mismatch == 0, "mismatch_users": mismatch},
+		"balance_replay": map[string]any{"ok": mismatch == 0, "mismatch_users": mismatch, "diff_sum_micro": replayDiffSum, "diff_max_micro": replayDiffMax},
 		"billing_cross":  map[string]any{"ok": billedReq == billedFlow, "billed_requests": billedReq, "billed_flows": billedFlow},
-		"upstream_cross": map[string]any{"ok": usedCalls.Valid && usedCalls.Int64 == billedReq, "billed_requests": billedReq, "used_calls": nullOr(usedCalls)},
+		"upstream_cross": map[string]any{"ok": upstreamOK, "billed_requests": billedReq, "used_calls": nullOr(usedCalls), "rule": "billed<=used*1.2+500"},
 		"audit_chain":    map[string]any{"ok": chainOK, "broken_at": brokenAt},
 	})
 }

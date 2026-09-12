@@ -4,12 +4,16 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"acu-aqua/gateway/internal/config"
@@ -128,7 +132,7 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	mrows, err := d.Query(
 		`SELECT line_id, site_id, upstream_id, image, per_call_sell, per_call_cost,
 		        per_image_sell, per_image_cost, in_sell_rate10, cache_sell_rate10, out_sell_rate10,
-		        in_cost_rate10, cache_cost_rate10, out_cost_rate10
+		        in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0)
 		 FROM admin_line_models ORDER BY line_id, site_id`)
 	if err != nil {
 		return nil, err
@@ -136,9 +140,9 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	defer mrows.Close()
 	for mrows.Next() {
 		var lineID, siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded int64
 		if err := mrows.Scan(&lineID, &siteID, &upID, &image, &perCall, &perCallCost,
-			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC); err != nil {
+			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded); err != nil {
 			return nil, err
 		}
 		for i := range out {
@@ -149,6 +153,7 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 					PerImageSell: perImgSell, PerImageCost: perImgCost,
 					InSellRate10: inR, CacheSellRate10: cacheR, OutSellRate10: outR,
 					InCostRate10: inC, CacheCostRate10: cacheC, OutCostRate10: outC,
+					Degraded: degraded != 0,
 				})
 			}
 		}
@@ -561,7 +566,7 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	lineID := r.PathValue("line")
 	rows, err := a.DB.Query(
 		`SELECT site_id, upstream_id, image, per_call_sell, per_call_cost, per_image_sell, per_image_cost,
-		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10
+		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0)
 		 FROM admin_line_models WHERE line_id=? ORDER BY site_id`, lineID)
 	if err != nil {
 		errAdmin(w, 500, "internal_error", "查询失败")
@@ -571,15 +576,16 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded int64
 		if rows.Scan(&siteID, &upID, &image, &perCall, &perCallCost, &perImgSell, &perImgCost,
-			&inR, &cacheR, &outR, &inC, &cacheC, &outC) == nil {
+			&inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded) == nil {
 			items = append(items, map[string]any{
 				"site_id": siteID, "upstream_id": upID, "image": image != 0,
 				"per_call_sell": perCall, "per_call_cost": perCallCost,
 				"per_image_sell": perImgSell, "per_image_cost": perImgCost,
 				"in_sell_rate10": inR, "cache_sell_rate10": cacheR, "out_sell_rate10": outR,
 				"in_cost_rate10": inC, "cache_cost_rate10": cacheC, "out_cost_rate10": outC,
+				"degraded": degraded != 0,
 			})
 		}
 	}
@@ -727,6 +733,47 @@ func (a *App) handleAdminLineModelDelete(w http.ResponseWriter, r *http.Request)
 	jsonOut(w, 200, map[string]any{"ok": true})
 }
 
+// POST /v1/admin/lines/{line}/models/{site}/degraded {degraded, confirm_password}（二次密码）
+// 诊断 D4：上游故障时手动标记降级，/v1/models 透出提示用户换模型；标记不参与计费与路由
+func (a *App) handleAdminLineModelDegraded(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	lineID := r.PathValue("line")
+	siteID := r.PathValue("site")
+	var req struct {
+		Degraded        bool   `json:"degraded"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := adminBody(r, 4096, &req); err != nil {
+		errAdmin(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	ip := clientIP(r)
+	if !adminPasswordOk(req.ConfirmPassword) {
+		a.auditAppend("line_model_degraded_fail", 0, lineID, ip)
+		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
+		return
+	}
+	res, err := a.DB.Exec("UPDATE admin_line_models SET degraded=?, updated_ts=? WHERE line_id=? AND site_id=?",
+		b2i(req.Degraded), time.Now().Unix(), lineID, siteID)
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "更新失败")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		errAdmin(w, 404, "not_found", "模型不存在")
+		return
+	}
+	state := "恢复"
+	if req.Degraded {
+		state = "标记降级"
+	}
+	a.auditAppend("line_model_degraded", 0, fmt.Sprintf("%s：线=%s 模型=%s", state, lineID, siteID), ip)
+	_ = a.reloadLines()
+	jsonOut(w, 200, map[string]any{"ok": true, "degraded": req.Degraded})
+}
+
 // POST /v1/admin/lines/reload 手动全量热重载
 func (a *App) handleAdminLinesReload(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
@@ -739,6 +786,139 @@ func (a *App) handleAdminLinesReload(w http.ResponseWriter, r *http.Request) {
 	a.auditAppend("lines_reload", 0, "手动热重载", clientIP(r))
 	ls := a.linesSnap()
 	jsonOut(w, 200, map[string]any{"ok": true, "lines": len(ls)})
+}
+
+// ———————— 渠道测试与上游模型拉取（诊断 D5）———————
+
+// lineTestHTTP 渠道测试专用 HTTP 客户端（独立于转发 KeyPool，轻量短超时）
+var lineTestHTTP = &http.Client{Timeout: 15 * time.Second}
+
+// testLineUpstream 单线测试：GET {base}/models（上游标准端点，零计费），
+// 返回 状态码/延迟/上游模型数；key 取线内第一把活钥（免费线无钥不带鉴权头）。
+func testLineUpstream(l *config.Line) map[string]any {
+	start := time.Now()
+	url := strings.TrimRight(l.BaseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return map[string]any{"line": l.ID, "ok": false, "error": "url_invalid"}
+	}
+	if len(l.Keys) > 0 && l.Keys[0] != "" {
+		switch l.AuthStyle {
+		case "x-api-key":
+			req.Header.Set("x-api-key", l.Keys[0])
+		default:
+			req.Header.Set("Authorization", "Bearer "+l.Keys[0])
+		}
+	}
+	resp, err := lineTestHTTP.Do(req)
+	if err != nil {
+		return map[string]any{"line": l.ID, "name": l.Name, "ok": false,
+			"latency_ms": time.Since(start).Milliseconds(), "error": "network_error"}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	lat := time.Since(start).Milliseconds()
+	n := 0
+	if resp.StatusCode == 200 {
+		var jr struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &jr) == nil {
+			n = len(jr.Data)
+		}
+	}
+	return map[string]any{"line": l.ID, "name": l.Name, "ok": resp.StatusCode == 200,
+		"status_code": resp.StatusCode, "latency_ms": lat, "upstream_models": n}
+}
+
+// POST /v1/admin/lines/{line}/test 单线测试
+func (a *App) handleAdminLineTest(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	l := a.lineByID(r.PathValue("line"))
+	if l == nil {
+		errAdmin(w, 404, "not_found", "线路不存在")
+		return
+	}
+	res := testLineUpstream(l)
+	a.auditAppend("line_test", 0, fmt.Sprintf("线=%s 测试结果=%v", l.ID, res["ok"]), clientIP(r))
+	jsonOut(w, 200, res)
+}
+
+// POST /v1/admin/lines/test-all 全量并发测试（诊断 D5：上游故障一屏定位）
+func (a *App) handleAdminLinesTestAll(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	ls := a.linesSnap()
+	out := make([]map[string]any, len(ls))
+	var wg sync.WaitGroup
+	for i := range ls {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			out[i] = testLineUpstream(&ls[i])
+		}(i)
+	}
+	wg.Wait()
+	a.auditAppend("lines_test_all", 0, fmt.Sprintf("全量测试 %d 条线", len(ls)), clientIP(r))
+	jsonOut(w, 200, map[string]any{"items": out})
+}
+
+// GET /v1/admin/lines/{line}/upstream-models 拉取上游模型列表（添加映射时直选上游 ID）
+func (a *App) handleAdminLineUpstreamModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	l := a.lineByID(r.PathValue("line"))
+	if l == nil {
+		errAdmin(w, 404, "not_found", "线路不存在")
+		return
+	}
+	url := strings.TrimRight(l.BaseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "请求构造失败")
+		return
+	}
+	if len(l.Keys) > 0 && l.Keys[0] != "" {
+		switch l.AuthStyle {
+		case "x-api-key":
+			req.Header.Set("x-api-key", l.Keys[0])
+		default:
+			req.Header.Set("Authorization", "Bearer "+l.Keys[0])
+		}
+	}
+	resp, err := lineTestHTTP.Do(req)
+	if err != nil {
+		errAdmin(w, 502, "upstream_error", "上游不可达: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != 200 {
+		errAdmin(w, 502, "upstream_error", fmt.Sprintf("上游返回 %d", resp.StatusCode))
+		return
+	}
+	var jr struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &jr); err != nil {
+		errAdmin(w, 502, "upstream_error", "上游响应不是标准模型列表")
+		return
+	}
+	ids := make([]string, 0, len(jr.Data))
+	for _, m := range jr.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	jsonOut(w, 200, map[string]any{"line": l.ID, "models": ids})
 }
 
 // lineIDOk 线 ID 合法性：小写字母/数字/连字符，1-32 位

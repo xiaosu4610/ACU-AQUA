@@ -231,8 +231,20 @@ func InitTables(d *sql.DB) error {
 			in_cost_rate10 INTEGER NOT NULL DEFAULT 0,
 			cache_cost_rate10 INTEGER NOT NULL DEFAULT 0,
 			out_cost_rate10 INTEGER NOT NULL DEFAULT 0,
+			degraded INTEGER NOT NULL DEFAULT 0,
 			updated_ts INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (line_id, site_id))`,
+		// —— 错误事件表（结算/计费异常追踪，settle.go logError 落库用）——
+		`CREATE TABLE IF NOT EXISTS error_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			user_id INTEGER NOT NULL DEFAULT 0,
+			request_id INTEGER NOT NULL DEFAULT 0,
+			detail TEXT NOT NULL DEFAULT '',
+			ts INTEGER NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_eevents_ts ON error_events(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_eevents_kind ON error_events(kind, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
@@ -257,6 +269,7 @@ func InitTables(d *sql.DB) error {
 		{"admin_audit", "self_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"api_keys", "billing_grp", "TEXT NOT NULL DEFAULT ''"},   // 密钥计费分组：''|per_call|per_token
 		{"requests", "resolved_line", "TEXT NOT NULL DEFAULT ''"}, // 统一前缀路由解析出的实际线（统计口径）
+		{"admin_line_models", "degraded", "INTEGER NOT NULL DEFAULT 0"}, // 降级标记（诊断 D4：上游故障手动标记）
 	}
 	for _, a := range alters {
 		var n int

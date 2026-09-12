@@ -888,7 +888,7 @@ func (a *App) freeDispatchJSON(model string, messages []map[string]any, temperat
 		var j map[string]any
 		if err := json.Unmarshal(raw, &j); err != nil {
 			if rid != 0 {
-				a.failRequest(rid, "bad_response")
+				a.failRequest(rid, "bad_response", 502)
 			}
 			continue
 		}
