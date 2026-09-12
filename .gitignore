@@ -19,11 +19,12 @@
 /legacy-git-backup-2/
 *.log
 
-# 构建产物
+# 构建产物（assets/ 仓库内发行版目录除外：随 tag 发布供服务器在线更新）
 aqua-linux
 aqua-linux-new
 aqua-gateway-go-linux
-aqua-gateway-go-linux-amd64
+assets/*
+!assets/aqua-gateway-go-linux-amd64
 /bin/
 /dist/
 /internal/httpapi/data/

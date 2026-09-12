@@ -87,13 +87,19 @@ type EPay struct {
 	ReturnBase string `toml:"return_base"` // 支付完成跳转域名
 }
 
-// Update 系统自动更新（gitee 发行版源；管理后台"系统更新"视图使用）
+// Update 系统自动更新（双镜像：gitee 主仓库 + github 自动同步镜像）。
+// 发版工作流：构建二进制提交进仓库 assets/ 目录 → 打 tag → push（gitee 自动同步 github），
+// 服务器按 tag 从 github raw 拉取（海外畅通、匿名、版本可选）。
 type Update struct {
-	Repo      string `toml:"repo"`       // gitee 仓库，如 xiaosu4610/acu-aqua
-	Token     string `toml:"token"`      // 私有仓库访问令牌（公开仓库可空）
-	AssetName string `toml:"asset_name"` // 发行版附件名（linux-amd64 二进制），默认 aqua-gateway-go-linux-amd64
-	Service   string `toml:"service"`    // systemd 服务名（更新后自重启），默认 aqua-gateway-go
-	Enabled   bool   `toml:"enabled"`    // 是否启用在线更新入口（默认关；启用后管理后台才显示检查更新）
+	Repo       string `toml:"repo"`        // gitee 主仓库，如 xiaosu4610/acu-aqua（release 元数据 + release 附件源）
+	MirrorRepo string `toml:"mirror_repo"` // github 镜像仓库，如 xiaosu4610/ACU-AQUA（服务器侧主源：tags + raw 下载）
+	Token      string `toml:"token"`       // gitee 私有仓库访问令牌（公开仓库可空）
+	AssetName  string `toml:"asset_name"`  // 发行版附件名（linux-amd64 二进制），默认 aqua-gateway-go-linux-amd64
+	AssetDir   string `toml:"asset_dir"`   // 仓库内附件目录（raw 下载路径前缀），默认 assets
+	Service    string `toml:"service"`     // systemd 服务名（更新后自重启），默认 aqua-gateway-go
+	Enabled    bool   `toml:"enabled"`     // 是否启用在线更新入口（默认关；启用后管理后台才显示检查更新）
+	APIBase    string `toml:"api_base"`    // gitee v5 API 地址（默认官方；服务器无法直连 gitee 时可指向国内跳板反代）
+	Proxy      string `toml:"proxy"`       // 出站代理（http://host:port），更新请求走代理（海外服务器被 gitee CDN 拦截时使用）
 }
 
 // Cfg 顶层配置

@@ -1,8 +1,16 @@
-// 系统在线更新：gitee 发行版源自动抓取。
-//   GET  /v1/admin/update/check —— 拉取发行版列表并与当前版本比对
-//   POST /v1/admin/update/apply —— 校验二次密码 → 下载附件 → ELF 校验 →
-//                                  备份当前二进制 → 原子替换 → systemd 自重启
-// 安全：均为管理会话保护；apply 高危操作强制二次密码 + 审计留痕。
+// 系统在线更新：双镜像源（gitee 主仓库 + github 自动同步镜像）。
+//
+// 发版工作流（站长开发机）：
+//	1. 构建 linux/amd64 二进制，提交进仓库 assets/ 目录，打 tag 后 push；
+//	   gitee 会自动同步代码与 tag 到 github 镜像仓库。
+//	2. （可选）gitee 网页端创建 Release 附更新日志。
+//
+// 服务器侧抓取策略（海外访问 gitee 常被 CDN 拦截，故 github 为主）：
+//	check：github tags（匿名畅通）列版本 + gitee releases（更新日志元数据），双源合并；
+//	apply：按 tag 依次尝试 gitee release 附件 → github raw → gitee raw。
+//
+// 安全：均为管理会话保护；apply 高危操作强制二次密码 + 审计留痕；
+//		 下载校验 ELF 头 + 最小体积，替换前自动备份，失败自动回滚。
 package httpapi
 
 import (
@@ -10,16 +18,64 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
 
-const giteeAPIBase = "https://gitee.com/api/v5"
+const (
+	giteeAPIBase  = "https://gitee.com/api/v5"
+	githubAPIBase = "https://api.github.com"
+)
 
-// giteeRelease gitee 发行版（v5 API 字段子集）
+// updateHTTPClient 更新请求客户端（配置 proxy 时走代理出口）
+func (a *App) updateHTTPClient(timeout time.Duration) *http.Client {
+	t := &http.Transport{}
+	if p := strings.TrimSpace(a.Cfg.Update.Proxy); p != "" {
+		if pu, err := url.Parse(p); err == nil && pu.Scheme != "" {
+			t.Proxy = http.ProxyURL(pu)
+		}
+	} else {
+		t.Proxy = http.ProxyFromEnvironment
+	}
+	return &http.Client{Timeout: timeout, Transport: t}
+}
+
+// updateAPIBase gitee v5 API 地址（可指向国内跳板反代）
+func (a *App) updateAPIBase() string {
+	if b := strings.TrimRight(strings.TrimSpace(a.Cfg.Update.APIBase), "/"); b != "" {
+		return b
+	}
+	return giteeAPIBase
+}
+
+// updateCfg 归一化更新配置（默认值兜底）
+func (a *App) updateCfg() (repo, mirrorRepo, token, asset, assetDir, service string, enabled bool) {
+	u := &a.Cfg.Update
+	repo = strings.Trim(u.Repo, "/ ")
+	mirrorRepo = strings.Trim(u.MirrorRepo, "/ ")
+	token = u.Token
+	asset = u.AssetName
+	if asset == "" {
+		asset = "aqua-gateway-go-linux-amd64"
+	}
+	assetDir = strings.Trim(u.AssetDir, "/ ")
+	if assetDir == "" {
+		assetDir = "assets"
+	}
+	service = u.Service
+	if service == "" {
+		service = "aqua-gateway-go"
+	}
+	enabled = u.Enabled && (repo != "" || mirrorRepo != "")
+	return
+}
+
+// giteeRelease gitee 发行版（v5 API 字段子集，与 GitHub API 字段名兼容）
 type giteeRelease struct {
 	TagName     string `json:"tag_name"`
 	Name        string `json:"name"`
@@ -34,21 +90,76 @@ type giteeRelease struct {
 	} `json:"assets"`
 }
 
-// updateCfg 归一化更新配置（默认值兜底）
-func (a *App) updateCfg() (repo, token, asset, service string, enabled bool) {
-	u := &a.Cfg.Update
-	repo = strings.Trim(u.Repo, "/ ")
-	token = u.Token
-	asset = u.AssetName
-	if asset == "" {
-		asset = "aqua-gateway-go-linux-amd64"
+type ghTag struct {
+	Name string `json:"name"`
+}
+
+// relItem 检查结果里的一条版本
+type relItem struct {
+	Tag         string `json:"tag"`
+	Name        string `json:"name"`
+	Notes       string `json:"notes"`
+	PublishedAt string `json:"published_at"`
+	AssetSize   int64  `json:"asset_size"`
+	Source      string `json:"source"` // gitee-release | github-raw | gitee-raw
+	IsCurrent   bool   `json:"is_current"`
+	Downloadable bool  `json:"downloadable"`
+}
+
+// fetchGiteeReleases gitee releases 元数据（失败返回 nil）
+func (a *App) fetchGiteeReleases(repo, token string) []giteeRelease {
+	if repo == "" {
+		return nil
 	}
-	service = u.Service
-	if service == "" {
-		service = "aqua-gateway-go"
+	u := fmt.Sprintf("%s/repos/%s/releases?per_page=10", a.updateAPIBase(), repo)
+	if token != "" {
+		u += "&access_token=" + token
 	}
-	enabled = u.Enabled && repo != ""
-	return
+	resp, err := a.updateHTTPClient(8 * time.Second).Get(u)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	var rels []giteeRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rels); err != nil {
+		return nil
+	}
+	return rels
+}
+
+// fetchGithubTags github 镜像 tags（匿名；海外畅通；失败返回 nil）
+func (a *App) fetchGithubTags(mirrorRepo string) []string {
+	if mirrorRepo == "" {
+		return nil
+	}
+	u := fmt.Sprintf("%s/repos/%s/tags?per_page=20", githubAPIBase, mirrorRepo)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := a.updateHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	var tags []ghTag
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&tags); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t.Name != "" {
+			out = append(out, t.Name)
+		}
+	}
+	return out
 }
 
 // —— GET /v1/admin/update/check ——
@@ -56,60 +167,83 @@ func (a *App) handleAdminUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return
 	}
-	repo, token, asset, service, enabled := a.updateCfg()
-	if repo == "" {
+	repo, mirrorRepo, token, asset, _, service, enabled := a.updateCfg()
+	if !enabled {
 		adminJSON(w, map[string]any{
-			"update_enabled": false,
-			"current_version": gatewayVersion,
-			"message":         "未配置更新源（config [update] repo）",
-			"releases":        []map[string]any{},
+			"update_enabled": false, "current_version": gatewayVersion,
+			"message":  "未配置更新源（config [update] repo / mirror_repo）",
+			"releases": []map[string]any{},
 		})
 		return
 	}
-	url := fmt.Sprintf("%s/repos/%s/releases?per_page=10", giteeAPIBase, repo)
-	if token != "" {
-		url += "&access_token=" + token
+
+	// 双源并发拉取
+	type giteeRes struct {
+		rels []giteeRelease
+		ok   bool
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		errAdmin(w, 502, "upstream_error", "更新源连接失败："+shortErr(err))
-		return
+	type ghRes struct {
+		tags []string
+		ok   bool
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		errAdmin(w, 502, "upstream_error", fmt.Sprintf("更新源返回 %d（检查 repo/token 配置）", resp.StatusCode))
-		return
-	}
-	var rels []giteeRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rels); err != nil {
-		errAdmin(w, 502, "upstream_error", "更新源响应解析失败")
-		return
-	}
-	releases := []map[string]any{}
-	for _, rel := range rels {
-		if rel.Draft {
+	gc := make(chan giteeRes, 1)
+	hc := make(chan ghRes, 1)
+	go func() { rels := a.fetchGiteeReleases(repo, token); gc <- giteeRes{rels, rels != nil} }()
+	go func() { tags := a.fetchGithubTags(mirrorRepo); hc <- ghRes{tags, tags != nil} }()
+	gr := <-gc
+	hr := <-hc
+
+	// 合并：tag → 条目（gitee release 元数据优先，github tags 补充版本）
+	byTag := map[string]*relItem{}
+	var order []string
+	for _, rel := range gr.rels {
+		if rel.Draft || rel.TagName == "" {
 			continue
 		}
-		item := map[string]any{
-			"tag": rel.TagName, "name": rel.Name, "notes": rel.Body,
-			"published_at": rel.PublishedAt,
-			"is_current":   versionMatch(rel.TagName, gatewayVersion),
-			"asset_name":   "", "asset_size": int64(0), "downloadable": false,
+		item := &relItem{
+			Tag: rel.TagName, Name: rel.Name, Notes: rel.Body,
+			PublishedAt: rel.PublishedAt, Source: "gitee-release", Downloadable: false,
 		}
 		for _, as := range rel.Assets {
 			if as.Name == asset {
-				item["asset_name"] = as.Name
-				item["asset_size"] = as.Size
-				item["downloadable"] = true
+				item.AssetSize = as.Size
+				item.Downloadable = true
 				break
 			}
 		}
-		releases = append(releases, item)
+		byTag[rel.TagName] = item
+		order = append(order, rel.TagName)
+	}
+	for _, tag := range hr.tags {
+		if _, ok := byTag[tag]; ok {
+			continue
+		}
+		byTag[tag] = &relItem{
+			Tag: tag, Source: "github-raw",
+			Downloadable: repo != "" || mirrorRepo != "", // raw 按 tag 下载（apply 时实际校验）
+		}
+		order = append(order, tag)
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] > order[j] }) // 版本倒序（日期式 tag 字典序=时间序）
+	releases := make([]map[string]any, 0, len(order))
+	for _, tag := range order {
+		it := byTag[tag]
+		it.IsCurrent = versionMatch(tag, gatewayVersion)
+		releases = append(releases, map[string]any{
+			"tag": it.Tag, "name": it.Name, "notes": it.Notes,
+			"published_at": it.PublishedAt, "asset_size": it.AssetSize,
+			"source": it.Source, "is_current": it.IsCurrent, "downloadable": it.Downloadable,
+		})
+	}
+
+	sources := map[string]any{
+		"gitee":  map[string]any{"repo": repo, "ok": gr.ok},
+		"github": map[string]any{"repo": mirrorRepo, "ok": hr.ok},
 	}
 	adminJSON(w, map[string]any{
-		"update_enabled": enabled, "repo": repo, "service": service,
-		"current_version": gatewayVersion, "asset_name": asset,
+		"update_enabled": enabled, "current_version": gatewayVersion,
+		"asset_name": asset, "service": service,
+		"repo": repo, "mirror_repo": mirrorRepo, "sources": sources,
 		"releases": releases,
 	})
 }
@@ -129,14 +263,27 @@ func shortErr(err error) string {
 	return s
 }
 
+// assetRawURLs 按 tag 生成候选下载地址（顺序：github raw → gitee raw）
+func (a *App) assetRawURLs(mirrorRepo, repo, tag, assetDir, asset string) []string {
+	var out []string
+	path := assetDir + "/" + asset
+	if mirrorRepo != "" {
+		out = append(out, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", mirrorRepo, tag, path))
+	}
+	if repo != "" {
+		out = append(out, fmt.Sprintf("https://gitee.com/%s/raw/%s/%s", repo, tag, path))
+	}
+	return out
+}
+
 // —— POST /v1/admin/update/apply ——（高危：二次密码）
 func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return
 	}
-	repo, token, asset, service, enabled := a.updateCfg()
-	if !enabled || repo == "" {
-		errAdmin(w, 403, "invalid_request", "在线更新未启用（config [update] enabled=true 且 repo 非空）")
+	repo, mirrorRepo, token, asset, assetDir, service, enabled := a.updateCfg()
+	if !enabled {
+		errAdmin(w, 403, "invalid_request", "在线更新未启用（config [update] enabled=true 且配置仓库）")
 		return
 	}
 	var req struct {
@@ -160,50 +307,46 @@ func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. 查发行版拿下载地址
-	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", giteeAPIBase, repo, tag)
-	if token != "" {
-		url += "?access_token=" + token
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		errAdmin(w, 502, "upstream_error", "更新源连接失败："+shortErr(err))
-		return
-	}
-	var rel giteeRelease
-	err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel)
-	resp.Body.Close()
-	if err != nil {
-		errAdmin(w, 502, "upstream_error", "发行版信息解析失败")
-		return
-	}
-	dl := ""
-	for _, as := range rel.Assets {
-		if as.Name == asset {
-			dl = as.BrowserDownloadURL
-			break
+	// 候选下载地址：gitee release 附件 → github raw（tag） → gitee raw（tag）
+	var candidates []string
+	if rels := a.fetchGiteeReleases(repo, token); rels != nil {
+		for _, rel := range rels {
+			if rel.TagName != tag {
+				continue
+			}
+			for _, as := range rel.Assets {
+				if as.Name == asset {
+					candidates = append(candidates, a.rewriteAssetURL(as.BrowserDownloadURL))
+				}
+			}
 		}
 	}
-	if dl == "" {
-		errAdmin(w, 404, "not_found", fmt.Sprintf("发行版 %s 未找到附件 %s", tag, asset))
-		return
-	}
+	candidates = append(candidates, a.assetRawURLs(mirrorRepo, repo, tag, assetDir, asset)...)
 
-	// 2. 下载到临时文件（200MB 上限）
+	// 逐源下载（第一个成功即用）
 	tmpPath := exePath() + ".update.tmp"
-	if err := downloadAsset(dl, token, tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
-		errAdmin(w, 502, "upstream_error", "下载失败："+shortErr(err))
+	var lastErr error
+	downloaded := false
+	for _, dl := range candidates {
+		if err := downloadAsset(dl, token, tmpPath); err != nil {
+			lastErr = err
+			_ = os.Remove(tmpPath)
+			continue
+		}
+		downloaded = true
+		break
+	}
+	if !downloaded {
+		errAdmin(w, 502, "upstream_error", "全部更新源下载失败（最后一源："+shortErr(lastErr)+"）")
 		return
 	}
-	// 3. 校验：ELF 头（linux 可执行）
 	if err := validateELF(tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		errAdmin(w, 502, "upstream_error", "附件校验失败："+err.Error())
 		return
 	}
-	// 4. 备份 + 原子替换
+
+	// 备份 + 原子替换
 	exe := exePath()
 	bakPath := exe + ".bak." + gatewayVersion
 	_ = os.Remove(bakPath)
@@ -217,11 +360,9 @@ func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 		errAdmin(w, 500, "internal_error", "替换二进制失败（已回滚）："+shortErr(err))
 		return
 	}
-	if err := os.Chmod(exe, 0o755); err != nil {
-		_ = os.Chmod(exe, 0o755)
-	}
+	_ = os.Chmod(exe, 0o755)
 	a.auditAppend("update_apply", 0, gatewayVersion+" → "+tag, clientIP(r))
-	// 5. 异步自重启（detach 会话，避免随本进程被杀）
+	// 异步自重启（detach 会话，避免随本进程被杀）
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		cmd := exec.Command("systemctl", "restart", service)
@@ -232,6 +373,25 @@ func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 		"from_version": gatewayVersion, "backup": filepath.Base(bakPath),
 		"message": "新版本已就位，服务正在重启（约 3 秒后恢复）",
 	})
+}
+
+// rewriteAssetURL 附件下载地址跟随跳板：api_base 非官方时，
+// 将 gitee.com 主机替换为 api_base 的主机（路径保留），跳板需反代
+// /api/v5/* 与 /*/releases/download/* 两类路径。
+func (a *App) rewriteAssetURL(dl string) string {
+	base := a.updateAPIBase()
+	if base == giteeAPIBase {
+		return dl
+	}
+	i := strings.Index(dl, "gitee.com/")
+	if i < 0 {
+		return dl
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return dl
+	}
+	return u.Scheme + "://" + u.Host + "/" + dl[i+len("gitee.com/"):]
 }
 
 // exePath 当前二进制绝对路径
