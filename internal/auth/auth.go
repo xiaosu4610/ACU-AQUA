@@ -18,6 +18,7 @@ type Ctx struct {
 	UserID  int64
 	Via     string // session | key | admin
 	KeyHash string // sk- 密钥认证时为密钥哈希（落 requests.key_hash 用），其余为空
+	KeyGrp  string // sk- 密钥的计费分组：''（未分组旧密钥）| per_call | per_token（统一前缀路由用）
 }
 
 type ctxKey struct{}
@@ -66,10 +67,11 @@ func Authenticate(d *sql.DB, r *http.Request) *Ctx {
 	// API 密钥（sk-）
 	var uid int64
 	var status int
+	var keyGrp string
 	kh := Sha256Hex(cred)
-	err := d.QueryRow("SELECT user_id, (SELECT status FROM users WHERE id=api_keys.user_id) FROM api_keys WHERE key_hash=? AND revoked=0", kh).Scan(&uid, &status)
+	err := d.QueryRow("SELECT user_id, COALESCE(billing_grp,''), (SELECT status FROM users WHERE id=api_keys.user_id) FROM api_keys WHERE key_hash=? AND revoked=0", kh).Scan(&uid, &keyGrp, &status)
 	if err == nil && status == 1 {
-		return &Ctx{UserID: uid, Via: "key", KeyHash: kh}
+		return &Ctx{UserID: uid, Via: "key", KeyHash: kh, KeyGrp: keyGrp}
 	}
 	// 用户会话令牌
 	err = d.QueryRow("SELECT user_id FROM sessions WHERE token=? AND last_seen_ts > ?", cred, now-SessionTTL).Scan(&uid)

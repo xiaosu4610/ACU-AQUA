@@ -219,6 +219,8 @@ func InitTables(d *sql.DB) error {
 		{"requests", "tide_face_micro", "INTEGER NOT NULL DEFAULT 0"},
 		{"admin_audit", "prev_hash", "TEXT NOT NULL DEFAULT 'GENESIS'"},
 		{"admin_audit", "self_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"api_keys", "billing_grp", "TEXT NOT NULL DEFAULT ''"},   // 密钥计费分组：''|per_call|per_token
+		{"requests", "resolved_line", "TEXT NOT NULL DEFAULT ''"}, // 统一前缀路由解析出的实际线（统计口径）
 	}
 	for _, a := range alters {
 		var n int

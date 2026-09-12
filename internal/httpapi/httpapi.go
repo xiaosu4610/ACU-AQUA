@@ -2,6 +2,8 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -192,17 +194,27 @@ func (s *statusWriter) Flush() {
 }
 
 // accessLog 访问日志：客户端IP 方法 路径 → 状态 耗时（stdout → journald 可查）
+// 同时注入 X-Request-Id（OpenAI SDK 排障习惯：响应头可与服务端日志互查）
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusWriter{ResponseWriter: w, status: 200}
 		start := time.Now()
+		rid := newRequestID()
+		w.Header().Set("X-Request-Id", rid)
 		next.ServeHTTP(rec, r)
 		ip := r.Header.Get("X-Real-Ip")
 		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		log.Printf("[http] %s %s %s -> %d %s", ip, r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+		log.Printf("[http] %s %s %s -> %d %s rid=%s", ip, r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond), rid)
 	})
+}
+
+// newRequestID 短随机请求 ID（req_ + 12 hex）
+func newRequestID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return "req_" + hex.EncodeToString(b)
 }
 
 // jsonOut JSON 响应
@@ -222,11 +234,12 @@ var errTypes = map[string]string{
 	"unauthorized":       "authentication_error",
 	"invalid_credentials": "authentication_error",
 	"admin_disabled":     "permission_error",
-	"insufficient_quota": "insufficient_quota",
+	"insufficient_quota":  "insufficient_quota",
 	"rate_limit_exceeded": "rate_limit_error",
-	"internal_error":     "api_error",
-	"upstream_error":     "api_error",
+	"internal_error":      "api_error",
+	"upstream_error":      "api_error",
 	"service_unavailable": "api_error",
+	"overloaded_error":    "overloaded_error", // 上游渠道级不可用（OpenAI 官方 type）
 }
 
 // errOut 站点统一错误（国际标准 OpenAI 风格；信息隔离：不透传上游原文）
@@ -249,6 +262,12 @@ func errOut(w http.ResponseWriter, code int, ecode, msg string) {
 // upstreamErrOut 上游错误转译：上游任何报错 → 站点标准错误码（不透传原文，保护上游信息）
 // body 为上游错误响应体（用于识别"模型已下线/无可用通道"，翻译为 model_not_found）
 func upstreamErrOut(w http.ResponseWriter, upstreamStatus int, body []byte) {
+	if upstream.IsChannelExhausted(body) {
+		// 渠道级不可用是**瞬时故障**（与模型是否下线无关），必须与 404 区分开：
+		// 返回 503 overloaded_error（OpenAI 官方 type），引导客户端稍后重试
+		errOut(w, 503, "overloaded_error", "上游渠道暂时没有可用节点，请稍后重试；持续出现请联系站长")
+		return
+	}
 	if upstream.IsModelUnavailable(body) {
 		errOut(w, 404, "model_not_found", "该模型已下线或上游通道不可用，请联系站长")
 		return
@@ -339,41 +358,116 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 	retired := a.retiredUpstreams()
 
 	// 收费线：实时价目（DB pricing 表为准）；下架（normal 价过期）即从列表消失，VIP 回退 vip 组
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
-		if l.Mode == "free" {
-			continue
+	if a.Cfg.Billing.UnifiedPrefix != "" {
+		// 统一前缀模式：全部收费线模型合并为 前缀/site_id，groups 标注可用计费分组
+		// （同 ID 在按次/按量线都存在 → 两条分组都列出；计费方式由密钥分组决定）
+		type grpPrice struct {
+			mode string
+			m    *config.Model
+			p    *billing.PricingInfo
 		}
-		vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
-		for j := range l.Models {
-			m := &l.Models[j]
-			full := config.ModelFullName(l.ID, m.SiteID)
-			p := a.pricingFor(full, "normal")
-			if p == nil && vip {
-				// VIP：normal 价已下架 → 回退 vip 组价目（vip 价目永久生效）
-				p = a.pricingFor(full, "vip")
-			}
-			if p == nil {
+		merged := map[string][]grpPrice{}
+		var order []string
+		for i := range a.Cfg.Lines {
+			l := &a.Cfg.Lines[i]
+			if l.Mode == "free" {
 				continue
 			}
+			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			for j := range l.Models {
+				m := &l.Models[j]
+				full := config.ModelFullName(l.ID, m.SiteID)
+				p := a.pricingFor(full, "normal")
+				if p == nil && vip {
+					p = a.pricingFor(full, "vip")
+				}
+				if p == nil {
+					continue
+				}
+				if _, ok := merged[m.SiteID]; !ok {
+					order = append(order, m.SiteID)
+				}
+				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p})
+			}
+		}
+		for _, site := range order {
+			gs := merged[site]
 			item := map[string]any{
-				"id": full, "object": "model", "created": created, "owned_by": "acu",
-				"paid":        true,
-				"mode":        p.Mode,
-				"price_micro": p.PriceMicro,
-				"description": pricingDescription(m, p),
+				"id": a.Cfg.Billing.UnifiedPrefix + "/" + site, "object": "model",
+				"created": created, "owned_by": "acu", "paid": true,
 			}
-			if p.Mode == "per_token" {
-				item["floor_micro"] = p.FloorMicro
-				item["in_price"] = float64(p.InRate10) / 10000
-				item["cache_price"] = float64(p.CacheRate10) / 10000
-				item["out_price"] = float64(p.OutRate10) / 10000
+			modes := []string{}
+			var pc, pt *grpPrice
+			for k := range gs {
+				modes = append(modes, gs[k].mode)
+				if gs[k].mode == "per_call" && pc == nil {
+					pc = &gs[k]
+				}
+				if gs[k].mode == "per_token" && pt == nil {
+					pt = &gs[k]
+				}
 			}
-			if m.Image {
-				item["image"] = true
-				item["per_image"] = p.PriceMicro
+			item["groups"] = modes
+			item["mode"] = modes[0] // 兼容旧读法：首个可用计费模式
+			if pt != nil {
+				item["floor_micro"] = pt.p.FloorMicro
+				item["in_price"] = float64(pt.p.InRate10) / 10000
+				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
+				item["out_price"] = float64(pt.p.OutRate10) / 10000
+				item["description"] = pricingDescription(pt.m, pt.p)
+			}
+			if pc != nil {
+				item["price_micro"] = pc.p.PriceMicro
+				if pt == nil {
+					item["description"] = pricingDescription(pc.m, pc.p)
+				}
+			}
+			for k := range gs {
+				if gs[k].m.Image {
+					item["image"] = true
+					item["per_image"] = gs[k].p.PriceMicro
+				}
 			}
 			data = append(data, item)
+		}
+	} else {
+		// 线前缀直连模式（统一路由未启用）：按线逐条输出
+		for i := range a.Cfg.Lines {
+			l := &a.Cfg.Lines[i]
+			if l.Mode == "free" {
+				continue
+			}
+			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			for j := range l.Models {
+				m := &l.Models[j]
+				full := config.ModelFullName(l.ID, m.SiteID)
+				p := a.pricingFor(full, "normal")
+				if p == nil && vip {
+					// VIP：normal 价已下架 → 回退 vip 组价目（vip 价目永久生效）
+					p = a.pricingFor(full, "vip")
+				}
+				if p == nil {
+					continue
+				}
+				item := map[string]any{
+					"id": full, "object": "model", "created": created, "owned_by": "acu",
+					"paid":        true,
+					"mode":        p.Mode,
+					"price_micro": p.PriceMicro,
+					"description": pricingDescription(m, p),
+				}
+				if p.Mode == "per_token" {
+					item["floor_micro"] = p.FloorMicro
+					item["in_price"] = float64(p.InRate10) / 10000
+					item["cache_price"] = float64(p.CacheRate10) / 10000
+					item["out_price"] = float64(p.OutRate10) / 10000
+				}
+				if m.Image {
+					item["image"] = true
+					item["per_image"] = p.PriceMicro
+				}
+				data = append(data, item)
+			}
 		}
 	}
 

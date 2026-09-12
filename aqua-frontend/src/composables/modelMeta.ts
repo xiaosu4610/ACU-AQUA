@@ -5,17 +5,16 @@
 
 /** 离线兜底模型清单：/v1/models 拉取失败时保证首屏可用 */
 export const fallbackModels: string[] = [
-  // ── 官方自营专线（aqua/，官方原版满血，按次计费正式价） ──
+  // ── 官方自营收费模型（统一 aqua/ 前缀；计费方式由密钥分组决定）──
   'aqua/deepseek-v4-flash', 'aqua/glm-5.3-flash', 'aqua/deepseek-v4-pro', 'aqua/glm-5.2', 'aqua/glm-5.3',
-  // ── 高级计量通道（tide/，按量计费三段价） ──
-  'tide/deepseek-v4.1-flash', 'tide/deepseek-v4-flash-0731', 'tide/deepseek-v4-pro-0813',
-  'tide/glm-5', 'tide/glm-5.1', 'tide/glm-5.2', 'tide/glm-5.3', 'tide/glm-5.3-flash',
-  'tide/kimi-k2.5', 'tide/kimi-k2.6', 'tide/kimi-k2.7-code',
-  'tide/longcat-2.0', 'tide/mimo-v2.5-pro',
-  'tide/minimax-m2.5', 'tide/minimax-m2.7',
-  'tide/qwen3.7-flash', 'tide/qwen3.7-max', 'tide/qwen3.8-27b', 'tide/qwen3.8-flash', 'tide/qwen3.8-max',
-  'tide/seed-2.1-pro', 'tide/seed-2.1-turbo',
-  'tide/qwen-image-2.0', 'tide/wan2.7-image',
+  'aqua/deepseek-v4.1-flash', 'aqua/deepseek-v4-flash-0731', 'aqua/deepseek-v4-pro-0813',
+  'aqua/glm-5', 'aqua/glm-5.1',
+  'aqua/kimi-k2.5', 'aqua/kimi-k2.6', 'aqua/kimi-k2.7-code',
+  'aqua/longcat-2.0', 'aqua/mimo-v2.5-pro',
+  'aqua/minimax-m2.5', 'aqua/minimax-m2.7',
+  'aqua/qwen3.7-flash', 'aqua/qwen3.7-max', 'aqua/qwen3.8-27b', 'aqua/qwen3.8-flash', 'aqua/qwen3.8-max',
+  'aqua/seed-2.1-pro', 'aqua/seed-2.1-turbo',
+  'aqua/qwen-image-2.0', 'aqua/wan2.7-image',
   // ── DeepSeek 官方（NVIDIA NIM） ──
   'deepseek-v4-flash-0731', 'deepseek-v4-pro-0813',
   // ── Gitee AI（模力方舟） ──
@@ -111,8 +110,8 @@ export function inferType(id: string): string {
 }
 
 export function classifyModel(id: string): { platform: string; type: string } {
-  // 高级计量通道（tide/）：官方自营专线之一（按量计费线）
-  if (id.startsWith('tide/')) return { platform: 'acu', type: TYPES[id] || inferType(id) || 'chat' }
+  // 官方自营收费模型：统一 aqua/ 前缀（按次/按量由密钥分组决定）；旧 tide/ 前缀兼容
+  if (id.startsWith('aqua/') || id.startsWith('tide/')) return { platform: 'acu', type: TYPES[id] || inferType(id) || 'chat' }
   return { platform: PLATFORM[id] || 'nvidia', type: TYPES[id] || inferType(id) || 'chat' }
 }
 

@@ -10,17 +10,17 @@ const codeQuickCurl = `curl https://api.ltzy.top/v1/chat/completions \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model": "glm-4-flash", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`
 
-/* 收费模型调用示例（计费说明章节用） */
+/* 按次计费分组调用示例（计费说明章节用） */
 const codePaidCurl = `curl https://api.ltzy.top/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model": "aqua/deepseek-v4-flash", "messages": [{"role": "user", "content": "你好"}]}'`
 
-/* 高级计量通道调用示例（tide/ 按量计费章节用） */
-const codeTideCurl = `curl https://api.ltzy.top/v1/chat/completions \\
+/* 按量计费分组调用示例（同一模型 ID，换按量密钥即按量计费） */
+const codeVolCurl = `curl https://api.ltzy.top/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
-  -d '{"model": "tide/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}], "max_tokens": 2048}'`
+  -d '{"model": "aqua/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}], "max_tokens": 2048}'`
 
 const codeQuickPy = `from openai import OpenAI
 
@@ -289,32 +289,33 @@ console.log(r.choices[<span class="tok">0</span>].message.content);</code></pre>
       <!-- ===== 计费说明：免费模型 vs 收费模型 ===== -->
       <div class="api-card api-anchor">
         <h2>计费说明：免费模型与收费模型</h2>
-        <p class="desc">先把结论说清楚：<b>本站绝大多数模型完全免费，且会一直免费</b>。收费的只有<b>官方自营专线系列</b>（<code>aqua/</code> 按次计费加速通道，共 5 款；<code>tide/</code> 按量计费高级计量通道，共 24 款含文生图）。下面把免费、收费、怎么充值、错误怎么算账，一次讲明白。</p>
+        <p class="desc">先把结论说清楚：<b>本站绝大多数模型完全免费，且会一直免费</b>。收费的只有<b>官方自营收费系列</b>——统一使用 <code>aqua/</code> 前缀，<b>按次还是按量，由你密钥的计费分组决定</b>（控制台创建密钥时二选一：「免费 + 按次计费」或「免费 + 按量计费」）。下面把免费、收费、怎么充值、错误怎么算账，一次讲明白。</p>
         <h3>哪些免费？——除它之外全部免费</h3>
         <ul class="tips">
           <li>Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营<b>免费通道</b>的全部模型（对话/视觉/语音/向量/重排）：<b>不收一分钱</b>，注册即可用。</li>
           <li>免费模型的用量统计照常记录，但<b>仅用于你在控制台查看</b>，不产生任何费用，今后也不会对这些模型收费。</li>
           <li>没有余额、不充值，免费模型<b>照样随便用</b>，二者互不影响。</li>
         </ul>
-        <h3>哪些收费？——aqua/ 专线系列（5 款）</h3>
-        <p class="desc">官方自营<b>加速通道</b>（会员专属算力池，极致速度、高频场景优选）： <code>aqua/deepseek-v4-flash</code>、<code>aqua/glm-5.3-flash</code>、<code>aqua/deepseek-v4-pro</code>、<code>aqua/glm-5.2</code>、<code>aqua/glm-5.3</code>。调用方式和免费模型<b>完全一样</b>——同一个接口、同一把密钥、同一套 SDK，只是 <code>model</code> 字段换成它们：</p>
+        <h3>哪些收费？——aqua/ 收费系列（统一前缀）</h3>
+        <p class="desc">官方自营收费模型<b>统一 <code>aqua/</code> 前缀</b>，计费方式由<b>密钥的计费分组</b>决定（创建密钥时二选一）。<b>按次分组</b>主打自营极速算力池：<code>aqua/deepseek-v4-flash</code>、<code>aqua/glm-5.3-flash</code>、<code>aqua/deepseek-v4-pro</code>、<code>aqua/glm-5.2</code>、<code>aqua/glm-5.3</code>；<b>按量分组</b>覆盖更全（含 2 款文生图），两个分组共用的模型 ID 完全一致。调用方式和免费模型<b>完全一样</b>——同一个接口、同一套 SDK，只是 <code>model</code> 字段带上 <code>aqua/</code> 前缀：</p>
         <pre><CopyBtn class="pre-copy" :text="codePaidCurl" /><code id="code-paid-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/chat/completions \
   -H <span class="str">"Content-Type: application/json"</span> \
   -H <span class="str">"Authorization: Bearer sk-你的密钥"</span> \
   -d <span class="str">'{"model": "aqua/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}]}'</span>   <span class="tok"># 只换了 model，其余一字不差</span></code></pre>
-        <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。全线收费模型为<b>按次计费（正式价 ¥0.004~0.006/次）</b>——每次成功请求按模型单价扣一次，与生成长度无关。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>price_micro</code> 字段。</p>
-        <h3>还有一条线——tide/ 高级计量通道（24 款，按量计费）</h3>
-        <p class="desc">官方自营<b>高级计量通道</b>（<code>tide/</code> 前缀）：覆盖全系列大杯旗舰对话模型与 <code>tide/qwen-image-2.0</code>、<code>tide/wan2.7-image</code> 两款文生图模型。<b>按量计费三段价</b>——输入 / 缓存命中 / 输出分开计价（元 / 百万 tokens），用多少付多少、无保底。同样是同一个接口、同一把密钥，只换 <code>model</code>：</p>
-        <pre><CopyBtn class="pre-copy" :text="codeTideCurl" /><code id="code-tide-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/chat/completions \
+        <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。上方示例即<b>按次计费分组密钥</b>的效果（正式价 ¥0.004~0.006/次）——每次成功请求按模型单价扣一次，与生成长度无关。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>price_micro</code> 字段；换用按量分组密钥调用同一模型 ID，则自动转为按量计费。</p>
+        <h3>另一种计费——按量计费分组（三段价，用多少付多少）</h3>
+        <p class="desc">创建密钥时选择「<b>免费 + 按量计费</b>」分组即按 tokens 计量：<b>三段价</b>——输入 / 缓存命中 / 输出分开计价（元 / 百万 tokens），用多少付多少、无保底。按量分组覆盖最全，含 <code>aqua/qwen-image-2.0</code>、<code>aqua/wan2.7-image</code> 两款文生图模型。与按次分组<b>同一个接口、同一套前缀</b>，同一个模型 ID 换用按量密钥即按量计费：</p>
+        <pre><CopyBtn class="pre-copy" :text="codeVolCurl" /><code id="code-vol-curl"><span class="kwd">curl</span> https://api.ltzy.top/v1/chat/completions \
   -H <span class="str">"Content-Type: application/json"</span> \
   -H <span class="str">"Authorization: Bearer sk-你的密钥"</span> \
-  -d <span class="str">'{"model": "tide/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}], "max_tokens": 2048}'</span>   <span class="tok"># max_tokens 越小，单次预扣越低</span></code></pre>
-        <p class="desc">文生图模型走 <code>/v1/images/generations</code>（OpenAI 兼容），<b>¥0.1/张</b>按张计费，返回站内直链图片 URL，<code>n</code> 参数控制张数。tide/ 全线<b>先付后用</b>：发起请求时按预估（输入 + <code>max_tokens</code> 输出上限）预扣，完成后<b>多退少补</b>；重复对话前缀会命中<b>缓存价</b>，输入成本大幅更低。各模型实时三段价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>in_price / cache_price / out_price</code> 字段。</p>
-        <h3>收费政策与资金安全（四条铁律）</h3>
+  -d <span class="str">'{"model": "aqua/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}], "max_tokens": 2048}'</span>   <span class="tok"># 按量密钥调用：同一模型 ID，按 tokens 计费；max_tokens 越小，单次预扣越低</span></code></pre>
+        <p class="desc">文生图模型走 <code>/v1/images/generations</code>（OpenAI 兼容），<b>¥0.1/张</b>按张计费，返回站内直链图片 URL，<code>n</code> 参数控制张数。按量分组全线<b>先付后用</b>：发起请求时按预估（输入 + <code>max_tokens</code> 输出上限）预扣，完成后<b>多退少补</b>；重复对话前缀会命中<b>缓存价</b>，输入成本大幅更低。各模型实时三段价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>in_price / cache_price / out_price</code> 字段。兼容说明：旧 <code>tide/</code> 前缀仍可显式按量调用，不受密钥分组影响，既有代码无需修改。</p>
+        <h3>收费政策与资金安全（五条铁律）</h3>
         <div class="md-table-wrap"><table class="md-table">
           <thead><tr><th>规则</th><th>具体内容</th><th>对你的意义</th></tr></thead>
           <tbody>
-            <tr><td><b>按次计费</b></td><td>每次<b>成功</b>请求按所用模型单价扣一次：正式价 <b>¥0.004~0.006/次</b>。与生成长度无关。</td><td>价格公开透明，写一句话和写一千字同价</td></tr>
+            <tr><td><b>按次计费</b></td><td><b>按次分组密钥</b>：每次<b>成功</b>请求按所用模型单价扣一次，正式价 <b>¥0.004~0.006/次</b>，与生成长度无关。</td><td>价格公开透明，写一句话和写一千字同价</td></tr>
+            <tr><td><b>按量计费</b></td><td><b>按量分组密钥</b>：按 tokens 三段计价（输入 / 缓存命中 / 输出），请求前预估预扣，完成后<b>多退少补</b>。</td><td>用多少付多少，缓存命中更省，无保底</td></tr>
             <tr><td><b>预充值制</b></td><td>余额<b>在线充值即时到账</b>，每次请求前预扣，余额不足直接返回 <code>402</code>，绝不透支。</td><td>永远不可能「不知不觉欠费」</td></tr>
             <tr><td><b>失败不扣费</b></td><td>上游失败、网络中断、服务异常——预扣金额<b>自动全额退回</b>，错误请求一分钱不收。</td><td>只为成功的结果付费</td></tr>
             <tr><td><b>流水可查</b></td><td>每一笔扣费/退回都永久留存：个人控制台「消费账单」随时核对，含时间、金额、余额、请求明细。</td><td>账目自己随时能查，不用找人对账</td></tr>
@@ -674,7 +675,7 @@ print(r.choices[<span class="tok">0</span>].message.content)</code></pre>
         <h2>FAQ：新手高频提问</h2>
         <p class="desc">点开看答案。没找到你的问题？QQ 一群 1103667832 / 二群 1006740220 或频道 pd57362562 随时提问。</p>
         <details><summary><b>密钥到底怎么获取？要申请吗？</b></summary><p class="desc">自助领取，不用找任何人申请。<b>注册登录后进「个人控制台」一键创建</b>——形如 <code>sk-****</code>，注册免费、创建即用、随时吊销重建。每个密钥的完整明文只在创建时展示一次，请保存好；丢了就吊销重新创建。</p></details>
-        <details><summary><b>真的免费吗？有没有隐藏收费？</b></summary><p class="desc">除官方自营加速通道专线系列（<code>aqua/</code> 前缀 5 款，预充值按次计费，见上方「计费说明」章节）外，本站全部模型与工具均免费使用，无隐藏收费。个别通道有并发/额度保护（如部分通道日额度、专线通道并发限流），是为了让所有人都能公平使用，不是收费墙。免费模型不涉及任何余额与扣费，今后也不会收费。</p></details>
+        <details><summary><b>真的免费吗？有没有隐藏收费？</b></summary><p class="desc">除官方自营收费系列（<code>aqua/</code> 前缀，预充值计费——按次还是按量由密钥的计费分组决定，见上方「计费说明」章节）外，本站全部模型与工具均免费使用，无隐藏收费。个别通道有并发/额度保护（如部分通道日额度、收费通道并发限流），是为了让所有人都能公平使用，不是收费墙。免费模型不涉及任何余额与扣费，今后也不会收费。</p></details>
         <details><summary><b>有官方 SDK 吗？</b></summary><p class="desc">不需要专门的 SDK——AQUA 完整兼容 OpenAI 协议，<b>直接用 OpenAI 官方 SDK</b>（Python / JS / Go / Java 全平台都有），只改 <code>base_url</code> 和 <code>api_key</code> 两个参数即可（见「三分钟跑通第一条请求」）。</p></details>
         <details><summary><b>模型这么多，我该用哪个？</b></summary><p class="desc">按场景选：<b>日常聊天</b>→<code>glm-4-flash</code> 或 <code>deepseek-v4-flash</code>；<b>写代码</b>→ DeepSeek / Qwen Coder 系列；<b>长文写作</b>→ GLM / Qwen 长文本模型；<b>画图</b>→ <code>cogview-3-flash</code>；<b>语音转文字</b>→ <code>glm-asr</code>；<b>读文字出语音</b>→ Spark-TTS 系列。选哪个都不亏，自由试。</p></details>
         <details><summary><b>为什么 AI 不记得上一句说了什么？</b></summary><p class="desc">AI 没有记忆，每次调用都是全新开始。要多轮对话，请把历史聊天记录放进 <code>messages</code> 数组一起传回（详见「对话接口进阶 · 多轮对话」）。</p></details>

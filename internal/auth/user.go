@@ -189,12 +189,13 @@ func Login(d *sql.DB, account, password string) (int64, error) {
 }
 
 // CreateAPIKey 为用户签发 API 密钥（key_plain_enc 存明文供控制台 reveal；
-// 站长若需强安全可改为主密钥加密，见 data/master.key）
-func CreateAPIKey(d *sql.DB, uid int64, name string) (string, error) {
+// 站长若需强安全可改为主密钥加密，见 data/master.key）。
+// billingGrp：密钥计费分组 ''|per_call|per_token（统一前缀路由依据，调用方已标准化）
+func CreateAPIKey(d *sql.DB, uid int64, name, billingGrp string) (string, error) {
 	plain := NewPlainKey()
 	prefix := plain[:9] + "…" + plain[len(plain)-4:]
 	_, err := d.Exec(
-		"INSERT INTO api_keys (user_id, key_hash, key_prefix, name, revoked, created_ts, key_plain_enc) VALUES (?,?,?,?,0,?,?)",
-		uid, Sha256Hex(plain), prefix, name, time.Now().Unix(), plain)
+		"INSERT INTO api_keys (user_id, key_hash, key_prefix, name, revoked, created_ts, key_plain_enc, billing_grp) VALUES (?,?,?,?,0,?,?,?)",
+		uid, Sha256Hex(plain), prefix, name, time.Now().Unix(), plain, billingGrp)
 	return plain, err
 }

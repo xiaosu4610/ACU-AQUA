@@ -154,27 +154,29 @@ const noticeMsg = computed(() => {
   return `模型列表已同步，更新于 ${timeStr(loadedAt.value)}（每 60 秒自动刷新）`
 })
 
-/* ---- 收费模型专区：官方自营专线（aqua/ 按次 + tide/ 按量，实时健康分动态渲染） ---- */
+/* ---- 收费模型专区：统一 aqua/ 前缀（按次/按量分组由密钥决定，实时健康分动态渲染） ---- */
 const paidModels = computed(() => orderedModels.value
   .filter(m => m.paid)
   .map(m => ({
     id: m.id,
     mode: m.mode || 'per_call',
+    groups: (Array.isArray((m as any).groups) && (m as any).groups.length)
+      ? (m as any).groups as string[]
+      : [m.mode === 'per_token' ? 'per_token' : 'per_call'],
     price: m.price_micro ?? 0,
     inPrice: m.in_price ?? 0,
     cachePrice: m.cache_price ?? 0,
     outPrice: m.out_price ?? 0,
     floor: m.floor_micro ?? 0,
     subsidized: m.subsidized === true,
-    isTide: m.id.startsWith('tide/'),
     isImage: m.type === 'image',
     health: healthOf(m),
     st: statusOf(m),
     link: modelLink(m.id),
   })))
-/** 按次线（aqua/）与按量线（tide/）分组渲染 */
-const paidCallLine = computed(() => paidModels.value.filter(m => !m.isTide))
-const paidTokenLine = computed(() => paidModels.value.filter(m => m.isTide))
+/** 按次分组 / 按量分组（同一模型两组都有时两栏都展示——用哪组计费取决于密钥分组） */
+const paidCallLine = computed(() => paidModels.value.filter(m => m.groups.includes('per_call')))
+const paidTokenLine = computed(() => paidModels.value.filter(m => m.groups.includes('per_token')))
 /** 微元 → 元字符串（去尾零：2000→"0.002"，3800→"0.0038"） */
 function microYuan(v?: number): string {
   if (v == null) return '--'
@@ -202,7 +204,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
     </nav>
     <div class="hub-pane">
       <template v-if="view === 'free'">
-      <p class="hub-desc">以下为<b>全站免费模型</b>，由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营免费通道提供——<b>注册即可使用、永久免费</b>。官方自营收费专线（<code>aqua/</code> 按次、<code>tide/</code> 按量）请切换到「收费模型」页查看。点击「复制」即可获取模型 ID，填入客户端使用。</p>
+      <p class="hub-desc">以下为<b>全站免费模型</b>，由 Nvidia NIM、Gitee AI、SiliconFlow、智谱 GLM、讯飞星火与官方自营免费通道提供——<b>注册即可使用、永久免费</b>。官方自营收费模型（统一 <code>aqua/</code> 前缀）请切换到「收费模型」页查看。点击「复制」即可获取模型 ID，填入客户端使用。</p>
       <div class="repo-banner">
         <svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg>
         <span><b>AQUA · ACU 工程系列开源项目</b>（网关 + 前台全量源码）—— 喜欢就给作者点个 Star 吧</span>
@@ -211,23 +213,23 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
       </div>
       </template>
       <template v-else-if="view === 'paid'">
-      <p class="hub-desc">官方自营<b>收费专线</b>：加速通道（<code>aqua/</code> 前缀，按次计费）与高级计量通道（<code>tide/</code> 前缀，按量计费）——先付后用、失败全额退回、绝不透支。<router-link to="/console?view=topup">在线充值即充即用</router-link>，免费模型不受余额影响。</p>
-      <!-- 收费模型专区：官方自营双线（aqua/ 按次 + tide/ 按量，数据实时来自 /v1/models） -->
+      <p class="hub-desc">官方自营<b>收费模型统一使用 <code>aqua/</code> 前缀</b>：计费方式由你<b>密钥的计费分组</b>决定——「免费+按次」密钥按次扣费，「免费+按量」密钥按 tokens 三段扣费——先付后用、失败全额退回、绝不透支。<router-link to="/console?view=topup">在线充值即充即用</router-link>，免费模型不受余额影响。</p>
+      <!-- 收费模型专区：按分组双栏（数据实时来自 /v1/models 的 groups 字段） -->
       <div v-if="paidModels.length" class="paid-models-sec">
         <div class="pms-head">
           <div class="pms-title">
             <span class="pms-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26 6.86.63-5.2 4.55 1.56 6.71L12 16.9 5.88 20.15l1.56-6.71-5.2-4.55 6.86-.63z"/></svg></span>
-            <b>收费模型专区 · 官方自营专线</b>
-            <span class="pms-promo" title="aqua/ 按次扣费；tide/ 按 tokens 三段价计费，用多少付多少">aqua/ 按次计费 · tide/ 按量计费</span>
+            <b>收费模型专区 · 官方自营</b>
+            <span class="pms-promo" title="统一 aqua/ 前缀；按次还是按量由密钥分组决定，两个分组都有的模型用对应密钥即可调用">统一 aqua/ 前缀 · 计费方式由密钥分组决定</span>
           </div>
           <span class="pms-sub">失败自动全额退回 · 先付后用、绝不透支 · <router-link to="/console?view=topup">在线充值即充即用</router-link></span>
         </div>
-        <!-- 按次线：aqua/ 专线（每次成功请求扣一次） -->
-        <div v-if="paidCallLine.length" class="pms-line-title">加速通道 · <code>aqua/</code> 按次计费<small>（每次成功请求扣一次，与生成长度无关）</small></div>
+        <!-- 按次计费分组（密钥选「免费+按次」时可用） -->
+        <div v-if="paidCallLine.length" class="pms-line-title">按次计费分组<small>（密钥选「免费 + 按次计费」时可用：每次成功请求扣一次，与生成长度无关）</small></div>
         <div class="pms-grid">
-          <div v-for="m in paidCallLine" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
+          <div v-for="m in paidCallLine" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }">
             <div class="pms-top">
-              <code class="pms-id" :title="m.id">{{ m.id.replace('aqua/', '') }}</code>
+              <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
               <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
               <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
             </div>
@@ -249,12 +251,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             </div>
           </div>
         </div>
-        <!-- 按量线：tide/ 高级计量通道（三段价、无保底、先付后用） -->
-        <div v-if="paidTokenLine.length" class="pms-line-title">高级计量通道 · <code>tide/</code> 按量计费<small>（输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
+        <!-- 按量计费分组（密钥选「免费+按量」时可用；三段价、无保底、先付后用） -->
+        <div v-if="paidTokenLine.length" class="pms-line-title">按量计费分组<small>（密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
         <div class="pms-grid">
           <div v-for="m in paidTokenLine" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
             <div class="pms-top">
-              <code class="pms-id" :title="m.id">{{ m.id.replace('tide/', '') }}</code>
+              <code class="pms-id" :title="m.id">{{ m.id.replace(/^aqua\//, '') }}</code>
               <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
               <span v-else-if="m.health" class="pms-health" :class="m.health.cls" :title="m.health.tip">健康 {{ m.health.score }}</span>
             </div>
@@ -295,11 +297,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div class="pp-item">
             <span class="pp-no pp-no-paid">2</span>
             <div>
-              <b>收费模型：官方自营专线系列（<code>aqua/</code> 与 <code>tide/</code> 前缀）</b>
-              <p>官方自营专线分两条线：<b>加速通道</b>（<code>aqua/</code> 前缀，按次计费）为高频调用与极致速度单独采购的专属算力，目前开通 <code>aqua/deepseek-v4-flash</code>、<code>aqua/glm-5.3-flash</code>、<code>aqua/deepseek-v4-pro</code>、<code>aqua/glm-5.2</code>、<code>aqua/glm-5.3</code> 五款；<b>高级计量通道</b>（<code>tide/</code> 前缀，按量计费）提供全系列大杯旗舰与文生图模型，按 tokens 三段价计费（含 <code>tide/qwen-image-2.0</code>、<code>tide/wan2.7-image</code> 图片模型，按张计费）。调用方式与免费模型完全一致（同一个接口，只是 <code>model</code> 换成它们），支持流式输出，对客户端完全透明。</p>
+              <b>收费模型：官方自营系列（统一 <code>aqua/</code> 前缀）</b>
+              <p>收费模型统一使用 <code>aqua/</code> 前缀，<b>计费方式由你密钥的计费分组决定</b>：在个人控制台创建密钥时选择「免费 + 按次计费」或「免费 + 按量计费」。两个分组的可用模型不同（上方双栏即两组各自可用列表；部分模型两个分组通用）。按次分组为高频调用与极致速度单独采购的专属算力；按量分组提供全系列大杯旗舰与文生图模型（含 <code>aqua/qwen-image-2.0</code>、<code>aqua/wan2.7-image</code> 图片模型，按张计费）。调用方式与免费模型完全一致（同一个接口，只是 <code>model</code> 换成它们），支持流式输出，对客户端完全透明。</p>
               <div class="pp-rules">
-                <span>计费方式：<b>aqua/ 按次计费</b>——每次<b>成功</b>请求按所用模型单价扣一次（¥0.004~0.006/次，各模型实时单价见上方专区），<b>与生成长度无关</b></span>
-                <span>计费方式：<b>tide/ 按量计费</b>——输入 / 缓存命中 / 输出分段计价，<b>用多少付多少、无保底</b>；重复前缀命中缓存价，输入成本大幅更低</span>
+                <span>计费方式：<b>按次分组密钥</b>——每次<b>成功</b>请求按所用模型单价扣一次，<b>与生成长度无关</b>（各模型实时单价见上方专区）</span>
+                <span>计费方式：<b>按量分组密钥</b>——输入 / 缓存命中 / 输出分段计价，<b>用多少付多少、无保底</b>；重复前缀命中缓存价，输入成本大幅更低</span>
+                <span>模型兼容：旧 <code>tide/</code> 前缀仍可显式按量调用，不受密钥分组影响</span>
                 <span>先付后用：发起请求即按预估预扣（可在请求中调小 <code>max_tokens</code> 降低单次预扣），完成后<b>多退少补</b>；余额用完自动停止，<b>绝不透支、绝无欠费</b></span>
                 <span>请求失败自动全额退回，<b>错误请求不扣费</b></span>
                 <span>每次扣费与余额在<b>个人控制台</b>实时可查，流水永久留存；余额不足前可在控制台开启<b>邮件提醒</b></span>

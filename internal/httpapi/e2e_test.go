@@ -795,3 +795,97 @@ func TestFreeModelsAndVIP(t *testing.T) {
 		t.Fatalf("retired 模型应 410，得 %d", rec.Code)
 	}
 }
+
+// 统一前缀分组路由（2026-09-12 收费改造）：
+// aqua/ 前缀按密钥计费分组选线（per_call→按次线 / per_token→按量线）；
+// 未分组旧密钥按 default_grp；模型不在当前分组列表 → 404；
+// 旧前缀（t/）显式直连不受密钥分组影响
+func TestUnifiedPrefixGroupRouting(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	app.Cfg.Billing.UnifiedPrefix = "aqua"
+	app.Cfg.Billing.DefaultGrp = "per_call"
+	h := app.Routes()
+
+	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
+		"username": "grptester", "email": "grp@t.dev", "password": "password123"})
+	if rec.Code != 200 {
+		t.Fatalf("注册失败: %d %v", rec.Code, out)
+	}
+	tok := out["token"].(string)
+	if _, err := app.DB.Exec("UPDATE users SET balance_micro=100000 WHERE email='grp@t.dev'"); err != nil {
+		t.Fatal(err)
+	}
+
+	mkKey := func(name, grp string) string {
+		t.Helper()
+		rec, out := doJSON(t, h, "POST", "/v1/my/keys", tok, map[string]string{"name": name, "billing_grp": grp})
+		if rec.Code != 200 {
+			t.Fatalf("创建密钥 %s(%s): %d %v", name, grp, rec.Code, out)
+		}
+		return out["key"].(string)
+	}
+	keyCall := mkKey("按次钥", "per_call")
+	keyTok := mkKey("按量钥", "per_token")
+	keyOld := mkKey("旧式钥", "")
+
+	// 密钥列表应带 billing_grp 标记
+	rec, out = doJSON(t, h, "GET", "/v1/my/keys", tok, nil)
+	if rec.Code != 200 {
+		t.Fatalf("密钥列表: %d", rec.Code)
+	}
+	grps := map[string]bool{}
+	for _, it := range out["keys"].([]any) {
+		grps[it.(map[string]any)["billing_grp"].(string)] = true
+	}
+	if !grps["per_call"] || !grps["per_token"] || !grps[""] {
+		t.Fatalf("密钥分组标记错误: %v", grps)
+	}
+
+	balOf := func() int64 {
+		t.Helper()
+		var b int64
+		_ = app.DB.QueryRow("SELECT balance_micro FROM users WHERE email='grp@t.dev'").Scan(&b)
+		return b
+	}
+	chat := func(key, model string) int {
+		t.Helper()
+		rec, _ := doJSON(t, h, "POST", "/v1/chat/completions", key, map[string]any{
+			"model": model, "messages": []map[string]string{{"role": "user", "content": "hi"}}})
+		return rec.Code
+	}
+
+	// 按次密钥：aqua/pc1 → 按次线成功，收单价 2000
+	if c := chat(keyCall, "aqua/pc1"); c != 200 {
+		t.Fatalf("按次密钥调 aqua/pc1 应 200，得 %d", c)
+	}
+	if b := balOf(); b != 98000 {
+		t.Fatalf("按次计费应扣单价 2000，余额 %d", b)
+	}
+	// 按次密钥：aqua/m1（仅按量分组提供）→ 404
+	if c := chat(keyCall, "aqua/m1"); c != 404 {
+		t.Fatalf("按次密钥调按量专属 aqua/m1 应 404，得 %d", c)
+	}
+	// 按量密钥：aqua/m1 → 按量线成功，按 tokens 计费
+	b0 := balOf()
+	if c := chat(keyTok, "aqua/m1"); c != 200 {
+		t.Fatalf("按量密钥调 aqua/m1 应 200，得 %d", c)
+	}
+	if b := balOf(); b >= b0 {
+		t.Fatalf("按量计费应有扣费：前 %d 后 %d", b0, b)
+	}
+	// 按量密钥：aqua/pc1（仅按次分组提供）→ 404
+	if c := chat(keyTok, "aqua/pc1"); c != 404 {
+		t.Fatalf("按量密钥调按次专属 aqua/pc1 应 404，得 %d", c)
+	}
+	// 未分组旧密钥：默认按次（default_grp）→ aqua/pc1 成功、aqua/m1 404
+	if c := chat(keyOld, "aqua/pc1"); c != 200 {
+		t.Fatalf("未分组密钥默认按次调 aqua/pc1 应 200，得 %d", c)
+	}
+	if c := chat(keyOld, "aqua/m1"); c != 404 {
+		t.Fatalf("未分组密钥调按量专属 aqua/m1 应 404，得 %d", c)
+	}
+	// 旧前缀显式直连：不受密钥分组影响（按量钥调 t/m1 → 200）
+	if c := chat(keyTok, "t/m1"); c != 200 {
+		t.Fatalf("旧前缀 t/m1 显式直连应 200，得 %d", c)
+	}
+}

@@ -48,15 +48,28 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
 	}
-	lineID, siteID, ok := config.SplitModel(req.Model)
+	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
+	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
 	var line *config.Line
-	if ok {
+	if hasPrefix && !unified {
 		line = a.Cfg.LineByID(lineID)
 	}
-	if line == nil || line.Mode == "free" {
+	if !hasPrefix || (line == nil && !unified) || (line != nil && line.Mode == "free") {
 		// 免费图像模型（裸名如 cogview-3-flash）：转发 + URL 站内重写，不计费
 		a.handleFreeImages(w, r, body, &req, actx.UserID, actx.KeyHash)
 		return
+	}
+	if unified {
+		// 统一前缀：按密钥计费分组选线（与 chat 同一机制）
+		grp := actx.KeyGrp
+		if grp == "" {
+			grp = a.Cfg.Billing.DefaultGrp
+		}
+		line = a.Cfg.LineForMode(grp)
+		if line == nil {
+			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
+			return
+		}
 	}
 	var model *config.Model
 	for i := range line.Models {
@@ -66,17 +79,22 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if model == nil {
-		errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成：" + req.Model)
+		if unified {
+			errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成："+req.Model+"（该模型不在当前密钥计费分组的可用列表）")
+			return
+		}
+		errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成："+req.Model)
 		return
 	}
-	// 生效单价（价格组 + 活动价）
+	fullID := config.ModelFullName(line.ID, siteID)
+	// 生效单价（价格组 + 活动价；pricing 键 = 目标线全名）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, "per_call")
-	pricing := a.pricingFor(req.Model, grp)
+	pricing := a.pricingFor(fullID, grp)
 	if pricing == nil || pricing.Mode != "per_call" {
 		errOut(w, 404, "model_not_found", "该模型已下架或暂不可用")
 		return
 	}
-	rid := a.insertRequest(actx.UserID, actx.KeyHash, "images", req.Model, false)
+	rid := a.insertRequestLine(actx.UserID, actx.KeyHash, "images", req.Model, false, line.ID)
 	prehold := pricing.PriceMicro * req.N
 	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
 		errOut(w, 429, "insufficient_quota", "余额不足，请先到控制台充值（先付后用，绝不透支）")

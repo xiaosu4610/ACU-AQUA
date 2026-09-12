@@ -78,15 +78,18 @@ export async function logout() {
 
 /* ===== 个人控制台 API ===== */
 
-export interface KeyItem { id: number; prefix: string; name: string; revoked: boolean; created_ts: number; can_reveal?: boolean }
+export interface KeyItem { id: number; prefix: string; name: string; revoked: boolean; created_ts: number; can_reveal?: boolean; billing_grp?: string }
 
 export async function listKeys(): Promise<KeyItem[]> {
   const j = await apiJson<any>('/my/keys', { session: true })
   return j.keys || []
 }
 
-export async function createKey(name: string): Promise<{ key: string; prefix: string }> {
-  return apiJson('/my/keys', { method: 'POST', session: true, body: { name } })
+/** 计费分组：per_call=免费+按次计费；per_token=免费+按量计费；''=旧式未分组 */
+export type BillingGrp = '' | 'per_call' | 'per_token'
+
+export async function createKey(name: string, billingGrp: BillingGrp = ''): Promise<{ key: string; prefix: string; billing_grp: string }> {
+  return apiJson('/my/keys', { method: 'POST', session: true, body: { name, billing_grp: billingGrp } })
 }
 
 /** 随时查看密钥原文（服务端加密存储回显） */

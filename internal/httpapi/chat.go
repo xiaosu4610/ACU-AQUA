@@ -37,7 +37,7 @@ type usageJSON struct {
 }
 
 // handleChat /v1/chat/completions 主入口：
-// 鉴权 → 收费线路由（line-id/ 前缀且线存在）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
+// 鉴权 → 收费线路由（统一前缀按密钥分组选线 / 线前缀显式直连）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
 //  → 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
@@ -50,14 +50,15 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 400, "bad_request", "请求体格式错误或缺 model 字段")
 		return
 	}
-	// 收费线（line-id/ 前缀且线存在且非 free）；其余全部走免费分发
+	// 收费路由判定：统一前缀（按密钥分组）/ 线前缀（显式直连）；其余走免费分发
 	// （无前缀裸模型 / 旧厂商前缀 zhipu/glm-4-flash / auto 智能路由 / 动态目录）
 	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
+	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
 	var line *config.Line
-	if hasPrefix {
+	if hasPrefix && !unified {
 		line = a.Cfg.LineByID(lineID)
 	}
-	if line == nil || line.Mode == "free" {
+	if !hasPrefix || (line == nil && !unified) || (line != nil && line.Mode == "free") {
 		// 绞杀者模式：免费线仍由旧网关承接（免 Go 鉴权，旧网关自管）
 		if legacyProxy != nil {
 			a.proxyChat(w, r, body)
@@ -73,11 +74,23 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		a.handleFreeChat(w, r, body, &req, uid, kh)
 		return
 	}
-	// 鉴权（收费线强制登录/API 密钥）
+	// 鉴权（收费线强制登录/API 密钥；统一前缀分组路由需要密钥分组）
 	actx := auth.Authenticate(a.DB.DB, r)
 	if actx == nil {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
+	}
+	if unified {
+		// 统一前缀：按密钥计费分组选线；未分组旧密钥按配置默认分组
+		grp := actx.KeyGrp
+		if grp == "" {
+			grp = a.Cfg.Billing.DefaultGrp
+		}
+		line = a.Cfg.LineForMode(grp)
+		if line == nil {
+			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
+			return
+		}
 	}
 	var model *config.Model
 	for i := range line.Models {
@@ -87,9 +100,15 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if model == nil {
-		errOut(w, 404, "model_not_found", "模型不存在：" + req.Model)
+		if unified {
+			// 统一前缀分组路由下目标线没有该模型：明确告知换分组（按次/按量）可见
+			errOut(w, 404, "model_not_found", "模型不存在："+req.Model+"（该模型不在当前密钥计费分组的可用列表，按量分组模型更全，可在控制台创建按量分组密钥）")
+			return
+		}
+		errOut(w, 404, "model_not_found", "模型不存在："+req.Model)
 		return
 	}
+	fullID := config.ModelFullName(line.ID, siteID)
 
 	// 上游模型名替换
 	upBody, err := replaceModel(body, model.UpstreamID)
@@ -98,9 +117,9 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 价格组与生效价目
+	// 价格组与生效价目（pricing 键 = 目标线全名，与密钥分组解耦）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, line.Mode)
-	pricing, err := billing.CurrentPricing(a.DB.DB, req.Model, grp)
+	pricing, err := billing.CurrentPricing(a.DB.DB, fullID, grp)
 	if err != nil {
 		errOut(w, 500, "internal_error", "计费查询失败")
 		return
@@ -110,8 +129,8 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 请求落库（拿 rowid 供面值回写）
-	rid := a.insertRequest(actx.UserID, actx.KeyHash, "chat", req.Model, req.Stream)
+	// 请求落库（拿 rowid 供面值回写；resolved_line 记实际线，统计口径）
+	rid := a.insertRequestLine(actx.UserID, actx.KeyHash, "chat", req.Model, req.Stream, line.ID)
 	if rid == 0 {
 		errOut(w, 500, "internal_error", "请求记录失败")
 		return
@@ -159,7 +178,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model)
 }
 
-// serveJSONChat 非流式：读全量 → 剥层 → 结算 → 回写
+// serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写
 func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
@@ -168,14 +187,23 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		errOut(w, 502, "upstream_error", "上游响应读取失败")
 		return
 	}
-	var jr struct {
-		Usage *usageJSON `json:"usage"`
+	// OpenAI 形状校验：上游 200 但响应不是合法 JSON 或缺 choices →
+	// 视为上游畸形响应（透传会让客户端 SDK 报"格式错误"），转为 502 并全额退款
+	var probe struct {
+		Choices []json.RawMessage `json:"choices"`
+		Usage   *usageJSON        `json:"usage"`
+		Error   json.RawMessage   `json:"error"`
 	}
-	_ = json.Unmarshal(raw, &jr)
-	u := usageFromJSON(jr.Usage)
+	if err := json.Unmarshal(raw, &probe); err != nil || (len(probe.Choices) == 0 && len(probe.Error) == 0) {
+		_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "upstream_malformed")
+		a.failRequest(rid, "upstream_malformed")
+		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
+		return
+	}
+	u := usageFromJSON(probe.Usage)
 	final := int64(0)
 	face := int64(0)
-	if jr.Usage != nil {
+	if probe.Usage != nil {
 		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
 		// per_call：不看 usage，收单价；per_token：三段精算
 		if p != nil && p.Mode == "per_call" {
@@ -227,6 +255,8 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	final := int64(0)
 	faceTotal := int64(0)
 	settled := false
+	sawDone := false       // 上游是否已发 [DONE]（未发即中断 → 客户端拿到的是截断流）
+	interrupted := false   // 上游异常中断（区别于客户端主动断开）
 	settle := func() {
 		if settled {
 			return
@@ -245,18 +275,27 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				c.Pool.ReportFace(key, faceTotal)
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
+			_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
+			a.okRequest(rid, u, final, faceTotal)
+		} else if interrupted {
+			// 一帧有效内容都没有且上游异常中断：全额退回
+			_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.failRequest(rid, "stream_incomplete")
 		} else if p != nil {
+			// 上游正常收尾但未发 usage：按保底/单价收（与原口径一致，防薅羊毛）
 			if p.Mode == "per_call" {
 				final = p.PriceMicro
 			} else {
 				final = p.FloorMicro
 			}
+			_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
+			a.okRequest(rid, u, final, faceTotal)
+		} else {
+			_ = billing.Settle(a.DB.DB, uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.failRequest(rid, "stream_incomplete")
 		}
-		_ = billing.Settle(a.DB.DB, uid, prehold, final, rid, final, "billed")
-		a.okRequest(rid, u, final, faceTotal)
 	}
 	defer settle()
-
 	ctx := r.Context()
 	buf := make([]byte, 0, 32<<10)
 	tmp := make([]byte, 16<<10)
@@ -277,6 +316,9 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				}
 				lineBytes := buf[:i]
 				buf = buf[i+1:]
+				if bytes.Contains(lineBytes, []byte("[DONE]")) {
+					sawDone = true
+				}
 				out := sanitizeStreamLine(lineBytes, &u)
 				_, _ = w.Write(out)
 				_, _ = w.Write([]byte("\n"))
@@ -284,9 +326,26 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 			}
 		}
 		if err != nil {
+			// 上游中断且从未发过 [DONE]：补发一帧 OpenAI 错误事件再正常收尾，
+			// 客户端 SDK 才能感知截断（否则表现为静默缺内容）
+			if !sawDone && !ctxDone(r.Context()) {
+				interrupted = true
+				errFrame := map[string]any{"error": map[string]any{
+					"message": "上游流式响应中断，内容可能不完整，请重试",
+					"type":    "api_error", "code": "stream_incomplete", "param": nil,
+				}}
+				eb, _ := json.Marshal(errFrame)
+				_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", eb)
+				flusher.Flush()
+			}
 			return
 		}
 	}
+}
+
+// ctxDone 请求上下文是否已取消（客户端断开/超时：无需再写响应）
+func ctxDone(ctx context.Context) bool {
+	return ctx.Err() != nil
 }
 
 // sanitizeStreamLine SSE data 行处理：抓 usage（末帧）+ 剥除成本/计费/追踪类字段（信息隔离）
@@ -402,9 +461,14 @@ func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte
 
 // insertRequest 请求落库，返回 rowid
 func (a *App) insertRequest(uid int64, keyHash, endpoint, model string, stream bool) int64 {
+	return a.insertRequestLine(uid, keyHash, endpoint, model, stream, "")
+}
+
+// insertRequestLine 请求落库（resolved_line 记实际计费线，统一前缀路由统计口径）
+func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stream bool, resolvedLine string) int64 {
 	res, err := a.DB.Exec(
-		"INSERT INTO requests (key_hash, endpoint, model, user_id, ok, ts, bill_state, stream_mode) VALUES (?,?,?,?,0,?,?,?)",
-		keyHash, endpoint, model, uid, time.Now().Unix(), "", boolToInt(stream))
+		"INSERT INTO requests (key_hash, endpoint, model, user_id, ok, ts, bill_state, stream_mode, resolved_line) VALUES (?,?,?,?,0,?,?,?,?)",
+		keyHash, endpoint, model, uid, time.Now().Unix(), "", boolToInt(stream), resolvedLine)
 	if err != nil {
 		return 0
 	}

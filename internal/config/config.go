@@ -102,6 +102,14 @@ type Update struct {
 	Proxy      string `toml:"proxy"`       // 出站代理（http://host:port），更新请求走代理（海外服务器被 gitee CDN 拦截时使用）
 }
 
+// Billing 收费模型统一路由（机制层）：
+// 统一前缀下（如 aqua/模型名）不再绑定单一计费线，而是按**密钥的计费分组**
+// 路由到对应模式（per_call/per_token）的收费线；旧线前缀（如 tide/）仍可显式直连。
+type Billing struct {
+	UnifiedPrefix string `toml:"unified_prefix"` // 统一收费前缀；空 = 关闭统一路由（线前缀直连）
+	DefaultGrp    string `toml:"default_grp"`    // 未分组旧密钥的默认计费分组：per_call | per_token
+}
+
 // Cfg 顶层配置
 type Cfg struct {
 	Site     Site     `toml:"site"`
@@ -110,6 +118,7 @@ type Cfg struct {
 	SMTP     SMTP     `toml:"smtp"`
 	EPay     EPay     `toml:"epay"`
 	Update   Update   `toml:"update"`
+	Billing  Billing  `toml:"billing"`
 	Lines    []Line   `toml:"lines"`
 }
 
@@ -119,6 +128,7 @@ func Default() *Cfg {
 		Site:     Site{Name: "AQUA Gateway", Domain: "", DocsURL: "", QQGroup: "", QQGroupURL: ""},
 		Database: Database{Driver: "sqlite", Path: "data/aqua.db"},
 		Server:   Server{Listen: "0.0.0.0:8787"},
+		Billing:  Billing{UnifiedPrefix: "", DefaultGrp: "per_call"}, // 统一前缀默认关闭，由配置显式启用
 		Lines:    nil, // 未配置任何上游 = 空壳站，UI 显示待配置
 	}
 }
@@ -261,6 +271,28 @@ func (c *Cfg) LineByID(id string) *Line {
 		}
 	}
 	return nil
+}
+
+// LineForMode 取第一条指定计费模式的收费线（统一前缀分组路由的目标线）。
+// 多条同模式线时按配置顺序取第一条——分组路由只关心计费方式，具体线路是配置事实。
+func (c *Cfg) LineForMode(mode string) *Line {
+	for i := range c.Lines {
+		if c.Lines[i].Mode == mode {
+			return &c.Lines[i]
+		}
+	}
+	return nil
+}
+
+// NormalizeBillingGrp 计费分组标准化：仅接受 per_call / per_token，其余归空（未分组）
+func NormalizeBillingGrp(g string) string {
+	switch strings.ToLower(strings.TrimSpace(g)) {
+	case "per_call":
+		return "per_call"
+	case "per_token":
+		return "per_token"
+	}
+	return ""
 }
 
 // ModelFullName 站内完整模型名（line-id/site-id）

@@ -213,6 +213,14 @@ func IsModelUnavailable(body []byte) bool {
 		strings.Contains(s, "does not exist")
 }
 
+// IsChannelExhausted 上游**渠道级**不可用（如 OneAPI 网关报 no available channel）：
+// 同一上游的所有密钥共享同一渠道池，换钥/重试都注定失败 —— 必须快速失败，
+// 避免渠道抖动时用户等十几秒才收到错误。
+func IsChannelExhausted(body []byte) bool {
+	s := strings.ToLower(string(body))
+	return strings.Contains(s, "no available channel")
+}
+
 // rebuildResp 用已读入的 body 重建可重复读的响应（错误体都很小，整读）
 func rebuildResp(resp *http.Response, body []byte) *http.Response {
 	resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -239,6 +247,7 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 
 	tried := map[int]bool{}
 	acquireTries := 0
+	channelDown := false // 渠道级不可用：换钥无意义，立即终止
 	for hop := 0; hop < maxKeyHops; hop++ {
 		k, err := c.Pool.AcquireSkip(tried)
 		if err != nil {
@@ -288,7 +297,13 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("UPSTREAM_STATUS_%d", sc)
-				if IsModelUnavailable(eb) {
+				if IsChannelExhausted(eb) {
+					// 渠道级不可用：全钥共享同一渠道池，重试/换钥注定失败 → 立即返回
+					modelLevel = true
+					channelDown = true
+					modelResp = rebuildResp(resp, eb)
+					log.Printf("[upstream] line=%s key=%d 状态%d 渠道级不可用，快速失败", c.Line.ID, k.Idx, sc)
+				} else if IsModelUnavailable(eb) {
 					// 模型在该钥的分组不可用：换钥有意义，同钥重试无意义
 					modelLevel = true
 					modelResp = rebuildResp(resp, eb)
@@ -308,10 +323,16 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 			break
 		}
 		if modelLevel {
+			if channelDown {
+				break // 渠道级不可用：终止全部重试
+			}
 			// 立即换下一把钥（该钥本身没问题，不计失败不冷却）
 			c.Pool.Advance()
 			backoff(300 * time.Millisecond)
 			continue
+		}
+		if channelDown {
+			break
 		}
 		// 当前钥重试无效，换下一把
 		c.Pool.Advance()

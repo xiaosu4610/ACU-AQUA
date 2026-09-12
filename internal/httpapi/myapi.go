@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"acu-aqua/gateway/internal/auth"
+	"acu-aqua/gateway/internal/config"
 )
 
 // ---- /v1/my/* ----
@@ -125,7 +126,7 @@ func (a *App) myKeysGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.DB.Query(
-		"SELECT id, key_prefix, name, revoked, created_ts, key_plain_enc FROM api_keys WHERE user_id=? ORDER BY created_ts DESC",
+		"SELECT id, key_prefix, name, revoked, created_ts, key_plain_enc, COALESCE(billing_grp,'') FROM api_keys WHERE user_id=? ORDER BY created_ts DESC",
 		actx.UserID)
 	if err != nil {
 		errOut(w, 500, "internal_error", "查询失败")
@@ -135,17 +136,18 @@ func (a *App) myKeysGet(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, revoked, created int64
-		var prefix, name, enc string
-		_ = rows.Scan(&id, &prefix, &name, &revoked, &created, &enc)
+		var prefix, name, enc, grp string
+		_ = rows.Scan(&id, &prefix, &name, &revoked, &created, &enc, &grp)
 		items = append(items, map[string]any{
 			"id": id, "prefix": prefix, "name": name, "revoked": revoked != 0,
-			"created_ts": created, "can_reveal": enc != "",
+			"created_ts": created, "can_reveal": enc != "", "billing_grp": grp,
 		})
 	}
 	jsonOut(w, 200, map[string]any{"keys": items})
 }
 
-// myKeysCreate POST /v1/my/keys {name}
+// myKeysCreate POST /v1/my/keys {name, billing_grp}
+// billing_grp：密钥计费分组 per_call（免费+按次）| per_token（免费+按量）| 空（旧式未分组）
 func (a *App) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 	actx := auth.Authenticate(a.DB.DB, r)
 	if actx == nil {
@@ -153,18 +155,20 @@ func (a *App) myKeysCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		BillingGrp string `json:"billing_grp"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if strings.TrimSpace(req.Name) == "" {
 		req.Name = "默认密钥"
 	}
-	plain, err := auth.CreateAPIKey(a.DB.DB, actx.UserID, req.Name)
+	grp := config.NormalizeBillingGrp(req.BillingGrp)
+	plain, err := auth.CreateAPIKey(a.DB.DB, actx.UserID, req.Name, grp)
 	if err != nil {
 		errOut(w, 500, "internal_error", "密钥创建失败")
 		return
 	}
-	jsonOut(w, 200, map[string]any{"ok": true, "key": plain, "message": "密钥已创建"})
+	jsonOut(w, 200, map[string]any{"ok": true, "key": plain, "billing_grp": grp, "message": "密钥已创建"})
 }
 
 // myKeysDelete DELETE /v1/my/keys/{id}

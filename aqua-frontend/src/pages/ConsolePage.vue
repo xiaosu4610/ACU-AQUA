@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { apiJson, copyText, errText, fmt } from '@/composables/useApi'
 import {
   avatarUrl, changePassword, createKey, fetchBalanceAlert, fetchCheckup, isLoggedIn, listKeys, loadMe, logout,
-  me, revealKey, revokeKey, setBalanceAlert, uploadAvatar, type Checkup, type KeyItem,
+  me, revealKey, revokeKey, setBalanceAlert, uploadAvatar, type BillingGrp, type Checkup, type KeyItem,
 } from '@/composables/useAuth'
 import AqIcon from '@/components/AqIcon.vue'
 
@@ -106,6 +106,7 @@ const dashoffset = (s: number) => CIRC * (1 - s / 100)
 /* ===== 密钥 ===== */
 const keys = ref<KeyItem[]>([])
 const newKeyName = ref('')
+const newKeyGrp = ref<BillingGrp>('per_call') // 创建分组，默认按次
 const creating = ref(false)
 const freshKey = ref('') // 仅创建后展示一次
 const keysMsg = ref('')
@@ -120,7 +121,7 @@ async function doCreateKey() {
   if (!name) return
   creating.value = true; keysMsg.value = ''
   try {
-    const j = await createKey(name)
+    const j = await createKey(name, newKeyGrp.value)
     freshKey.value = j.key
     newKeyName.value = ''
     await loadKeys()
@@ -580,8 +581,17 @@ function fmtTime(ts: number): string {
           <div class="dash-sec">
             <div class="key-create">
               <input v-model="newKeyName" maxlength="32" placeholder="密钥备注，如：我的笔记本 / 生产环境" @keydown.enter="doCreateKey" />
+              <div class="grp-pick">
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" @click="newKeyGrp = 'per_call'">
+                  <b>免费 + 按次计费</b><span>按次一口价，结算简单</span>
+                </button>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
+                  <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
+                </button>
+              </div>
               <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">创建密钥</button>
             </div>
+            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按次分组密钥按次扣费、按量分组密钥按 tokens 扣费（免费模型不受影响）。按量分组可用模型更多。</p>
             <!-- 新密钥首次展示（之后可在列表随时复制） -->
             <div v-if="freshKey" class="fresh-key">
               <code>{{ freshKey }}</code>
@@ -597,6 +607,9 @@ function fmtTime(ts: number): string {
               <div v-for="k in keys" :key="k.id" class="key-row" :class="{ revoked: k.revoked }">
                 <span class="key-name">{{ k.name }}</span>
                 <code class="key-prefix">{{ k.prefix }}</code>
+                <span v-if="k.billing_grp === 'per_call'" class="key-grp call" title="该密钥调用收费模型时按次计费">按次</span>
+                <span v-else-if="k.billing_grp === 'per_token'" class="key-grp token" title="该密钥调用收费模型时按 tokens 计费">按量</span>
+                <span v-else class="key-grp legacy" title="旧式密钥未选分组，收费模型按默认分组（按次）计费">未分组</span>
                 <span class="key-time">{{ fmtTime(k.created_ts) }}</span>
                 <button v-if="!k.revoked && k.can_reveal !== false" class="mini-btn ok" @click="copyKey(k)">
                   <AqIcon :name="copiedId === k.id ? 'check' : 'copy'" :size="12" /> {{ copiedId === k.id ? '已复制' : '复制' }}
@@ -1052,6 +1065,15 @@ function fmtTime(ts: number): string {
 .fresh-key-ops { display: flex; gap: 8px; margin-top: 10px; }
 .key-list { display: flex; flex-direction: column; gap: 6px; }
 .key-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.2)); font-size: 13px; flex-wrap: wrap; }
+.key-grp { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.key-grp.call { background: rgba(11,108,255,.12); color: var(--accent, #0b6cff); }
+.key-grp.token { background: rgba(52,211,153,.14); color: #34d399; }
+.key-grp.legacy { background: rgba(128,140,160,.15); color: var(--muted, #8a94a6); }
+.grp-pick { display: flex; gap: 8px; }
+.grp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; cursor: pointer; font-size: 12px; color: inherit; text-align: left; }
+.grp-opt b { font-size: 12.5px; }
+.grp-opt span { color: var(--muted, #8a94a6); font-size: 11px; }
+.grp-opt.on { border-color: var(--accent, #0b6cff); background: rgba(11,108,255,.10); }
 .key-row.revoked { opacity: .5; }
 .key-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-prefix { color: var(--accent, #0b6cff); font-size: 12px; }

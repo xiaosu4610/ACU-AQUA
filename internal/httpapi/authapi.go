@@ -193,8 +193,8 @@ func (a *App) authRegister(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 400, "bad_request", err.Error())
 		return
 	}
-	// 注册即发默认密钥（Rust 版行为：用户注册后可立即调用 API）
-	keyPlain, err := auth.CreateAPIKey(a.DB.DB, uid, "默认密钥")
+	// 注册即发默认密钥（Rust 版行为：用户注册后可立即调用 API；未分组，走默认计费分组）
+	keyPlain, err := auth.CreateAPIKey(a.DB.DB, uid, "默认密钥", "")
 	if err != nil {
 		errOut(w, 500, "internal_error", "密钥创建失败")
 		return

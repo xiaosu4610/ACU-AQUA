@@ -8,6 +8,7 @@ import (
 
 	"acu-aqua/gateway/internal/auth"
 	"acu-aqua/gateway/internal/billing"
+	"acu-aqua/gateway/internal/config"
 )
 
 var _ = time.Now
@@ -133,10 +134,11 @@ func (a *App) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		BillingGrp string `json:"billing_grp"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	plain, err := auth.CreateAPIKey(a.DB.DB, actx.UserID, req.Name)
+	plain, err := auth.CreateAPIKey(a.DB.DB, actx.UserID, req.Name, config.NormalizeBillingGrp(req.BillingGrp))
 	if err != nil {
 		errOut(w, 500, "internal_error", "密钥创建失败")
 		return

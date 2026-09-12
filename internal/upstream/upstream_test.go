@@ -129,8 +129,37 @@ func TestNoRetryOn4xx(t *testing.T) {
 	}
 }
 
-// 模型级错误（无可用通道）：不重试同钥，立即换钥成功
+// 模型级错误（model_not_found 且非渠道级故障）：不重试同钥，立即换钥成功
 func TestModelLevelHop(t *testing.T) {
+	var k0, k1 int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer sk-0":
+			atomic.AddInt64(&k0, 1)
+			w.WriteHeader(503)
+			_, _ = w.Write([]byte(`{"error":{"code":"model_not_found","message":"Model not found"}}`))
+		case "Bearer sk-1":
+			atomic.AddInt64(&k1, 1)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer up.Close()
+
+	c := testClient(up, []string{"sk-0", "sk-1"}, 0)
+	resp, _, err := c.Do(context.Background(), []byte(`{}`), false, "/chat/completions")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("模型级换钥应成功: err=%v", err)
+	}
+	resp.Body.Close()
+	if k0 != 1 || k1 != 1 {
+		t.Fatalf("模型级错误应立即换钥不重试：sk-0 %d 次（期望 1），sk-1 %d 次（期望 1）", k0, k1)
+	}
+}
+
+// 渠道级不可用（OneAPI "no available channel"）：全钥共享同一渠道池，
+// 换钥/重试注定失败 —— 第一跳即快速失败，原样透传响应（回归 2026-09-12
+// 收费接口故障：渠道抖动时旧逻辑换钥重试 5 轮，用户等 10-15 秒收 404）
+func TestChannelExhaustedFastFail(t *testing.T) {
 	var k0, k1 int64
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Authorization") {
@@ -147,12 +176,16 @@ func TestModelLevelHop(t *testing.T) {
 
 	c := testClient(up, []string{"sk-0", "sk-1"}, 0)
 	resp, _, err := c.Do(context.Background(), []byte(`{}`), false, "/chat/completions")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("模型级换钥应成功: err=%v", err)
+	if err != nil {
+		t.Fatalf("应返回响应而非错误: %v", err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if k0 != 1 || k1 != 1 {
-		t.Fatalf("模型级错误应立即换钥不重试：sk-0 %d 次（期望 1），sk-1 %d 次（期望 1）", k0, k1)
+	if resp.StatusCode != 503 || !bytes.Contains(body, []byte("No available channel")) {
+		t.Fatalf("渠道级不可用应原样透传 503: %d %s", resp.StatusCode, body)
+	}
+	if k0 != 1 || k1 != 0 {
+		t.Fatalf("渠道级不可用应立即快速失败不换钥：sk-0 %d 次（期望 1），sk-1 %d 次（期望 0）", k0, k1)
 	}
 }
 

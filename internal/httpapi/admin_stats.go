@@ -7,6 +7,7 @@ package httpapi
 
 import (
 	"database/sql"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -15,6 +16,24 @@ import (
 )
 
 const beijingOffset = int64(28800) // UTC+8
+
+// paidLineCond 计费线归属 SQL 条件（机制化，线 ID 来自配置）：
+// 统一前缀时代按 requests.resolved_line 归属实际线；旧数据（resolved_line=''）按模型前缀推断。
+func (a *App) paidLineCond(mode string) string {
+	id := ""
+	if l := a.Cfg.LineForMode(mode); l != nil {
+		id = l.ID
+	}
+	return fmt.Sprintf("(resolved_line='%s' OR (COALESCE(resolved_line,'')='' AND model LIKE '%s/%%'))", id, id)
+}
+
+// paidLinePrefix 计费线模型前缀（Go 内存过滤用）
+func (a *App) paidLinePrefix(mode string) string {
+	if l := a.Cfg.LineForMode(mode); l != nil {
+		return l.ID + "/"
+	}
+	return "\x00none/"
+}
 
 func adminJSON(w http.ResponseWriter, v map[string]any) {
 	jsonOut(w, 200, v)
@@ -60,7 +79,7 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	// 近 7 日按次成本（按模型单价 × 调用量，价格取配置成本台账）
 	cost7d := int64(0)
 	if rows, err := a.DB.Query(
-		`SELECT model, COUNT(*) FROM requests WHERE model LIKE 'aqua/%' AND bill_state='billed' AND ts>=? GROUP BY model`, week0); err == nil {
+		`SELECT model, COUNT(*) FROM requests WHERE `+a.paidLineCond("per_call")+` AND bill_state='billed' AND ts>=? GROUP BY model`, week0); err == nil {
 		for rows.Next() {
 			var model string
 			var n int64
@@ -129,14 +148,14 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	liability := a.queryInt64(`SELECT COALESCE(SUM(balance_micro),0) FROM users WHERE balance_micro>0`)
 	withBalance := a.queryInt64(`SELECT COUNT(*) FROM users WHERE balance_micro>0`)
 
-	// tide 专线
-	tideIncome := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.model LIKE 'tide/%'`)
-	tideIncomeToday := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.model LIKE 'tide/%' AND b.ts>=?`, today0)
-	tideCalls := a.queryInt64(`SELECT COUNT(*) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed'`)
-	tideIn := a.queryInt64(`SELECT COALESCE(SUM(prompt_tokens),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed'`)
-	tideCached := a.queryInt64(`SELECT COALESCE(SUM(cached_tokens),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed'`)
-	tideOut := a.queryInt64(`SELECT COALESCE(SUM(completion_tokens),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed'`)
-	faceToday := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed' AND ts>=?`, today0)
+	// tide 专线（按量口径：resolved_line 归属实际按量线，旧数据按前缀推断）
+	tideIncome := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.`+a.paidLineCond("per_token"))
+	tideIncomeToday := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.`+a.paidLineCond("per_token")+` AND b.ts>=?`, today0)
+	tideCalls := a.queryInt64(`SELECT COUNT(*) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
+	tideIn := a.queryInt64(`SELECT COALESCE(SUM(prompt_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
+	tideCached := a.queryInt64(`SELECT COALESCE(SUM(cached_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
+	tideOut := a.queryInt64(`SELECT COALESCE(SUM(completion_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
+	faceToday := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed' AND ts>=?`, today0)
 	face7d := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed' AND ts>=?`, week0)
 	faceTotal := a.queryInt64(`SELECT COALESCE(SUM(initial_micro),0) FROM line_keys WHERE line_id='tide'`)
 	faceUsed := a.queryInt64(`SELECT COALESCE(SUM(used_micro),0) FROM line_keys WHERE line_id='tide'`)
@@ -294,7 +313,7 @@ func (a *App) currentPrices() ([]map[string]any, int64) {
 				"out_price": float64(out10) / 10, "subsidized": false,
 			}
 			out = append(out, item)
-			if strings.HasPrefix(model, "aqua/") && (minPrice < 0 || price < minPrice) {
+			if strings.HasPrefix(model, a.paidLinePrefix("per_call")) && (minPrice < 0 || price < minPrice) {
 				minPrice = price
 			}
 		}
@@ -518,7 +537,7 @@ func (a *App) handleAdminSupervision(w http.ResponseWriter, r *http.Request) {
 	if cost > 0 {
 		aRemainCalls = poolRemain / cost
 	}
-	priceNow := a.queryInt64(`SELECT COALESCE(MIN(price_micro),0) FROM pricing WHERE model LIKE 'aqua/%' AND grp='normal' AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)`, now, now)
+	priceNow := a.queryInt64(`SELECT COALESCE(MIN(price_micro),0) FROM pricing WHERE model LIKE ? AND grp='normal' AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)`, a.paidLinePrefix("per_call")+"%", now, now)
 	if priceNow == 0 {
 		priceNow = 2000
 	}
@@ -548,7 +567,7 @@ func (a *App) handleAdminSupervision(w http.ResponseWriter, r *http.Request) {
 	}
 	used7d := int64(0)
 	if rows, err := a.DB.Query(
-		`SELECT model, COUNT(*) FROM requests WHERE model LIKE 'aqua/%' AND bill_state='billed' AND ts>=? GROUP BY model`, week0); err == nil {
+		`SELECT model, COUNT(*) FROM requests WHERE `+a.paidLineCond("per_call")+` AND bill_state='billed' AND ts>=? GROUP BY model`, week0); err == nil {
 		for rows.Next() {
 			var model string
 			var n int64
