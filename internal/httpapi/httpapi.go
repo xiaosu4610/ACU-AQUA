@@ -405,27 +405,37 @@ func (a *App) statusModelNorm() map[string]string {
 		}
 		for j := range l.Models {
 			u := up + "/" + l.Models[j].SiteID
+			m[up+"/"+l.Models[j].SiteID] = u                   // 统一前缀原文（aqua 线下架后 tide 承接，仍需恒等映射）
 			m[config.ModelFullName(l.ID, l.Models[j].SiteID)] = u // 线前缀名 tide/xxx → aqua/xxx
-			m[l.Models[j].SiteID] = u                             // 裸名（旧网关口径）→ aqua/xxx
+			m[l.Models[j].SiteID] = u                          // 裸名（旧网关口径）→ aqua/xxx
 		}
 	}
 	return m
 }
 
-// handleModelsStatus 模型实时状态（公开匿名聚合，30 分钟窗口）：
-// 每模型请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
+// handleModelsStatus 模型实时状态（公开匿名，最近 200 次请求口径）：
+// 每模型取最近 200 条真实请求，聚合请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
+// 只统计收费线流量（resolved_line 非空）：免费分发流量（裸名走免费上游、resolved_line 为空）
+// 的上游故障与收费模型健康无关，不得计入（避免免费上游 NIM 故障污染收费模型状态）。
+// 成功率剔除与模型健康无关的失败：400/404/422（调用方参数错）、429（高峰限流，模型本身正常）、
+// 402（密钥面值耗尽，钥已判死）——只统计真实服务端失败（5xx/断流/网络错）。
+// 状态判定：样本≥10 时 ≥95% 正常 / ≥80% 部分异常 / 其余故障；小样本有失败最多判"部分异常"，不下重判。
 // 只输出聚合运行指标，不含成本/渠道/用户信息；模型名统一规范化后合并聚合。
 func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
-	win := int64(1800)
-	since := time.Now().Unix() - win
 	rows, err := a.DB.Query(`
 		SELECT model, COUNT(*), COALESCE(SUM(ok),0),
+		       COALESCE(SUM(CASE WHEN status_code IN (400,404,422,429,402) THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN tps ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN 1 ELSE 0 END),0),
-		       COALESCE(MAX(ts),0)
-		FROM requests WHERE ts>=? GROUP BY model`, since)
+		       MAX(ts)
+		FROM (
+			SELECT model, ok, latency_ms, tps, ts, status_code,
+			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY rowid DESC) rn
+			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code
+		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != '' ORDER BY rowid DESC LIMIT 50000)
+		) WHERE rn <= 200 GROUP BY model`)
 	if err != nil {
 		errOut(w, 500, "internal_error", "查询失败")
 		return
@@ -433,16 +443,16 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	norm := a.statusModelNorm()
 	type stAgg struct {
-		total, okN, latN, tpsN, lastTs int64
-		latSum, tpsSum                 float64
+		total, okN, userErr, latN, tpsN, lastTs int64
+		latSum, tpsSum                          float64
 	}
 	agg := map[string]*stAgg{}
 	order := []string{}
 	for rows.Next() {
 		var model string
-		var total, okN, latN, tpsN, lastTs int64
+		var total, okN, userErr, latN, tpsN, lastTs int64
 		var latSum, tpsSum float64
-		if rows.Scan(&model, &total, &okN, &latSum, &latN, &tpsSum, &tpsN, &lastTs) != nil {
+		if rows.Scan(&model, &total, &okN, &userErr, &latSum, &latN, &tpsSum, &tpsN, &lastTs) != nil {
 			continue
 		}
 		name, ok := norm[model]
@@ -457,6 +467,7 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		g.total += total
 		g.okN += okN
+		g.userErr += userErr
 		g.latSum += latSum
 		g.latN += latN
 		g.tpsSum += tpsSum
@@ -468,20 +479,25 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for _, name := range order {
 		g := agg[name]
-		rate := 0.0
-		if g.total > 0 {
-			rate = float64(g.okN) / float64(g.total)
+		denom := g.total - g.userErr // 分母剔除用户参数类错误
+		rate := 1.0
+		if denom > 0 {
+			rate = float64(g.okN) / float64(denom)
 		}
 		status := "ok"
-		switch {
-		case rate < 0.90:
-			status = "down"
-		case rate < 0.99:
-			status = "degraded"
+		if denom >= 10 {
+			switch {
+			case rate < 0.80:
+				status = "down"
+			case rate < 0.95:
+				status = "degraded"
+			}
+		} else if rate < 1 {
+			status = "degraded" // 小样本：有失败最多"部分异常"，绝不误判故障
 		}
 		it := map[string]any{
 			"model": name, "samples": g.total, "ok": g.okN, "ok_rate": rate,
-			"status": status, "last_ts": g.lastTs, "window_sec": win,
+			"status": status, "last_ts": g.lastTs, "sample_size": 200,
 		}
 		if g.latN > 0 {
 			it["avg_latency_ms"] = int64(math.Round(g.latSum / float64(g.latN)))
@@ -491,7 +507,7 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, it)
 	}
-	jsonOut(w, 200, map[string]any{"object": "list", "window_sec": win, "generated_ts": time.Now().Unix(), "data": items})
+	jsonOut(w, 200, map[string]any{"object": "list", "sample_size": 200, "generated_ts": time.Now().Unix(), "data": items})
 }
 
 // handleModels 模型列表（价格展示；成本率绝不出现）。

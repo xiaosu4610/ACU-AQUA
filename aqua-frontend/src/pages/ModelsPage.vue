@@ -42,7 +42,7 @@ onUnmounted(() => {
 })
 function retry() { load(true) }
 
-/* ---- 实时状态：/v1/models/status 30 分钟窗口聚合（时延/速度/成功率），20 秒自动刷新 ---- */
+/* ---- 实时状态：/v1/models/status 最近 200 次请求推断（时延/速度/成功率，剔除用户参数错），20 秒自动刷新 ---- */
 type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
 const liveRows = ref<LiveRow[]>([])
 const liveTs = ref(0)
@@ -399,9 +399,9 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <span v-if="m.subsidized && rateBadgeOf(m)" class="pms-rate-badge" title="官方原价 × 补贴倍率 = 现价，活动结束后恢复原价">{{ rateBadgeOf(m) }}</span>
                 <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="pms-vip-badge" title="VIP 专享拿货价已生效">VIP</span>
               </div>
-              <!-- 实时状态灯行：30 分钟真实请求聚合（20 秒轮询） -->
+              <!-- 实时状态灯行：最近 200 次请求推断（20 秒轮询） -->
               <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
-                :title="'近 30 分钟真实请求 · 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                :title="'状态由最近 200 次真实请求推断（剔除调用方参数错误）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
                 <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
                 <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
               </div>
@@ -418,8 +418,8 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><s v-if="m.baseOutPrice != null" title="官方原价">¥{{ perMYuan(m.baseOutPrice) }}</s><i class="tp-unit">/百万tokens</i></div>
                 <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
               </div>
-              <!-- 实时指标：平均时延 / 生成速度 / 成功率（30 分钟窗口聚合） -->
-              <div class="pms-live-metrics" :title="'近 30 分钟真实计费请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+              <!-- 实时指标：平均时延 / 生成速度 / 成功率（最近 200 次请求聚合） -->
+              <div class="pms-live-metrics" :title="'最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
