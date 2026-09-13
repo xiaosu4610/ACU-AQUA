@@ -24,6 +24,7 @@ func (a *App) Routes() http.Handler {
 	initLegacy(a.Cfg.Server.LegacyUpstreamURL)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", a.handleStatus)
+	mux.HandleFunc("GET /v1/status", a.handleStatus) // 前端状态大屏调用路径（/status 为旧路径兼容）
 	mux.HandleFunc("GET /v1/meta", a.handleMeta)
 	if legacyProxy == nil {
 		// 纯 Go 单体模式：模型目录由本网关生成；绞杀者模式下 /v1/models 反代旧网关
@@ -156,6 +157,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/supervision", a.handleAdminSupervision)
 	// —— 上游线路在线管理（DB 事实源 + 热重载；密钥/模型/线路 CRUD）——
 	mux.HandleFunc("GET /v1/admin/lines", a.handleAdminLines)
+	mux.HandleFunc("POST /v1/admin/nvidia/sync", a.handleAdminNvidiaSync) // NVIDIA 动态目录手动同步
 	mux.HandleFunc("POST /v1/admin/lines/reload", a.handleAdminLinesReload)
 	mux.HandleFunc("POST /v1/admin/lines", a.handleAdminLineCreate)
 	mux.HandleFunc("POST /v1/admin/lines/{line}", a.handleAdminLineUpdate)

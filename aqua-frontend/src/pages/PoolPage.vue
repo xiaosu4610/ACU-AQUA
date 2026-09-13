@@ -247,11 +247,11 @@ onMounted(async () => {
 .pool-balance small { font-size: 26px; margin-right: 2px; }
 .pool-sub { font-size: 12.5px; color: var(--muted,#8a94a6); margin-bottom: 14px; }
 .pool-stats { display: flex; gap: 26px; flex-wrap: wrap; border-top: 1px dashed var(--border,rgba(128,140,160,.25)); padding-top: 12px; }
-.pool-stats b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
-.pool-stats span { font-size: 11.5px; color: var(--muted,#8a94a6); }
+.pool-stats b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+.pool-stats span { font-size: 11px; color: var(--muted,#8a94a6); letter-spacing: .5px; }
 .pool-topup h2, .pool-ranks h2, .pool-ledger h2 { display: flex; align-items: center; gap: 7px; font-size: 15.5px; margin: 0 0 10px; }
 .topup-note { font-size: 12.5px; color: var(--muted,#8a94a6); margin: 0 0 12px; line-height: 1.6; }
-.topup-note b { color: #fbbf24; }
+.topup-note b { font-size: inherit; color: #d97706; }
 .amt-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .amt { padding: 9px 18px; border-radius: 10px; border: 1px solid var(--border,rgba(128,140,160,.3)); background: transparent; color: inherit; cursor: pointer; font-weight: 700; font-size: 14px; transition: all .15s; }
 .amt.on { border-color: var(--aqua,#38bdf8); background: rgba(56,189,248,.12); color: var(--aqua,#38bdf8); box-shadow: 0 0 0 1px rgba(56,189,248,.3); }

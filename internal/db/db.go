@@ -224,6 +224,7 @@ func InitTables(d *sql.DB) error {
 			vip_den INTEGER NOT NULL DEFAULT 0,
 			key_face_micro INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
+			dynamic INTEGER NOT NULL DEFAULT 0,
 			updated_ts INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS admin_line_keys (
 			line_id TEXT NOT NULL,
@@ -291,6 +292,7 @@ func InitTables(d *sql.DB) error {
 		{"admin_line_models", "degraded", "INTEGER NOT NULL DEFAULT 0"}, // 降级标记（诊断 D4：上游故障手动标记）
 		{"admin_line_models", "key_idx", "INTEGER NOT NULL DEFAULT -1"}, // 模型专属密钥池序（-1=自动走粘性池；≥0 锁定非 dead 钥排序后的第 N 把，按模型分工钥）
 		{"payments", "product", "TEXT NOT NULL DEFAULT 'balance'"},      // 支付产品分流：balance=个人余额充值 / pool=众筹池充值
+		{"admin_lines", "dynamic", "INTEGER NOT NULL DEFAULT 0"},        // 免费线动态目录开关（NVIDIA 自动同步上游新模型到 nvidia_models）
 	}
 	for _, a := range alters {
 		var n int

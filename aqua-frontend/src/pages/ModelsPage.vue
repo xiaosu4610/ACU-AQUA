@@ -231,6 +231,18 @@ const crowdModels = computed(() => orderedModels.value
     link: modelLink(m.id),
   })))
 
+/* 众筹卡差异化文案：每卡一句话突出模型定位，替代七卡复读同一段话术 */
+const CROWD_DESC: Record<string, { t: string; d: string }> = {
+  'acu/deepseek-v4-flash': { t: 'DeepSeek 极速轻旗舰', d: '秒回级响应，高频轻任务首选' },
+  'acu/deepseek-v4-pro': { t: 'DeepSeek 满血旗舰', d: '深度推理 · 长文创作 · 复杂任务扛把子' },
+  'acu/doubao-seed-2.0-lite': { t: '豆包轻量版', d: '日常问答的性价比之王' },
+  'acu/doubao-seed-2.1-turbo': { t: '豆包加速版', d: '速度与质量兼顾的全能选手' },
+  'acu/doubao-seed-evolving': { t: '豆包自进化', d: '持续在线迭代，能力常用常新' },
+  'acu/glm-5.3': { t: '智谱 GLM 旗舰', d: '中文创作与代码生成双优' },
+  'acu/glm-5.3-flash': { t: 'GLM 极速版', d: '毫秒级响应，高并发场景利器' },
+}
+function crowdDesc(id: string) { return CROWD_DESC[id] || { t: '官方自营通道', d: '按官方原价从站点额度扣费' } }
+
 /* ---- 加载/同步状态提示条（旧 updateModelsNotice 平移） ---- */
 function timeStr(t: number): string {
   const d = new Date(t), p = (x: number) => (x < 10 ? '0' : '') + x
@@ -368,15 +380,15 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <div class="cs-cards">
           <div v-for="m in crowdModels" :key="m.id" class="cs-card">
             <div class="cs-model">
-              <router-link :to="m.link" class="cs-id">{{ m.id }}</router-link>
+              <router-link :to="m.link" class="cs-id" :title="m.id">{{ m.id }}</router-link>
               <CopyBtn :text="m.id" />
             </div>
             <div class="cs-official">
-              <b>按官方原价扣费</b>
-              <span>充 1 元 = 2 元站点额度 · 个人余额分文不动</span>
+              <b>{{ crowdDesc(m.id).t }}</b>
+              <span>{{ crowdDesc(m.id).d }}</span>
             </div>
             <div class="cs-foot">
-              <span class="cs-tag">官方原价 · 站点额度</span>
+              <span class="cs-tag">¥{{ m.inPrice }}/M 入 · ¥{{ m.outPrice }}/M 出</span>
               <span v-if="m.health" class="cs-h">健康 {{ m.health.score }}</span>
               <router-link :to="m.link" class="cs-detail">详情 →</router-link>
             </div>
@@ -644,8 +656,8 @@ button.hub-tab { font-family: inherit; }
 .cs-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .cs-card { background: var(--card,#121a26); border: 1px solid var(--border,rgba(128,140,160,.25)); border-radius: 13px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
 .cs-card:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.45); box-shadow: 0 8px 24px rgba(56,189,248,.12); }
-.cs-model { display: flex; align-items: center; gap: 8px; }
-.cs-id { font-weight: 800; font-size: 14px; color: var(--aqua,#38bdf8); text-decoration: none; word-break: break-all; }
+.cs-model { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cs-id { font-weight: 800; font-size: 13px; color: var(--aqua,#38bdf8); text-decoration: none; word-break: keep-all; overflow-wrap: normal; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-official { display: flex; flex-direction: column; gap: 3px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.15); border-radius: 9px; padding: 8px 10px; }
 .cs-official b { font-size: 13px; color: var(--aqua,#38bdf8); }
 .cs-official span { font-size: 10.5px; color: var(--muted,#8a94a6); line-height: 1.5; }

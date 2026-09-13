@@ -42,6 +42,8 @@ func New(c *config.Cfg, d *db.DBx) *App {
 	errSink = func(kind, detail string) { app.logError("api_"+kind, "", 0, 0, detail) }
 	// 诊断 D1：资金补偿任务（悬空预扣退款 / orphan billed 补台账）
 	app.startCompensator()
+	// NVIDIA 动态目录同步器（启动 30s 后首跑 + 每小时，nvidia_sync.go）
+	app.startNvidiaSyncer()
 	return app
 }
 
