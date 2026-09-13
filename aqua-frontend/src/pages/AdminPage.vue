@@ -1211,19 +1211,23 @@ async function doUserKeyRevoke(kid: number) {
 
           <!-- 账号池表格 -->
           <table class="adm-table" style="margin-top:10px">
-            <thead><tr><th>#</th><th>账号</th><th>状态</th><th class="num">已用/额度</th><th class="num">请求(成/总)</th>
+            <thead><tr><th>#</th><th>账号</th><th>状态</th><th class="num">官方余量</th><th class="num">本地已用/额度</th><th class="num">请求(成/总)</th>
               <th class="num">收入</th><th class="num">成本</th><th class="num">利润</th><th class="num">最近成功</th></tr></thead>
             <tbody>
-              <tr v-if="!codexData.accounts?.length"><td colspan="9" class="adm-empty">暂无账号记录</td></tr>
+              <tr v-if="!codexData.accounts?.length"><td colspan="10" class="adm-empty">暂无账号记录</td></tr>
               <tr v-for="acc in codexData.accounts" :key="acc.idx">
                 <td class="num">{{ acc.idx }}</td>
-                <td class="hs">{{ acc.note || ('账号#' + acc.idx) }}</td>
+                <td class="hs">{{ acc.note || ('账号#' + acc.idx) }}<span v-if="acc.plan_type" class="adm-tag" :class="acc.plan_type === 'free' ? '' : 'ok'" :title="'官方套餐（周限号会显示非 free 高额窗口）'">{{ acc.plan_type }}</span></td>
                 <td>
                   <span class="adm-tag" :class="acc.dead ? 'bad' : 'ok'">{{ acc.dead ? '已判死' : '存活' }}</span>
-                  <span v-if="!acc.dead && acc.remain_ratio <= 0.1" class="adm-tag warn" title="额度余量不足 10%">将耗尽</span>
+                  <span v-if="!acc.dead && acc.official_used_pct >= 99" class="adm-tag bad" title="官方用量已达上限">额度耗尽</span>
+                </td>
+                <td class="num" :title="'官方实时口径，窗口重置 ' + (acc.official_reset_at ? new Date(acc.official_reset_at * 1000).toLocaleString() : '—')">
+                  <template v-if="acc.official_used_pct >= 0"><b :class="acc.official_used_pct >= 90 ? 'bad' : ''">{{ (100 - acc.official_used_pct).toFixed(1) }}%</b><span class="dim" style="font-size:11px"> · {{ codexAgo(acc.official_reset_at) }}重置</span></template>
+                  <template v-else><span class="dim">—（待首次调用）</span></template>
                 </td>
                 <td class="num">
-                  <div class="adm-quota-bar" style="width:120px"><span :style="{ width: Math.min(100, (1 - (acc.remain_ratio || 0)) * 100) + '%' }"></span></div>
+                  <div class="adm-quota-bar" style="width:110px"><span :style="{ width: Math.min(100, (1 - (acc.remain_ratio || 0)) * 100) + '%' }"></span></div>
                   <span class="dim" style="font-size:11.5px">{{ codexFmtM(acc.total_tokens) }} / {{ codexFmtM(acc.quota_tokens) }}</span>
                 </td>
                 <td class="num">{{ acc.ok_calls }}/{{ acc.calls }}</td>

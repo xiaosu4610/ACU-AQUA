@@ -298,6 +298,9 @@ func InitTables(d *sql.DB) error {
 		{"admin_lines", "auth_style", "TEXT NOT NULL DEFAULT ''"},       // 鉴权风格：''=bearer | x-api-key | codex（ChatGPT 账号池 RT→AT+协议转换）
 		{"admin_lines", "proxy", "TEXT NOT NULL DEFAULT ''"},            // 线路级出站代理（http:// 或 socks5://，空=直连；gpt 线走本机 sing-box）
 		{"requests", "key_idx", "INTEGER NOT NULL DEFAULT -1"},          // 实际使用的钥池序（codex 账号粒度用量/利润记账；-1=非钥池线或失败请求）
+		{"admin_line_keys", "used_pct", "REAL NOT NULL DEFAULT -1"},     // codex 官方实时用量百分比（响应头 x-codex-primary-used-percent，-1=未知）
+		{"admin_line_keys", "reset_at", "INTEGER NOT NULL DEFAULT 0"},   // codex 官方用量窗口重置时间（unix 秒）
+		{"admin_line_keys", "plan_type", "TEXT NOT NULL DEFAULT ''"},    // codex 账号套餐（free/pro；响应头 x-codex-plan-type，周限号在此辨析）
 	}
 	for _, a := range alters {
 		var n int

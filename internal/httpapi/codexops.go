@@ -24,7 +24,29 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"acu-aqua/gateway/internal/config"
+	"acu-aqua/gateway/internal/upstream"
 )
+
+// recordCodexUsage codex 官方实时用量头落库（每次真实请求零成本更新；非 codex 线/无钥直接返回）
+func (a *App) recordCodexUsage(line *config.Line, key *upstream.KeyState, resp *http.Response) {
+	if line == nil || key == nil || resp == nil || line.AuthStyle != "codex" {
+		return
+	}
+	pv := resp.Header.Get("X-Codex-Primary-Used-Percent")
+	if pv == "" {
+		return
+	}
+	pct, err := strconv.ParseFloat(pv, 64)
+	if err != nil {
+		return
+	}
+	resetAt, _ := strconv.ParseInt(resp.Header.Get("X-Codex-Primary-Reset-At"), 10, 64)
+	plan := resp.Header.Get("X-Codex-Plan-Type")
+	_, _ = a.DB.Exec("UPDATE admin_line_keys SET used_pct=?, reset_at=?, plan_type=? WHERE line_id=? AND idx=?",
+		pct, resetAt, plan, line.ID, key.Idx)
+}
 
 const (
 	codexProbeURL    = "https://chatgpt.com/backend-api/codex/responses"
@@ -352,37 +374,43 @@ func (a *App) handleAdminCodex(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	// 账号清单（admin_line_keys 为事实源：note=邮箱标识，dead=判死）
+	// 账号清单（admin_line_keys 为事实源：note=邮箱标识，dead=判死，used_pct/reset_at/plan_type=官方实时口径）
 	type acctOut struct {
-		Idx          int64  `json:"idx"`
-		Note         string `json:"note"`
-		Dead         bool   `json:"dead"`
-		Calls        int64  `json:"calls"`
-		OkCalls      int64  `json:"ok_calls"`
-		PromptTokens int64  `json:"prompt_tokens"`
-		CompletionT  int64  `json:"completion_tokens"`
-		CachedTokens int64  `json:"cached_tokens"`
-		TotalTokens  int64  `json:"total_tokens"`
-		QuotaTokens  int64  `json:"quota_tokens"`
+		Idx          int64   `json:"idx"`
+		Note         string  `json:"note"`
+		Dead         bool    `json:"dead"`
+		Calls        int64   `json:"calls"`
+		OkCalls      int64   `json:"ok_calls"`
+		PromptTokens int64   `json:"prompt_tokens"`
+		CompletionT  int64   `json:"completion_tokens"`
+		CachedTokens int64   `json:"cached_tokens"`
+		TotalTokens  int64   `json:"total_tokens"`
+		QuotaTokens  int64   `json:"quota_tokens"`
 		RemainRatio  float64 `json:"remain_ratio"`
-		IncomeMicro  int64  `json:"income_micro"`
-		CostMicro    int64  `json:"cost_micro"`
-		ProfitMicro  int64  `json:"profit_micro"`
-		LastOKTs     int64  `json:"last_ok_ts"`
-		LastTs       int64  `json:"last_ts"`
+		IncomeMicro  int64   `json:"income_micro"`
+		CostMicro    int64   `json:"cost_micro"`
+		ProfitMicro  int64   `json:"profit_micro"`
+		LastOKTs     int64   `json:"last_ok_ts"`
+		LastTs       int64   `json:"last_ts"`
+		OfficialPct  float64 `json:"official_used_pct"` // 官方实时用量%（-1=尚无请求头数据）
+		ResetAt      int64   `json:"official_reset_at"` // 官方用量窗口重置时间
+		PlanType     string  `json:"plan_type"`         // free/pro（周限号在此辨析）
 	}
 	accounts := []acctOut{}
-	krows, kerr := a.DB.Query(`SELECT idx, COALESCE(note,''), dead FROM admin_line_keys WHERE line_id='codex' ORDER BY idx`)
+	krows, kerr := a.DB.Query(`SELECT idx, COALESCE(note,''), dead, used_pct, reset_at, plan_type FROM admin_line_keys WHERE line_id='codex' ORDER BY idx`)
 	if kerr == nil {
 		for krows.Next() {
 			var idx int64
-			var note string
+			var note, plan string
 			var dead int64
-			if krows.Scan(&idx, &note, &dead) != nil {
+			var usedPct float64
+			var resetAt int64
+			if krows.Scan(&idx, &note, &dead, &usedPct, &resetAt, &plan) != nil {
 				continue
 			}
 			x := agg[idx]
-			o := acctOut{Idx: idx, Note: note, Dead: dead != 0, QuotaTokens: codexQuotaTokens}
+			o := acctOut{Idx: idx, Note: note, Dead: dead != 0, QuotaTokens: codexQuotaTokens,
+				OfficialPct: usedPct, ResetAt: resetAt, PlanType: plan}
 			if x != nil {
 				o.Calls, o.OkCalls, o.LastTs, o.LastOKTs = x.Calls, x.Ok, x.LastTs, x.OkTs
 				o.PromptTokens, o.CompletionT, o.CachedTokens, o.TotalTokens = x.Prompt, x.Compl, x.Cached, x.Total

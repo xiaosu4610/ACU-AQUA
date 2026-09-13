@@ -517,7 +517,16 @@ func (c *Client) codexSend(ctx context.Context, k *KeyState, body []byte, stream
 	if err != nil {
 		return nil, err
 	}
+	// 官方用量头透传（x-codex-primary-used-percent / reset-at / plan-type）：
+	// httpapi 层按请求落库 admin_line_keys，看板显示官方实时余量，零额外请求
+	codexHeaders := http.Header{}
+	for hk, hv := range resp.Header {
+		if lk := strings.ToLower(hk); strings.HasPrefix(lk, "x-codex-") {
+			codexHeaders[hk] = hv
+		}
+	}
 	if resp.StatusCode != 200 {
+		resp.Header = mergeCodexHeaders(resp.Header, codexHeaders)
 		return resp, nil // 上层既有语义处理（401/403 判死换号、429/5xx 退避）
 	}
 	// 内部统一走上游 SSE：按用户 stream 要求实时转换或聚合
@@ -531,7 +540,7 @@ func (c *Client) codexSend(ctx context.Context, k *KeyState, body []byte, stream
 		}()
 		return &http.Response{
 			StatusCode: 200,
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Header:     mergeCodexHeaders(http.Header{"Content-Type": []string{"text/event-stream"}}, codexHeaders),
 			Body:       pr,
 		}, nil
 	}
@@ -542,9 +551,19 @@ func (c *Client) codexSend(ctx context.Context, k *KeyState, body []byte, stream
 	}
 	return &http.Response{
 		StatusCode: 200,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     mergeCodexHeaders(http.Header{"Content-Type": []string{"application/json"}}, codexHeaders),
 		Body:       io.NopCloser(bytes.NewReader(agg)),
 	}, nil
+}
+
+// mergeCodexHeaders 把官方 x-codex-* 用量头并进返回头（dst 优先，官方头不覆盖）
+func mergeCodexHeaders(dst, codex http.Header) http.Header {
+	for k, vs := range codex {
+		if _, ok := dst[k]; !ok {
+			dst[k] = vs
+		}
+	}
+	return dst
 }
 
 // codexModelOf 从站内请求体取模型名（响应回显用）

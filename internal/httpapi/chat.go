@@ -213,6 +213,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	if key != nil {
 		a.setRequestKeyIdx(rid, key.Idx) // codex 账号粒度记账：记实际使用的钥池序（换号后以最终为准）
 	}
+	a.recordCodexUsage(line, key, resp) // 官方实时用量头落库（429 满额头也有价值）
 
 	if resp.StatusCode != 200 {
 		eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -253,6 +254,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			if key != nil {
 				a.setRequestKeyIdx(rid, key.Idx)
+				a.recordCodexUsage(line, key, resp)
 			}
 			if resp.StatusCode != 200 {
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
