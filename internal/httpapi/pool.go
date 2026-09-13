@@ -38,13 +38,13 @@ func (a *App) poolGate(uid int64) (int, string, string) {
 	var balance int64
 	err := a.DB.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance)
 	if err == sql.ErrNoRows {
-		return 403, "crowd_pool_empty", "众筹池尚未启动，充值任意金额（低至 ¥5）即可点亮公共模型"
+		return 403, "crowd_pool_empty", "众筹池尚未启动，充值任意金额即可点亮公共模型"
 	}
 	if err != nil {
 		return 500, "internal_error", "众筹池查询失败"
 	}
 	if balance <= 0 {
-		return 403, "crowd_pool_empty", "众筹池已被大家用完，正在等待充值复活——充值任意金额（低至 ¥5）立刻点亮，救场者将登上荣誉墙"
+		return 403, "crowd_pool_empty", "众筹池已被大家用完，正在等待充值复活——充值任意金额立刻点亮，救场者将登上荣誉墙"
 	}
 	// 日配额检查（只查不扣：实际用量结算时累计）
 	poolQuotaMu.Lock()
@@ -299,25 +299,35 @@ func (a *App) poolRankUsage(w http.ResponseWriter, since int64) {
 		return
 	}
 	defer rows.Close()
+	type usageRow struct {
+		uid, s, n int64
+		name      string
+	}
+	var collected []usageRow
+	for rows.Next() {
+		var r usageRow
+		if rows.Scan(&r.uid, &r.name, &r.s, &r.n) == nil {
+			collected = append(collected, r)
+		}
+	}
+	rows.Close() // 先释放连接再补查（MaxOpenConns(1)：迭代中嵌套查询会自死锁）
 	type usageEntry struct {
 		poolRankEntry
 		Calls int64 `json:"calls"`
 	}
 	items := []usageEntry{}
 	rank := 0
-	for rows.Next() {
-		var uid, s, n int64
-		var name string
-		if rows.Scan(&uid, &name, &s, &n) == nil {
-			rank++
-			e := usageEntry{poolRankEntry{Rank: rank, User: maskPoolUser(uid, name), AmountMicro: s}, n}
-			var top string
-			_ = a.DB.QueryRow(
-				"SELECT note FROM pool_flows WHERE user_id=? AND type='consume' AND ts>=? GROUP BY note ORDER BY SUM(-amount_micro) DESC LIMIT 1",
-				uid, since).Scan(&top)
-			e.Note = top
-			items = append(items, e)
-		}
+	for _, r := range collected {
+		rank++
+		e := usageEntry{poolRankEntry{Rank: rank, User: maskPoolUser(r.uid, r.name), AmountMicro: r.s}, r.n}
+		var top string
+		// 主力模型：消费流水 request 关联 requests.model（pool_flows.note 存的是 billed 标记而非模型名）
+		_ = a.DB.QueryRow(
+			"SELECT COALESCE(r.model,'') FROM pool_flows f LEFT JOIN requests r ON r.rowid=f.request_id "+
+				"WHERE f.user_id=? AND f.type='consume' AND f.ts>=? GROUP BY r.model ORDER BY SUM(-f.amount_micro) DESC LIMIT 1",
+			r.uid, since).Scan(&top)
+		e.Note = top
+		items = append(items, e)
 	}
 	jsonOut(w, 200, map[string]any{"items": items})
 }
@@ -340,14 +350,22 @@ func (a *App) poolRankHonor(w http.ResponseWriter) {
 		Saves       int64  `json:"saves"`
 	}
 	heroes := []honor{}
+	type heroRow struct {
+		uid, amount, ts int64
+		name            string
+	}
+	var heroRows []heroRow
 	for rows.Next() {
-		var uid, amount, ts int64
-		var name string
-		if rows.Scan(&uid, &name, &amount, &ts) == nil {
-			h := honor{User: maskPoolUser(uid, name), AmountMicro: amount, Ts: ts}
-			_ = a.DB.QueryRow("SELECT COUNT(*) FROM pool_flows WHERE revival=1 AND user_id=?", uid).Scan(&h.Saves)
-			heroes = append(heroes, h)
+		var r heroRow
+		if rows.Scan(&r.uid, &r.name, &r.amount, &r.ts) == nil {
+			heroRows = append(heroRows, r)
 		}
+	}
+	rows.Close() // 先释放连接再补查（MaxOpenConns(1)：迭代中嵌套查询会自死锁）
+	for _, r := range heroRows {
+		h := honor{User: maskPoolUser(r.uid, r.name), AmountMicro: r.amount, Ts: r.ts}
+		_ = a.DB.QueryRow("SELECT COUNT(*) FROM pool_flows WHERE revival=1 AND user_id=?", r.uid).Scan(&h.Saves)
+		heroes = append(heroes, h)
 	}
 	elders := []poolRankEntry{}
 	rows2, err := a.DB.Query(`

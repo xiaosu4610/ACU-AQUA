@@ -570,9 +570,6 @@ func (a *App) myCheckup(w http.ResponseWriter, r *http.Request) {
 const (
 	payMinMicro = 10_000
 	payMaxMicro = 1_000_000_000
-
-	// 众筹池充值门槛（¥5：小额支付手续费占比过高）
-	poolRechargeMin = 5_000_000
 )
 
 // payOrders GET /v1/pay/orders → {items}（最近 20 条，与 Rust 版一致）
@@ -629,10 +626,6 @@ func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AmountMicro < payMinMicro || req.AmountMicro > payMaxMicro {
 		errOut(w, 400, "bad_request", "单笔金额须在 0.01 ~ 1000 元之间")
-		return
-	}
-	if req.Product == "pool" && req.AmountMicro < poolRechargeMin {
-		errOut(w, 400, "bad_request", "众筹池充值单笔最低 ¥5（小额支付手续费占比过高）")
 		return
 	}
 	if req.Channel != "alipay" && req.Channel != "wxpay" {

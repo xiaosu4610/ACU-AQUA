@@ -64,7 +64,7 @@ function yuan(v?: number): string {
 
 async function createTopup() {
   if (!isLoggedIn()) { payMsg.value = '请先登录再充值'; return }
-  if (topupMicro.value < 5_000_000) { payMsg.value = '众筹池充值单笔最低 ¥5'; return }
+  if (topupMicro.value < 10_000) { payMsg.value = '单笔金额须在 0.01 ~ 1000 元之间'; return }
   paying.value = true; payMsg.value = ''
   try {
     const j = await apiJson<any>('/pay/create', {
@@ -149,10 +149,10 @@ onMounted(async () => {
     <!-- 充值 -->
     <div class="dash-card pool-topup">
       <h2><AqIcon name="plus" :size="15" /> 扩充池子</h2>
-      <p class="topup-note">充值即注入公共池，由所有人共用消耗，<b>不可退、不可转个人余额</b>；单笔最低 ¥5。救场者（池子归零后第一笔充值）将登上荣誉墙。</p>
+      <p class="topup-note">充值即注入公共池，由所有人共用消耗，<b>不可退、不可转个人余额</b>；无最低充值限制，任意金额都能点亮池子。救场者（池子归零后第一笔充值）将登上荣誉墙。</p>
       <div class="amt-row">
         <button v-for="a in AMTS" :key="a" type="button" class="amt" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>
-        <input v-model.number="topupAmt" type="number" min="5" max="1000" placeholder="自定义" />
+        <input v-model.number="topupAmt" type="number" min="0.01" max="1000" placeholder="自定义" />
       </div>
       <div class="ch-row">
         <button type="button" class="ch" :class="{ on: topupChannel === 'alipay' }" @click="topupChannel = 'alipay'">支付宝</button>

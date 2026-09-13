@@ -383,7 +383,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           </div>
           <div class="cs-card cs-cta">
             <b>扩充池子</b>
-            <p>池子是大家的——充值即给所有人扩容（¥5 起），池子归零后第一笔充值自动登上荣誉墙</p>
+            <p>池子是大家的——充值即给所有人扩容，无最低限制，池子归零后第一笔充值自动登上荣誉墙</p>
             <router-link to="/pool" class="cs-btn">去众筹充值</router-link>
           </div>
         </div>
