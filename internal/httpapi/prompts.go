@@ -232,9 +232,12 @@ func (a *App) handleTreehole(w http.ResponseWriter, r *http.Request) {
 			"temperature": 0.85, "max_tokens": 1024,
 		})
 		req := &chatReq{Model: cand, Stream: stream}
-		resp, cancel := a.freeUpstreamChat(r, payload, req, line, upID)
+		resp, cancel, et := a.freeUpstreamChat(r, payload, req, line, upID)
 		if resp == nil {
-			a.recordHealth(cand, false, "network_error", 0, 0)
+			a.recordHealth(cand, false, et, 0, 0)
+			if et == "timeout" {
+				a.markRetired(upID)
+			}
 			continue
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {

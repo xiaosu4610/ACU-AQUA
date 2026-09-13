@@ -103,7 +103,11 @@ async function pgSend() {
   } catch (e) {
     ai.streaming = false
     const isAbort = (e as { name?: string })?.name === 'AbortError'
-    const msg = isAbort ? '已停止生成。' : '出错了：' + (errText(e) || '网络异常')
+    let msg = isAbort ? '已停止生成。' : '出错了：' + (errText(e) || '网络异常')
+    // 通道波动类错误附加自救引导（与后端人性化文案衔接：告诉用户怎么办而不是只报错）
+    if (!isAbort && /没有响应|拥堵|暂时不可用|维护|超时|波动/.test(msg)) {
+      msg += '\n提示：可换一个模型，或选 auto（智能路由会自动避开故障模型）；通道恢复后即可继续使用。'
+    }
     if (!ai.text) ai.err = msg
     else ai.text += '\n\n[' + msg + ']'
     // 失败时回滚最后一条用户消息，方便重试

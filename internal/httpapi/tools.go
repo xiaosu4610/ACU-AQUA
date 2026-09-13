@@ -866,9 +866,12 @@ func (a *App) freeDispatchJSON(model string, messages []map[string]any, temperat
 		start := time.Now()
 		dummy, _ := http.NewRequest("POST", "/internal", nil)
 		req := &chatReq{Model: cand, Stream: false}
-		resp, cancel := a.freeUpstreamChat(dummy, payload, req, ln, up)
+		resp, cancel, et := a.freeUpstreamChat(dummy, payload, req, ln, up)
 		if resp == nil {
-			a.recordHealth(cand, false, "network_error", 0, time.Since(start).Milliseconds())
+			a.recordHealth(cand, false, et, 0, time.Since(start).Milliseconds())
+			if et == "timeout" {
+				a.markRetired(up)
+			}
 			continue
 		}
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
@@ -1225,9 +1228,12 @@ func (a *App) handleToolsChat(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(v)
 		start := time.Now()
 		req := &chatReq{Model: cand, Stream: isStream}
-		resp, cancel := a.freeUpstreamChat(r, payload, req, line, upID)
+		resp, cancel, et := a.freeUpstreamChat(r, payload, req, line, upID)
 		if resp == nil {
-			a.recordHealth(cand, false, "network_error", 0, time.Since(start).Milliseconds())
+			a.recordHealth(cand, false, et, 0, time.Since(start).Milliseconds())
+			if et == "timeout" {
+				a.markRetired(upID)
+			}
 			continue
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {

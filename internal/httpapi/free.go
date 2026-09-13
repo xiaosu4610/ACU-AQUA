@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -431,14 +432,19 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		}
 		if retired[upID] {
 			errOut(w, 410, "model_retired",
-				"模型 "+model+" 已在上游永久下线，请更换模型。GET /v1/models 可查全部可用模型")
+				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
 		}
-		resp, cancel := a.freeUpstreamChat(r, body, req, line, upID)
+		resp, cancel, et := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp == nil {
-			a.recordHealth(model, false, "network_error", 0, time.Since(start).Milliseconds())
+			a.recordHealth(model, false, et, 0, time.Since(start).Milliseconds())
+			if et == "timeout" {
+				// 黑洞型故障（请求被上游静默挂起）：计入 retired，两次确认后自动摘除
+				a.markRetired(upID)
+			}
 			a.failRequest0(uid, keyHash, model, req.Stream, "upstream_error", 502)
-			errOut(w, 502, "upstream_error", "免费通道暂时不可用，请稍后重试")
+			errOut(w, 502, "upstream_error",
+				"模型 "+model+" 这会儿没有响应（上游拥堵或维护中），已为您记录；请稍后重试或换个模型——GET /v1/models 可查可用列表")
 			return
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
@@ -447,7 +453,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			cancel()
 			a.markRetired(upID)
 			errOut(w, 410, "model_retired",
-				"模型 "+model+" 已在上游永久下线，请更换模型。GET /v1/models 可查全部可用模型")
+				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
 		}
 		rid := a.insertRequest(uid, keyHash, "chat", model, req.Stream)
@@ -481,9 +487,12 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		if !ok || retired[upID] {
 			continue
 		}
-		resp2, cancel2 := a.freeUpstreamChat(r, body, req, line, upID)
+		resp2, cancel2, et := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp2 == nil {
-			a.recordHealth(m, false, "network_error", 0, time.Since(start).Milliseconds())
+			a.recordHealth(m, false, et, 0, time.Since(start).Milliseconds())
+			if et == "timeout" {
+				a.markRetired(upID)
+			}
 			continue
 		}
 		if resp2.StatusCode == 404 || resp2.StatusCode == 410 {
@@ -504,7 +513,8 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp = nil
 	}
 	if resp == nil {
-		errOut(w, 502, "upstream_error", "免费通道暂时不可用，请稍后重试或直接指定模型")
+		errOut(w, 502, "upstream_error",
+			"智能路由的候选模型这会儿全部没有响应（上游波动），请稍后重试，或直接指定一个模型——GET /v1/models 可查可用列表")
 		return
 	}
 	defer cancel()
@@ -518,14 +528,17 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 	}
 }
 
-// freeUpstreamChat 单次上游转发（返回 nil = 网络/池错误；调用方负责 Body/Cancel 生命周期与健康记录）
-func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line *config.Line, upID string) (*http.Response, context.CancelFunc) {
+// freeUpstreamChat 单次上游转发（返回 nil = 网络/池错误；调用方负责 Body/Cancel 生命周期与健康记录）。
+// 第三返回值为错误类型："timeout"（黑洞/排队超时，调用方计入 retired 摘除）| "network_error" | ""
+func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line *config.Line, upID string) (*http.Response, context.CancelFunc, string) {
 	upBody, err := replaceModel(body, upID)
 	if err != nil {
-		return nil, func() {}
+		return nil, func() {}, "network_error"
 	}
 	client := a.clientFor(line.ID)
-	timeout := 180 * time.Second
+	// 非流式 45s：上游黑洞（请求被静默挂起）时让用户尽快拿到明确报错，而非干等
+	// 流式 600s：长生成合理，黑洞场景由 retired 摘除兜底
+	timeout := 45 * time.Second
 	if req.Stream {
 		timeout = 600 * time.Second
 	}
@@ -534,9 +547,12 @@ func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line 
 	if err != nil {
 		cancel()
 		logFreeErr(line.ID, upID, err)
-		return nil, func() {}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, func() {}, "timeout"
+		}
+		return nil, func() {}, "network_error"
 	}
-	return resp, cancel
+	return resp, cancel, ""
 }
 
 // failRequest0 免费转发前置失败（未拿到响应）：记一条失败请求（0 计费）
