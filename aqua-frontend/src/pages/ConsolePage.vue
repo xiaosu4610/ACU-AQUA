@@ -600,8 +600,8 @@ function fmtTime(ts: number): string {
             <div class="key-create">
               <input v-model="newKeyName" maxlength="32" placeholder="密钥备注，如：我的笔记本 / 生产环境" @keydown.enter="doCreateKey" />
               <div class="grp-pick">
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" disabled title="按次计费已临时下架（仅按量计费开放），恢复后重新开放">
-                  <b>免费 + 按次计费</b><span>临时下架 · 暂不可选</span>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" @click="newKeyGrp = 'per_call'">
+                  <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro 系 ¥0.008/次</span>
                 </button>
                 <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
                   <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
@@ -612,7 +612,7 @@ function fmtTime(ts: number): string {
               </div>
               <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">创建密钥</button>
             </div>
-            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/模型 时，按量分组密钥按 tokens 三段扣费（免费模型不受影响，当前仅按量计费开放）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
+            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/ 模型时，按次分组按次数扣费（deepseek-v4-flash / glm-5.3-flash ¥0.004/次，deepseek-v4-pro / glm-5.2 / glm-5.3 ¥0.008/次），按量分组按 tokens 三段精算（免费模型不受影响）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
             <!-- 新密钥首次展示（之后可在列表随时复制） -->
             <div v-if="freshKey" class="fresh-key">
               <code>{{ freshKey }}</code>
@@ -652,8 +652,8 @@ function fmtTime(ts: number): string {
             <h3>切换密钥计费分组</h3>
             <p class="hint-line">密钥 <code>{{ grpEdit.prefix }}</code>（{{ grpEdit.name }}）——切换立即生效，无需重建密钥。</p>
             <div class="grp-pick vertical">
-              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" disabled title="按次计费已临时下架（仅按量计费开放），恢复后重新开放">
-                <b>免费 + 按次计费</b><span>临时下架 · 暂不可选</span>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" @click="grpEdit.grp = 'per_call'">
+                <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro 系 ¥0.008/次</span>
               </button>
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_token' }" @click="grpEdit.grp = 'per_token'">
                 <b>免费 + 按量计费</b><span>收费模型按 tokens 三段计费，模型最全</span>
