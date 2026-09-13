@@ -209,7 +209,7 @@ func insertFlow(tx *sql.Tx, userID, requestID int64, flowType string, amount, ba
 	return err
 }
 
-// BreakevenFloor 保本线（亏损防线）：per_call = ceil(cost / 0.93)；
+// BreakevenFloor 保本线（亏损防线）：per_call = ceil(cost / 0.97)（支付通道统一 3% 费率口径，2026-09-13 起）；
 // per_token 成本随 token 线性、售价比例恒定，返回 0（防线由播种价目本身保证）。
 func BreakevenFloor(costMicro int64, mode string) int64 {
 	if mode == "per_token" {
@@ -218,7 +218,7 @@ func BreakevenFloor(costMicro int64, mode string) int64 {
 	if costMicro <= 0 {
 		return 0
 	}
-	return (costMicro*100 + 92) / 93
+	return (costMicro*100 + 96) / 97
 }
 
 // LineKeyReport 面值台账：逐把密钥累计（内存 + DB 双写一致）

@@ -75,9 +75,9 @@ func TestFaceCostMicro_Golden(t *testing.T) {
 }
 
 func TestBreakevenFloor(t *testing.T) {
-	// 按次线：cost 1000 → (1000*100+92)/93 = 1076（整数除法，Rust 同式）
-	if got := BreakevenFloor(1000, "per_call"); got != 1076 {
-		t.Errorf("保本线: 期望 1075, 实得 %d", got)
+	// 按次线：cost 1000 → (1000*100+96)/97 = 1031（ceil(1000/0.97)，3% 通道费口径）
+	if got := BreakevenFloor(1000, "per_call"); got != 1031 {
+		t.Errorf("保本线: 期望 1031, 实得 %d", got)
 	}
 	// 按量线返回 0（防线由播种价目保证）
 	if got := BreakevenFloor(1000, "per_token"); got != 0 {

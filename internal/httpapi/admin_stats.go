@@ -325,8 +325,8 @@ func (a *App) currentPrices() ([]map[string]any, int64) {
 	return out, minPrice
 }
 
-// floorSafety 保本自检：breakeven = ceil(成本/0.94)（微信 6% 手续费口径，2026-09-13 起；
-// 支付宝 5% 更低、按更严的微信口径保本。旧 7% 口径公式 ceil(cost/0.93) 分步取整会低估保本线，一并修正）
+// floorSafety 保本自检：breakeven = ceil(成本/0.97)（支付通道统一 3% 手续费口径，2026-09-13 起；
+// 旧口径为支付宝 5%/微信 6% 按更严的 ceil(cost/0.94)，切换 pay.faka08.com 双通道统一 3% 后更新）
 func (a *App) floorSafety() []map[string]any {
 	out := []map[string]any{}
 	now := time.Now().Unix()
@@ -349,7 +349,7 @@ func (a *App) floorSafety() []map[string]any {
 			if cost <= 0 {
 				continue
 			}
-			breakeven := (cost*100 + 93) / 94 // ceil(cost/0.94)：微信 6% 费率后到手 94%
+			breakeven := (cost*100 + 96) / 97 // ceil(cost/0.97)：通道 3% 费率后到手 97%
 			margin := 0.0
 			if sell > 0 {
 				margin = float64(sell-breakeven) / float64(sell) * 100
