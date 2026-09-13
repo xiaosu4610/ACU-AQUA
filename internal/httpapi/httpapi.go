@@ -414,8 +414,8 @@ func (a *App) statusModelNorm() map[string]string {
 		if l.Mode == "free" {
 			continue
 		}
-		if l.Mode == "official" || l.Mode == "crowd" {
-			// tlk 官方中转线 / acu 众筹专线：独立前缀（tlk/xxx、acu/xxx），目录/状态/请求三方同 ID 恒等映射
+		if l.Mode == "official" || l.Mode == "crowd" || l.AuthStyle == "codex" {
+			// tlk 官方中转线 / acu 众筹专线 / codex GPT 专线：独立前缀（tlk/xxx、acu/xxx、codex/xxx），目录/状态/请求三方同 ID 恒等映射
 			for j := range l.Models {
 				full := config.ModelFullName(l.ID, l.Models[j].SiteID)
 				m[full] = full

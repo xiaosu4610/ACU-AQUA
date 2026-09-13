@@ -52,7 +52,7 @@ async function loadLive() {
   try {
     // 走统一 API 基址（api.ltzy.top）——相对路径 fetch 在前端域名下会被 nginx SPA 接管
     const j = await apiJson<{ data: LiveRow[]; generated_ts: number }>('/models/status')
-    liveRows.value = (j.data || []).filter((x: LiveRow) => /^(aqua|acu)\//.test(x.model))
+    liveRows.value = (j.data || []).filter((x: LiveRow) => /^(aqua|acu|codex|tlk)\//.test(x.model))
     liveTs.value = j.generated_ts || 0
   } catch { /* 静默：下一轮自动重试 */ }
   liveLoading.value = false
