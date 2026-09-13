@@ -16,6 +16,7 @@
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; color: var(--txt0); letter-spacing: .02em; }
 .brand svg { width: 26px; height: 26px; }
+.brand img { width: 26px; height: 26px; display: block; border-radius: 6px; object-fit: contain; }
 .brand em { font-style: normal; background: var(--acc-grad-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
 .pnav { display: flex; align-items: center; gap: 2px; margin-left: 8px; }

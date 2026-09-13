@@ -387,9 +387,9 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// gatewayVersion 网关版本（/status 展示；构建时可注入：
-// go build -ldflags "-X acu-aqua/gateway/internal/httpapi.gatewayVersion=v2026.09.12"）
-var gatewayVersion = "go-2026.09"
+// gatewayVersion 网关版本（/status 与管理后台展示，遵循 SemVer 2.0.0；
+// 构建时可注入：go build -ldflags "-X acu-aqua/gateway/internal/httpapi.gatewayVersion=v1.0.0"）
+var gatewayVersion = "v1.0.0"
 
 // handleMeta 站点信息（前端渲染源，全部来自配置——代码零运营事实）
 // handleMeta 已迁 settings.go（站点配置 DB 外置化：settings 表优先，config 兜底）
