@@ -220,7 +220,7 @@ func (a *App) Routes() http.Handler {
 func corsGate(mux *http.ServeMux) http.Handler {
 	cors := func(w http.ResponseWriter) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-api-key")
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
