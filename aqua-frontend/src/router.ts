@@ -24,6 +24,7 @@ const router = createRouter({
     { path: '/finance', component: () => import('@/pages/FinancePage.vue') },
     { path: '/community', component: () => import('@/pages/CommunityPage.vue') },
     { path: '/sponsor', component: () => import('@/pages/SponsorPage.vue') },
+    { path: '/pool', component: () => import('@/pages/PoolPage.vue') },
     { path: '/login', component: () => import('@/pages/LoginPage.vue') },
     { path: '/console', component: () => import('@/pages/ConsolePage.vue') },
     // 站长管理控制台（单密码，站内导航无入口；meta.noindex 由页面动态设置 robots）

@@ -124,6 +124,23 @@ func InitTables(d *sql.DB) error {
 			dead INTEGER NOT NULL DEFAULT 0,
 			updated_ts INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (line_id, idx))`,
+		// —— 众筹池（acu/ 公共算力池：与个人余额物理隔离）——
+		`CREATE TABLE IF NOT EXISTS pool_wallet (
+			id            TEXT PRIMARY KEY,
+			balance_micro INTEGER NOT NULL DEFAULT 0,
+			charged_micro INTEGER NOT NULL DEFAULT 0,
+			used_micro    INTEGER NOT NULL DEFAULT 0,
+			updated_ts    INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS pool_flows (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id       INTEGER NOT NULL DEFAULT 0,
+			type          TEXT NOT NULL,
+			amount_micro  INTEGER NOT NULL,
+			balance_after INTEGER NOT NULL,
+			revival       INTEGER NOT NULL DEFAULT 0,
+			request_id    INTEGER NOT NULL DEFAULT 0,
+			note          TEXT NOT NULL DEFAULT '',
+			ts            INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS admin_audit (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			action TEXT NOT NULL,
@@ -273,6 +290,7 @@ func InitTables(d *sql.DB) error {
 		{"requests", "resolved_line", "TEXT NOT NULL DEFAULT ''"}, // 统一前缀路由解析出的实际线（统计口径）
 		{"admin_line_models", "degraded", "INTEGER NOT NULL DEFAULT 0"}, // 降级标记（诊断 D4：上游故障手动标记）
 		{"admin_line_models", "key_idx", "INTEGER NOT NULL DEFAULT -1"}, // 模型专属密钥池序（-1=自动走粘性池；≥0 锁定非 dead 钥排序后的第 N 把，按模型分工钥）
+		{"payments", "product", "TEXT NOT NULL DEFAULT 'balance'"},      // 支付产品分流：balance=个人余额充值 / pool=众筹池充值
 	}
 	for _, a := range alters {
 		var n int

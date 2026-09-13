@@ -28,16 +28,16 @@ type readerBody struct {
 
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
-	Model    string          `json:"model"`
-	Stream   bool            `json:"stream"`
-	MaxTokens json.Number    `json:"max_tokens,omitempty"`
-	Raw      json.RawMessage `json:"-"`
+	Model     string          `json:"model"`
+	Stream    bool            `json:"stream"`
+	MaxTokens json.Number     `json:"max_tokens,omitempty"`
+	Raw       json.RawMessage `json:"-"`
 }
 
 // usage JSON（上游响应内）
 type usageJSON struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
+	PromptTokens        int64 `json:"prompt_tokens"`
+	CompletionTokens    int64 `json:"completion_tokens"`
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -45,7 +45,8 @@ type usageJSON struct {
 
 // handleChat /v1/chat/completions 主入口：
 // 鉴权 → 收费线路由（统一前缀按密钥分组选线 / 线前缀显式直连）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
-//  → 预扣→上游→结算（多退少补）
+//
+//	→ 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
@@ -96,6 +97,14 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if kg != "official" {
 			errOut(w, 403, "official_line_restricted", "tlk/ 官方中转模型仅限官方中转分组密钥调用——请在控制台创建或切换为「官方中转」分组密钥")
+			return
+		}
+	}
+	if line != nil && line.Mode == "crowd" {
+		// acu/ 众筹专线：所有分组密钥可调（含纯免费），计费走众筹池（不碰个人余额）
+		// 闸门 = 池子有余额 + 用户当日配额未超；池子归零即熔断，充值即复活
+		if sc, code, msg := a.poolGate(actx.UserID); sc != 0 {
+			errOut(w, sc, code, msg)
 			return
 		}
 	}
@@ -170,18 +179,22 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 预扣额：per_call = 单价；per_token = 输入估算 + max_tokens×输出价（保守上限），且 ≥ floor
-	prehold := a.preholdAmount(model, pricing, upBody)
+	// 预扣额：per_call = 单价；per_token = 输入估算 + max_tokens×输出价（保守上限），且 ≥ floor。
+	// crowd（acu/ 众筹池）不预扣个人余额：池子共享钱包，请求前已过 poolGate 闸门
+	prehold := int64(0)
+	if line.Mode != "crowd" {
+		prehold = a.preholdAmount(model, pricing, upBody)
 
-	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
-		if errors.Is(err, billing.ErrInsufficientBalance) {
-			a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写，不留 (empty) 盲区
-			errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
+		if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
+			if errors.Is(err, billing.ErrInsufficientBalance) {
+				a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写，不留 (empty) 盲区
+				errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
+				return
+			}
+			a.failRequest(rid, "prehold_error", 500)
+			errOut(w, 500, "internal_error", "预扣失败")
 			return
 		}
-		a.failRequest(rid, "prehold_error", 500)
-		errOut(w, 500, "internal_error", "预扣失败")
-		return
 	}
 
 	// 上游转发
@@ -191,7 +204,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 		return
@@ -200,7 +213,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode != 200 {
 		eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
 		a.failRequest(rid, "upstream_status", resp.StatusCode)
 		// 信息隔离：上游报错转译为站点标准错误码，不透传原文
 		upstreamErrOut(w, resp.StatusCode, eb)
@@ -219,7 +232,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 			if probe == 2 {
 				log.Printf("[chat] 首帧前断流 model=%s line=%s，重试耗尽", req.Model, line.ID)
-				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 				return
@@ -230,7 +243,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			resp, key, err = client.DoKey(ctx, upBody, true, "/chat/completions", model.KeyIdx)
 			if err != nil {
 				log.Printf("[chat] 重试仍失败 model=%s line=%s err=%v", req.Model, line.ID, err)
-				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 				return
@@ -238,7 +251,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			if resp.StatusCode != 200 {
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 				_ = resp.Body.Close()
-				a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
+				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(resp.StatusCode))
 				a.failRequest(rid, "upstream_status", resp.StatusCode)
 				upstreamErrOut(w, resp.StatusCode, eb)
 				return
@@ -254,7 +267,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		a.settleSafely(uid, prehold, 0, rid, 0, "read_error")
+		a.settleFor(line, uid, prehold, 0, rid, 0, "read_error")
 		a.failRequest(rid, "read_error", 502)
 		errOut(w, 502, "upstream_error", "上游响应读取失败")
 		return
@@ -267,7 +280,7 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		Error   json.RawMessage   `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil || (len(probe.Choices) == 0 && len(probe.Error) == 0) {
-		a.settleSafely(uid, prehold, 0, rid, 0, "upstream_malformed")
+		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_malformed")
 		a.failRequest(rid, "upstream_malformed", 502)
 		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
 		return
@@ -297,7 +310,7 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		face = 0
 	}
 	// 结算（多退少补）+ 面值台账 + 请求回写
-	a.settleSafely(uid, prehold, final, rid, final, "billed")
+	a.settleFor(line, uid, prehold, final, rid, final, "billed")
 	if face > 0 && key != nil {
 		c.Pool.ReportFace(key, face)
 		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
@@ -318,7 +331,7 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		a.settleSafely(uid, prehold, 0, rid, 0, "no_flusher")
+		a.settleFor(line, uid, prehold, 0, rid, 0, "no_flusher")
 		a.failRequest(rid, "no_flusher", 500)
 		errOut(w, 500, "internal_error", "流式不可用")
 		return
@@ -333,8 +346,8 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	final := int64(0)
 	faceTotal := int64(0)
 	settled := false
-	sawDone := false       // 上游是否已发 [DONE]（未发即中断 → 客户端拿到的是截断流）
-	interrupted := false   // 上游异常中断（区别于客户端主动断开）
+	sawDone := false     // 上游是否已发 [DONE]（未发即中断 → 客户端拿到的是截断流）
+	interrupted := false // 上游异常中断（区别于客户端主动断开）
 	settle := func() {
 		if settled {
 			return
@@ -353,11 +366,11 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				c.Pool.ReportFace(key, faceTotal)
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
-			a.settleSafely(uid, prehold, final, rid, final, "billed")
+			a.settleFor(line, uid, prehold, final, rid, final, "billed")
 			a.okRequestGen(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200, genMs(firstByte))
 		} else if interrupted {
 			// 一帧有效内容都没有且上游异常中断：全额退回
-			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
 			a.failRequest(rid, "stream_incomplete", 502)
 		} else if p != nil {
 			// 上游正常收尾但未发 usage：按保底/单价收（与原口径一致，防薅羊毛）
@@ -366,10 +379,10 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 			} else {
 				final = p.FloorMicro
 			}
-			a.settleSafely(uid, prehold, final, rid, final, "billed")
+			a.settleFor(line, uid, prehold, final, rid, final, "billed")
 			a.okRequest(rid, u, final, faceTotal, "estimated", time.Since(start).Milliseconds(), 200)
 		} else {
-			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
+			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
 			a.failRequest(rid, "stream_incomplete", 502)
 		}
 	}
@@ -526,8 +539,8 @@ func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte
 	}
 	// 输入估算：消息体长度/4 × 1.2 保守余量（与 Rust 版口径一致）
 	var req struct {
-		Messages json.RawMessage `json:"messages"`
-		MaxTokens int64          `json:"max_tokens"`
+		Messages  json.RawMessage `json:"messages"`
+		MaxTokens int64           `json:"max_tokens"`
 	}
 	_ = json.Unmarshal(body, &req)
 	est := int64(float64(len(req.Messages))/4*1.2) + 16

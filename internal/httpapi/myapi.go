@@ -570,6 +570,9 @@ func (a *App) myCheckup(w http.ResponseWriter, r *http.Request) {
 const (
 	payMinMicro = 10_000
 	payMaxMicro = 1_000_000_000
+
+	// 众筹池充值门槛（¥5：小额支付手续费占比过高）
+	poolRechargeMin = 5_000_000
 )
 
 // payOrders GET /v1/pay/orders → {items}（最近 20 条，与 Rust 版一致）
@@ -600,7 +603,8 @@ func (a *App) payOrders(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"items": items})
 }
 
-// payCreate POST /v1/pay/create {amount_micro, channel} → {out_trade_no, pay_url, amount_micro, credit_micro, channel}
+// payCreate POST /v1/pay/create {amount_micro, channel, product} → {out_trade_no, pay_url, amount_micro, credit_micro, channel}
+// product：balance=个人余额充值（默认）/ pool=众筹池充值（净到手注入公共池，不可退不转个人余额）
 func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 	actx := auth.Authenticate(a.DB.DB, r)
 	if actx == nil {
@@ -614,9 +618,21 @@ func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AmountMicro int64  `json:"amount_micro"`
 		Channel     string `json:"channel"` // alipay | wxpay
+		Product     string `json:"product"` // balance | pool
+	}
+	if req.Product == "" {
+		req.Product = "balance"
+	}
+	if req.Product != "balance" && req.Product != "pool" {
+		errOut(w, 400, "bad_request", "product 仅支持 balance / pool")
+		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AmountMicro < payMinMicro || req.AmountMicro > payMaxMicro {
 		errOut(w, 400, "bad_request", "单笔金额须在 0.01 ~ 1000 元之间")
+		return
+	}
+	if req.Product == "pool" && req.AmountMicro < poolRechargeMin {
+		errOut(w, 400, "bad_request", "众筹池充值单笔最低 ¥5（小额支付手续费占比过高）")
 		return
 	}
 	if req.Channel != "alipay" && req.Channel != "wxpay" {
@@ -634,15 +650,16 @@ func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 	no := genTradeNo()
 	now := time.Now().Unix()
 	if _, err := a.DB.Exec(
-		"INSERT INTO payments (out_trade_no, user_id, amount_micro, channel, status, ip, created_ts) VALUES (?,?,?,?, 'pending', ?, ?)",
-		no, actx.UserID, req.AmountMicro, req.Channel, clientIP(r), now); err != nil {
+		"INSERT INTO payments (out_trade_no, user_id, amount_micro, channel, product, status, ip, created_ts) VALUES (?,?,?,?,?, 'pending', ?, ?)",
+		no, actx.UserID, req.AmountMicro, req.Channel, req.Product, clientIP(r), now); err != nil {
 		errOut(w, 500, "internal_error", "订单创建失败")
 		return
 	}
-	payURL := a.epaySubmitURL(no, req.AmountMicro, req.Channel)
+	payURL := a.epaySubmitURL(no, req.AmountMicro, req.Channel, req.Product)
 	jsonOut(w, 200, map[string]any{
 		"out_trade_no": no, "pay_url": payURL,
 		"amount_micro": req.AmountMicro, "credit_micro": req.AmountMicro, "channel": req.Channel,
+		"product": req.Product,
 	})
 }
 
@@ -674,9 +691,17 @@ func (a *App) payStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	var bal int64
 	_ = a.DB.QueryRow("SELECT balance_micro FROM users WHERE id=?", actx.UserID).Scan(&bal)
+	// pool 单：附带众筹池余额（前端充值弹窗轮询展示）
+	var poolBal int64
+	var product string
+	_ = a.DB.QueryRow("SELECT COALESCE(product,'balance') FROM payments WHERE out_trade_no=?", no).Scan(&product)
+	if product == "pool" {
+		_ = a.DB.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&poolBal)
+	}
 	jsonOut(w, 200, map[string]any{
 		"out_trade_no": no, "status": status,
 		"amount_micro": amount, "credit_micro": amount, "balance_micro": bal,
+		"product": product, "pool_balance_micro": poolBal,
 	})
 }
 
@@ -763,12 +788,13 @@ func (a *App) payNotify(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("success"))
 }
 
-// epaySettle 入账（幂等：仅 pending → paid 一次性入账，事务）
+// epaySettle 入账（幂等：仅 pending → paid 一次性入账，事务）。
+// product 分流：balance → 个人余额（原路径）；pool → 众筹池（poolChargeTx，含救场英雄 revival 判定）
 func (a *App) epaySettle(outTradeNo, tradeNo string) {
 	var uid, amount int64
-	var status string
-	err := a.DB.QueryRow("SELECT user_id, amount_micro, status FROM payments WHERE out_trade_no=?", outTradeNo).
-		Scan(&uid, &amount, &status)
+	var status, product string
+	err := a.DB.QueryRow("SELECT user_id, amount_micro, status, COALESCE(product,'balance') FROM payments WHERE out_trade_no=?", outTradeNo).
+		Scan(&uid, &amount, &status, &product)
 	if err != nil || status != "pending" {
 		return
 	}
@@ -785,6 +811,18 @@ func (a *App) epaySettle(outTradeNo, tradeNo string) {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		_ = tx.Rollback()
+		return
+	}
+	if product == "pool" {
+		// 众筹池充值：净到手直接注入公共池（手续费由站方承担，池子按全额入账口径透明）
+		if err := poolChargeTx(tx, uid, amount, "众筹池充值"); err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			return
+		}
+		a.auditAppend("pool_recharge", uid, "amount="+strconv.FormatInt(amount, 10), "")
 		return
 	}
 	if _, err := tx.Exec("UPDATE users SET balance_micro=balance_micro+? WHERE id=?", amount, uid); err != nil {
@@ -804,15 +842,19 @@ func (a *App) epaySettle(outTradeNo, tradeNo string) {
 }
 
 // epaySubmitURL 构造易支付跳转链接（MD5 签名，参数排序拼接）
-func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel string) string {
+func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel, product string) string {
 	money := fmt.Sprintf("%.2f", float64(amountMicro)/1_000_000)
+	name := "余额充值"
+	if product == "pool" {
+		name = "众筹池充值"
+	}
 	params := map[string]string{
 		"pid":          a.Cfg.EPay.PID,
 		"type":         channel,
 		"out_trade_no": outTradeNo,
 		"notify_url":   a.Cfg.EPay.NotifyBase + "/v1/pay/notify",
 		"return_url":   a.Cfg.EPay.ReturnBase + "/pay/return",
-		"name":         "余额充值",
+		"name":         name,
 		"money":        money,
 	}
 	params["sign"] = a.epaySign(params)

@@ -223,6 +223,21 @@ async function loadUsage() {
     const maxc = byModel.length ? (byModel[0].calls || 1) : 1
     modelRows.value = byModel.map((m: any) => ({ model: m.model, width: Math.max(4, Math.round((m.calls * 100) / maxc)), val: fmt(m.calls) + ' 次' }))
   } catch (e) { usageMsg.value = errText(e) }
+  loadMyPool()
+}
+
+/* ===== 我的众筹池（acu/ 前缀模型公共池明细） ===== */
+const myPool = ref<any>({})
+function poolYuan(v?: number): string {
+  if (v == null) return '--'
+  return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+}
+function fmtPoolTs(t: number): string {
+  const d = new Date((t || 0) * 1000), p = (x: number) => (x < 10 ? '0' : '') + x
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+async function loadMyPool() {
+  try { myPool.value = await apiJson<any>('/my/pool/flows', { session: true }) } catch { /* 忽略 */ }
 }
 
 /* ===== 请求历史明细（分页，全字段） ===== */
@@ -632,7 +647,7 @@ function fmtTime(ts: number): string {
               <p class="keys-head-txt">一把密钥即可调用全部端点；分组决定收费模型的计费方式，随时可切换。</p>
               <button class="btn tool-run keys-cta" @click="openMk"><AqIcon name="plus" :size="14" /> 创建密钥</button>
             </div>
-            <p class="hint-line neutral">按次分组：flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次；按量分组：按 tokens 三段精算，模型最全；官方中转分组：tlk/ 前缀独占高速模型，官方原价 6 折；纯免费密钥只可调免费模型，绝不产生扣费。</p>
+            <p class="hint-line neutral">按次分组：flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次；按量分组：按 tokens 三段精算，模型最全；官方中转分组：tlk/ 前缀独占高速模型，官方原价 6 折；纯免费密钥只可调免费模型，绝不产生扣费。acu/ 前缀为<router-link to="/pool">众筹公共模型</router-link>——任何分组密钥都可调用，从公共池五折扣费，个人余额不受影响。</p>
             <div class="key-list">
               <div v-if="!keys.length" class="dash-empty">还没有密钥，创建一把开始调用</div>
               <div v-for="k in keys" :key="k.id" class="key-row" :class="{ revoked: k.revoked }">
@@ -749,6 +764,27 @@ function fmtTime(ts: number): string {
               </div>
             </div>
             <p v-if="usageMsg" class="hint-line">{{ usageMsg }}</p>
+          </div>
+          <!-- 我的众筹池（acu/ 前缀模型从公共池扣费，与个人余额无关） -->
+          <div class="dash-sec" style="margin-top:14px;">
+            <div class="vhead" style="margin-bottom:10px;">
+              <span class="vic" style="color:#a5b4fc;"><AqIcon name="coin" :size="16" /></span>
+              <div><h2 style="font-size:15px;">我的众筹池</h2><p>acu/ 前缀众筹模型从公共池扣费（五折口径），个人余额未动</p></div>
+              <router-link to="/pool" class="mini-btn" style="margin-left:auto;text-decoration:none;">池子账本与榜单 →</router-link>
+            </div>
+            <div class="dash-cards">
+              <div class="dash-card"><b>¥{{ poolYuan(myPool.balance_micro) }}</b><span>池子当前余额</span></div>
+              <div class="dash-card"><b>¥{{ poolYuan(myPool.my_charged_micro) }}</b><span>我累计注入</span></div>
+              <div class="dash-card"><b>¥{{ poolYuan(myPool.my_used_micro) }}</b><span>我累计消耗</span></div>
+              <div class="dash-card"><b :style="{ color: myPool.net_micro >= 0 ? '#34d399' : '#fbbf24' }">¥{{ poolYuan(myPool.net_micro) }}</b><span>我的净贡献</span></div>
+            </div>
+            <div class="usage-models" style="max-height:260px;overflow-y:auto;">
+              <div v-if="!myPool.items || !myPool.items.length" class="dash-empty">还没有众筹池记录——acu/ 模型免充值即可调用</div>
+              <div v-for="(f, i) in myPool.items" :key="i" class="stat-row">
+                <span class="nm" :title="f.model || ''">{{ fmtPoolTs(f.ts) }} · {{ f.type === 'consume' ? (f.model || '扣费') : (f.type === 'charge' ? '充值' : '官方注入') }}<template v-if="f.type === 'consume'">（入 {{ f.prompt_tokens }} / 出 {{ f.completion_tokens }}）</template></span>
+                <span class="val" :style="{ color: f.amount_micro > 0 ? '#34d399' : 'var(--muted,#8a94a6)' }">{{ f.amount_micro > 0 ? '+' : '' }}¥{{ poolYuan(f.amount_micro) }}</span>
+              </div>
+            </div>
           </div>
         </div>
 

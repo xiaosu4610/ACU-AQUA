@@ -10,7 +10,17 @@ import (
 	"time"
 
 	"acu-aqua/gateway/internal/billing"
+	"acu-aqua/gateway/internal/config"
 )
+
+// settleFor 结算分发：crowd 线（acu/ 众筹池）走池子扣账，其余走个人余额结算（多退少补）
+func (a *App) settleFor(line *config.Line, uid, preheld, final, rid, unitPrice int64, note string) {
+	if line != nil && line.Mode == "crowd" {
+		a.poolConsume(uid, final, rid, note)
+		return
+	}
+	a.settleSafely(uid, preheld, final, rid, unitPrice, note)
+}
 
 // settleSafely 结算兜底：失败按 50/200/800ms 指数退避重试 3 次，
 // 仍失败则落 error_events（错误中心）+ 标准日志，绝不再静默吞错。

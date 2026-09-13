@@ -6,12 +6,13 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { apiJson, errText, fmt } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
 
-type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'update'
+type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'pool' | 'update'
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: '仪表盘', icon: 'chart' },
   { id: 'users', label: '客户管理', icon: 'user' },
   { id: 'lines', label: '上游管理', icon: 'puzzle' },
   { id: 'quota', label: '上游额度', icon: 'bolt' },
+  { id: 'pool', label: '众筹池', icon: 'coin' },
   { id: 'supervision', label: '额度监管', icon: 'gauge' },
   { id: 'audit', label: '审计日志', icon: 'list' },
   { id: 'reconcile', label: '对账', icon: 'shield' },
@@ -67,10 +68,41 @@ function go(v: View) {
   if (v === 'users') loadUsers()
   if (v === 'lines') loadLines()
   if (v === 'quota') loadQuota()
+  if (v === 'pool') loadPool()
   if (v === 'supervision') loadSupervision()
   if (v === 'audit') loadAudit()
   if (v === 'reconcile') loadReconcile()
   if (v === 'update') loadUpdate()
+}
+
+/* ===== 众筹池（acu/ 公共算力池）：状态 + 官方注入 ===== */
+const poolStatus = ref<any>(null)
+const poolFlows = ref<any[]>([])
+const seedAmt = ref<number>(10)
+const seedPw = ref('')
+const seeding = ref(false)
+const poolMsg = ref('')
+const poolMsgOk = ref(false)
+function adminYuan(v?: number): string {
+  if (v == null) return '--'
+  return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+}
+async function loadPool() {
+  try { poolStatus.value = await apiJson<any>('/pool/status') } catch { poolStatus.value = null }
+  try { const j = await apiJson<any>('/pool/flows?limit=50'); poolFlows.value = j.items || [] } catch { poolFlows.value = [] }
+}
+async function doSeed() {
+  const micro = Math.round((Number(seedAmt.value) || 0) * 1_000_000)
+  if (micro <= 0) { poolMsg.value = '注入金额须大于 0'; poolMsgOk.value = false; return }
+  seeding.value = true; poolMsg.value = ''
+  try {
+    const j = await apiJson<any>('/admin/pool/seed', { method: 'POST', key: token.value, body: { amount_micro: micro, confirm_password: seedPw.value } })
+    poolMsg.value = `注入成功，池子当前 ¥${adminYuan(j.balance_micro)}`
+    poolMsgOk.value = true
+    seedPw.value = ''
+    loadPool()
+  } catch (e: any) { poolMsg.value = e?.message || String(e); poolMsgOk.value = false }
+  seeding.value = false
 }
 
 /* 金额换算：微元 → 元（3 位小数） */
@@ -1387,6 +1419,53 @@ async function doUserKeyRevoke(kid: number) {
         </div>
       </div>
 
+      <!-- ▼ 众筹池 ▼ -->
+      <div v-else-if="view === 'pool'" class="adm-view">
+        <div class="adm-cards">
+          <div class="adm-card" :class="{ bad: poolStatus && poolStatus.balance_micro <= 0 }">
+            <b>池子余额</b>
+            <strong class="num">¥{{ adminYuan(poolStatus?.balance_micro) }}</strong>
+            <span>{{ poolStatus ? (poolStatus.balance_micro > 0 ? '供血中' : '已熔断 · acu/ 调用被拒') : '加载中…' }}</span>
+          </div>
+          <div class="adm-card">
+            <b>累计充值（净到手）</b>
+            <strong class="num">¥{{ adminYuan(poolStatus?.charged_micro) }}</strong>
+            <span>用户充值 {{ poolStatus ? poolStatus.consumers : 0 }} 人共用消耗</span>
+          </div>
+          <div class="adm-card">
+            <b>累计消耗（五折口径）</b>
+            <strong class="num">¥{{ adminYuan(poolStatus?.used_micro) }}</strong>
+            <span>今日消耗 ¥{{ adminYuan(poolStatus?.today_used_micro) }} · 上游按 3.75 折烧，沉淀 ≈25% 毛利</span>
+          </div>
+        </div>
+        <div class="adm-cards">
+          <div class="adm-card wide">
+            <b>官方注入（写 seed 流水，二次密码确认）</b>
+            <div class="seed-row">
+              <input v-model.number="seedAmt" type="number" min="0.01" max="1000" step="0.01" placeholder="金额（元）">
+              <input v-model="seedPw" type="password" placeholder="管理员二次密码" autocomplete="off">
+              <button class="btn tool-run" :disabled="seeding" @click="doSeed">{{ seeding ? '注入中…' : '注入池子' }}</button>
+            </div>
+            <p v-if="poolMsg" class="adm-msg" :class="{ ok: poolMsgOk, bad: !poolMsgOk }">{{ poolMsg }}</p>
+          </div>
+        </div>
+        <div class="adm-cards">
+          <div class="adm-card wide">
+            <b>最近流水（公开账本同源 · 脱敏展示）</b>
+            <div class="pool-flows">
+              <div v-if="!poolFlows.length" class="adm-msg">暂无流水</div>
+              <div v-for="f in poolFlows" :key="f.id" class="pf-row">
+                <span class="pf-type">{{ f.type === 'charge' ? '充值' : f.type === 'consume' ? '扣费' : f.type === 'seed' ? '注入' : '调整' }}</span>
+                <span v-if="f.revival" class="pf-revival">救场</span>
+                <span class="pf-user">{{ f.user }}</span>
+                <span class="pf-amt">{{ f.amount_micro > 0 ? '+' : '' }}{{ adminYuan(f.amount_micro) }}</span>
+                <span class="pf-bal">池余 ¥{{ adminYuan(f.balance_after_micro) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ▼ 系统更新 ▼ -->
       <div v-else-if="view === 'update'" class="adm-view">
         <p v-if="updateMsg" class="adm-msg" :class="{ ok: updateMsgOk, bad: !updateMsgOk }">{{ updateMsg }}</p>
@@ -1856,4 +1935,17 @@ async function doUserKeyRevoke(kid: number) {
   .adm-card.wide { grid-column: span 1; }
   .adm-head h1 { font-size: 18px; }
 }
+/* —— 众筹池 —— */
+.seed-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.seed-row input { padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 13px; }
+.seed-row input:first-child { width: 130px; }
+.seed-row input:nth-child(2) { flex: 1; min-width: 160px; }
+.pool-flows { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.pf-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 6px 10px; border-radius: 8px; }
+.pf-row:hover { background: rgba(128,140,160,.08); }
+.pf-type { width: 46px; text-align: center; font-size: 11px; padding: 2px 0; border-radius: 6px; background: rgba(56,189,248,.10); color: var(--aqua,#38bdf8); flex: none; }
+.pf-revival { font-size: 9.5px; padding: 1px 6px; border-radius: 999px; background: rgba(251,191,36,.16); color: #fbbf24; border: 1px solid rgba(251,191,36,.35); flex: none; }
+.pf-user { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-amt { margin-left: auto; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
+.pf-bal { font-size: 11px; color: var(--muted,#8a94a6); font-variant-numeric: tabular-nums; }
 </style>

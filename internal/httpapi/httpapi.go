@@ -48,6 +48,13 @@ func (a *App) Routes() http.Handler {
 	// 公开数据端点
 	mux.HandleFunc("GET /v1/stats", a.handleStats)
 
+	// 众筹池（acu/ 公共算力池）：账本/榜单公开透明，个人明细须登录，官方注入须管理员
+	mux.HandleFunc("GET /v1/pool/status", a.handlePoolStatus)
+	mux.HandleFunc("GET /v1/pool/flows", a.handlePoolFlows)
+	mux.HandleFunc("GET /v1/pool/ranks", a.handlePoolRanks)
+	mux.HandleFunc("GET /v1/my/pool/flows", a.handleMyPoolFlows)
+	mux.HandleFunc("POST /v1/admin/pool/seed", a.handleAdminPoolSeed)
+
 	// 竞技场（盲测对决 / 投票 / 排行榜）
 	mux.HandleFunc("POST /v1/arena", a.handleArena)
 	mux.HandleFunc("POST /v1/arena/vote", a.handleVote)
@@ -405,8 +412,8 @@ func (a *App) statusModelNorm() map[string]string {
 		if l.Mode == "free" {
 			continue
 		}
-		if l.Mode == "official" {
-			// tlk 官方中转线：独立前缀（tlk/xxx），目录/状态/请求三方同 ID 恒等映射
+		if l.Mode == "official" || l.Mode == "crowd" {
+			// tlk 官方中转线 / acu 众筹专线：独立前缀（tlk/xxx、acu/xxx），目录/状态/请求三方同 ID 恒等映射
 			for j := range l.Models {
 				full := config.ModelFullName(l.ID, l.Models[j].SiteID)
 				m[full] = full
@@ -820,6 +827,36 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				}
 				data = append(data, item)
 			}
+		}
+	}
+
+	// acu/ 众筹专线：独立前缀输出——五折扣费走众筹池，所有分组密钥（含纯免费）可见可调；
+	// 放在免费模型列表语义下（groups 含 free），池子归零时条目仍透出（调用端 403 引导充值）
+	crowdLines := a.linesSnap()
+	for i := range crowdLines {
+		l := &crowdLines[i]
+		if l.Mode != "crowd" {
+			continue
+		}
+		for j := range l.Models {
+			m := &l.Models[j]
+			full := config.ModelFullName(l.ID, m.SiteID)
+			p := a.pricingFor(full, "normal")
+			if p == nil {
+				continue
+			}
+			data = append(data, map[string]any{
+				"id": full, "object": "model",
+				"created": created, "owned_by": "acu", "paid": false,
+				"type": "chat",
+				"groups": []string{"free", "crowd"}, "mode": "crowd",
+				"pool_billed": true,
+				"floor_micro": p.FloorMicro,
+				"in_price":    float64(p.InRate10) / 10000,
+				"cache_price": float64(p.CacheRate10) / 10000,
+				"out_price":   float64(p.OutRate10) / 10000,
+				"description": pricingDescription(m, p),
+			})
 		}
 	}
 	return data

@@ -281,6 +281,16 @@ const callLineRows = computed(() => sortTokenLine(paidCallLine.value))
 /** 官方中转专线（tlk/ 前缀，official 分组密钥专用：官方原价 6 折） */
 const officialLineRows = computed(() => sortTokenLine(paidModels.value.filter(m => m.groups.includes('official'))))
 
+/* ---- 众筹池（acu/ 前缀）：免费列表内展示池子供血状态，条目本身来自 /v1/models（paid=false 自动进免费视图） ---- */
+import { apiJson as poolApiJson } from '@/composables/useApi'
+const poolStatus = ref<any>(null)
+async function loadPool() {
+  try { poolStatus.value = await poolApiJson<any>('/pool/status') } catch { /* 忽略 */ }
+}
+const poolAlive = computed(() => !!poolStatus.value && poolStatus.value.balance_micro > 0)
+function isCrowd(id: string) { return id.startsWith('acu/') }
+loadPool()
+
 /** 微元 → 元字符串（去尾零：2000→"0.002"，3800→"0.0038"） */
 function microYuan(v?: number): string {
   if (v == null) return '--'
@@ -324,6 +334,11 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <a class="repo-link" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee 仓库 <AqIcon name="star" :size="14" /></a>
         <a class="repo-link" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub 仓库 <AqIcon name="star" :size="14" /></a>
       </div>
+      <router-link to="/pool" class="pool-banner" :class="{ off: poolStatus && !poolAlive }">
+        <span class="pb-dot" :class="poolAlive ? 'on' : 'off'"></span>
+        <span class="pb-txt"><b>众筹公共算力池</b>：acu/ 前缀模型按官方原价五折从公共池扣费，无需充值、个人余额不动——{{ poolAlive ? '供血中' : '池子已用完，等待充值复活' }}</span>
+        <span class="pb-go">查看账本与榜单 →</span>
+      </router-link>
       </template>
       <template v-else-if="view === 'paid'">
       <!-- 倍率横幅：明示当前促销倍率与恢复倍率（meta 配置下发，促销到期自动隐藏） -->
@@ -542,6 +557,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <div v-else-if="!viewRows.length" class="model-empty">未找到匹配的模型</div>
         <template v-else>
           <div v-for="r in viewRows" :key="r.row.id" class="model-item" :class="{ exhausted: r.exhausted }">
+            <span v-if="isCrowd(r.row.id)" class="mtag m-crowd" title="众筹公共算力池：按官方原价五折从公共池扣费，个人余额不动">众筹</span>
             <span v-if="!hideTag(r.row.type)" class="mtag" :class="'m-' + r.row.platform" :title="r.row.type">{{ platformLabel(r.row.platform) }} · {{ typeLabel(r.row.type) }}</span>
             <span v-if="r.st" class="mtag" :class="r.st.cls" :title="r.st.title">{{ r.st.text }}</span>
             <span v-if="r.health" class="mtag m-health" :class="r.health.cls" :title="r.health.tip">健康 {{ r.health.score }}</span>
@@ -560,6 +576,21 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
 <style scoped>
 /* 子导航 Tab 外观统一由 legacy.css 的 .hub-tab 提供（按钮化视觉），此处仅继承字体 */
 button.hub-tab { font-family: inherit; }
+
+/* ---- 众筹池横幅（免费列表顶部）：供血状态 + 账本入口 ---- */
+.pool-banner { display: flex; align-items: center; gap: 10px; margin: 12px 0; padding: 12px 16px; border-radius: 12px; text-decoration: none; color: inherit; background: linear-gradient(135deg, rgba(56,189,248,.10), rgba(129,140,248,.06) 60%, transparent), var(--card2, rgba(255,255,255,.03)); border: 1px solid rgba(56,189,248,.3); transition: border-color .15s, transform .15s; }
+.pool-banner:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); }
+.pool-banner.off { background: linear-gradient(135deg, rgba(248,113,113,.10), transparent 60%), var(--card2, rgba(255,255,255,.03)); border-color: rgba(248,113,113,.35); }
+.pb-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.pb-dot.on { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,.9); animation: pbPulse 2s ease-in-out infinite; }
+.pb-dot.off { background: #f87171; box-shadow: 0 0 10px rgba(248,113,113,.9); }
+@keyframes pbPulse { 50% { opacity: .5; } }
+.pb-txt { font-size: 13px; color: var(--muted, #8a94a6); min-width: 0; }
+.pb-txt b { color: var(--aqua, #38bdf8); }
+.pool-banner.off .pb-txt b { color: #f87171; }
+.pb-go { margin-left: auto; font-size: 12.5px; color: var(--aqua, #38bdf8); white-space: nowrap; }
+/* 众筹徽章 */
+.mtag.m-crowd { background: linear-gradient(135deg, rgba(99,102,241,.2), rgba(129,140,248,.14)); color: #a5b4fc; border: 1px solid rgba(129,140,248,.4); }
 
 /* ---- 倍率横幅（rate-banner）：明示 0.2× 促销 → 0.5× 恢复 ---- */
 .rate-banner {
