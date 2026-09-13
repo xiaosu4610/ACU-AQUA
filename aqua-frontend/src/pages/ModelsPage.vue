@@ -202,18 +202,33 @@ function healthOf(m: ModelRow) {
   return { score, cls, tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
 }
 
-/* ---- 过滤 + 渲染行（免费模型页：收费模型已隔离到专属页，此处只展示免费模型） ---- */
+/* ---- 过滤 + 渲染行（免费模型页：收费模型已隔离到专属页，此处只展示免费模型；acu/ 众筹模型提升到专区大卡片，不进普通小卡片流） ---- */
 const viewRows = computed(() => {
   const kw = q.value.toLowerCase().trim()
   return orderedModels.value
     .filter(m => {
       if (m.paid) return false
+      if (isCrowd(m.id)) return false
       if (curPlatform.value !== 'all' && m.platform !== curPlatform.value) return false
       if (curType.value !== 'all' && m.type !== curType.value) return false
       return kw ? m.id.toLowerCase().indexOf(kw) !== -1 : true
     })
     .map(m => ({ row: m, st: statusOf(m), exhausted: isExhausted(m), health: healthOf(m) }))
 })
+
+/** 众筹专区：acu/ 前缀大卡片（官方自营通道，五折扣费走众筹池） */
+const crowdModels = computed(() => orderedModels.value
+  .filter(m => isCrowd(m.id))
+  .map(m => ({
+    id: m.id,
+    inPrice: m.in_price ?? 0,
+    cachePrice: m.cache_price ?? 0,
+    outPrice: m.out_price ?? 0,
+    floor: m.floor_micro ?? 0,
+    health: healthOf(m),
+    st: statusOf(m),
+    link: modelLink(m.id),
+  })))
 
 /* ---- 加载/同步状态提示条（旧 updateModelsNotice 平移） ---- */
 function timeStr(t: number): string {
@@ -334,11 +349,45 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <a class="repo-link" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee 仓库 <AqIcon name="star" :size="14" /></a>
         <a class="repo-link" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub 仓库 <AqIcon name="star" :size="14" /></a>
       </div>
-      <router-link to="/pool" class="pool-banner" :class="{ off: poolStatus && !poolAlive }">
-        <span class="pb-dot" :class="poolAlive ? 'on' : 'off'"></span>
-        <span class="pb-txt"><b>众筹公共算力池</b>：acu/ 前缀模型按官方原价五折从公共池扣费，无需充值、个人余额不动——{{ poolAlive ? '供血中' : '池子已用完，等待充值复活' }}</span>
-        <span class="pb-go">查看账本与榜单 →</span>
-      </router-link>
+      <!-- 众筹模型专区：官方自营通道（acu/ 前缀，五折扣费走众筹池） -->
+      <div v-if="crowdModels.length" class="crowd-sec" :class="{ off: poolStatus && !poolAlive }">
+        <div class="cs-head">
+          <div class="cs-title">
+            <span class="cs-ic"><AqIcon name="coin" :size="18" /></span>
+            <b>众筹公共模型 · 官方自营通道</b>
+            <span class="cs-live">
+              <span class="pb-dot" :class="poolAlive ? 'on' : 'off'"></span>
+              {{ poolStatus ? (poolAlive ? '池子供血中' : '池子已用完 · 等待充值复活') : '状态同步中…' }}
+              <template v-if="poolStatus"> · 池余 ¥{{ (poolStatus.balance_micro / 1e6).toFixed(2).replace(/\.00$/, '') }}</template>
+            </span>
+          </div>
+          <router-link to="/pool" class="cs-go">账本与榜单 →</router-link>
+        </div>
+        <p class="cs-desc">acu/ 前缀模型按<b>官方原价五折</b>从<b>众筹公共池</b>扣费——无需充值即可调用，任何分组密钥可用，<b>个人余额分文不动</b>；池子见底即暂停，充值立刻复活，救场者登上荣誉墙。</p>
+        <div class="cs-cards">
+          <div v-for="m in crowdModels" :key="m.id" class="cs-card">
+            <div class="cs-model">
+              <router-link :to="m.link" class="cs-id">{{ m.id }}</router-link>
+              <CopyBtn :text="m.id" />
+            </div>
+            <div class="cs-prices">
+              <div><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><span>/1M</span></div>
+              <div><i>缓存</i><b>¥{{ perMYuan(m.cachePrice) }}</b><span>/1M</span></div>
+              <div><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><span>/1M</span></div>
+            </div>
+            <div class="cs-foot">
+              <span class="cs-tag">五折扣费 · 池子供血</span>
+              <span v-if="m.health" class="cs-h">健康 {{ m.health.score }}</span>
+              <router-link :to="m.link" class="cs-detail">详情 →</router-link>
+            </div>
+          </div>
+          <div class="cs-card cs-cta">
+            <b>扩充池子</b>
+            <p>池子是大家的——充值即给所有人扩容（¥5 起），池子归零后第一笔充值自动登上荣誉墙</p>
+            <router-link to="/pool" class="cs-btn">去众筹充值</router-link>
+          </div>
+        </div>
+      </div>
       </template>
       <template v-else-if="view === 'paid'">
       <!-- 倍率横幅：明示当前促销倍率与恢复倍率（meta 配置下发，促销到期自动隐藏） -->
@@ -577,19 +626,39 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
 /* 子导航 Tab 外观统一由 legacy.css 的 .hub-tab 提供（按钮化视觉），此处仅继承字体 */
 button.hub-tab { font-family: inherit; }
 
-/* ---- 众筹池横幅（免费列表顶部）：供血状态 + 账本入口 ---- */
-.pool-banner { display: flex; align-items: center; gap: 10px; margin: 12px 0; padding: 12px 16px; border-radius: 12px; text-decoration: none; color: inherit; background: linear-gradient(135deg, rgba(56,189,248,.10), rgba(129,140,248,.06) 60%, transparent), var(--card2, rgba(255,255,255,.03)); border: 1px solid rgba(56,189,248,.3); transition: border-color .15s, transform .15s; }
-.pool-banner:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); }
-.pool-banner.off { background: linear-gradient(135deg, rgba(248,113,113,.10), transparent 60%), var(--card2, rgba(255,255,255,.03)); border-color: rgba(248,113,113,.35); }
-.pb-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+/* ---- 众筹模型专区（免费列表内超级大卡片区）：官方自营通道 ---- */
+.crowd-sec { margin: 14px 0; padding: 16px 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(56,189,248,.10), rgba(129,140,248,.07) 55%, transparent), var(--card2, rgba(255,255,255,.03)); border: 1px solid rgba(56,189,248,.35); box-shadow: 0 6px 24px rgba(56,189,248,.08); }
+.crowd-sec.off { background: linear-gradient(135deg, rgba(248,113,113,.10), transparent 55%), var(--card2, rgba(255,255,255,.03)); border-color: rgba(248,113,113,.35); box-shadow: 0 6px 24px rgba(248,113,113,.08); }
+.cs-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cs-title { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cs-title > b { font-size: 15.5px; }
+.cs-ic { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, rgba(56,189,248,.18), rgba(129,140,248,.14)); color: var(--aqua,#38bdf8); border: 1px solid rgba(56,189,248,.35); flex: none; }
+.cs-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted,#8a94a6); border: 1px solid var(--border,rgba(128,140,160,.25)); border-radius: 999px; padding: 3px 10px; }
+.pb-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .pb-dot.on { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,.9); animation: pbPulse 2s ease-in-out infinite; }
 .pb-dot.off { background: #f87171; box-shadow: 0 0 10px rgba(248,113,113,.9); }
 @keyframes pbPulse { 50% { opacity: .5; } }
-.pb-txt { font-size: 13px; color: var(--muted, #8a94a6); min-width: 0; }
-.pb-txt b { color: var(--aqua, #38bdf8); }
-.pool-banner.off .pb-txt b { color: #f87171; }
-.pb-go { margin-left: auto; font-size: 12.5px; color: var(--aqua, #38bdf8); white-space: nowrap; }
-/* 众筹徽章 */
+.cs-go { margin-left: auto; font-size: 12.5px; color: var(--aqua,#38bdf8); white-space: nowrap; text-decoration: none; }
+.cs-desc { font-size: 12.5px; color: var(--muted,#8a94a6); line-height: 1.7; margin: 10px 0 12px; }
+.cs-desc b { color: var(--aqua,#38bdf8); }
+.cs-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.cs-card { background: var(--card,#121a26); border: 1px solid var(--border,rgba(128,140,160,.25)); border-radius: 13px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.cs-card:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.45); box-shadow: 0 8px 24px rgba(56,189,248,.12); }
+.cs-model { display: flex; align-items: center; gap: 8px; }
+.cs-id { font-weight: 800; font-size: 14px; color: var(--aqua,#38bdf8); text-decoration: none; word-break: break-all; }
+.cs-prices { display: flex; gap: 8px; }
+.cs-prices > div { flex: 1; display: flex; flex-direction: column; gap: 1px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.15); border-radius: 9px; padding: 7px 9px; }
+.cs-prices i { font-style: normal; font-size: 10.5px; color: var(--muted,#8a94a6); }
+.cs-prices b { font-size: 14px; font-variant-numeric: tabular-nums; }
+.cs-prices span { font-size: 9.5px; color: var(--muted,#8a94a6); }
+.cs-foot { display: flex; align-items: center; gap: 8px; }
+.cs-tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: rgba(129,140,248,.14); color: #a5b4fc; border: 1px solid rgba(129,140,248,.35); }
+.cs-h { font-size: 11px; color: var(--muted,#8a94a6); }
+.cs-detail { margin-left: auto; font-size: 12px; color: var(--aqua,#38bdf8); text-decoration: none; }
+.cs-card.cs-cta { background: linear-gradient(135deg, rgba(251,191,36,.08), transparent 60%), var(--card,#121a26); border: 1px dashed rgba(251,191,36,.4); }
+.cs-card.cs-cta b { font-size: 15px; color: #fbbf24; }
+.cs-card.cs-cta p { font-size: 12px; color: var(--muted,#8a94a6); line-height: 1.6; margin: 0; flex: 1; }
+.cs-btn { display: inline-block; text-align: center; padding: 9px 14px; border-radius: 10px; font-weight: 700; font-size: 13px; text-decoration: none; color: #fff !important; background: linear-gradient(135deg,#0ea5e9,#6366f1); }
 .mtag.m-crowd { background: linear-gradient(135deg, rgba(99,102,241,.2), rgba(129,140,248,.14)); color: #a5b4fc; border: 1px solid rgba(129,140,248,.4); }
 
 /* ---- 倍率横幅（rate-banner）：明示 0.2× 促销 → 0.5× 恢复 ---- */
