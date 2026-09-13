@@ -297,6 +297,7 @@ func InitTables(d *sql.DB) error {
 		{"admin_lines", "dynamic", "INTEGER NOT NULL DEFAULT 0"},        // 免费线动态目录开关（NVIDIA 自动同步上游新模型到 nvidia_models）
 		{"admin_lines", "auth_style", "TEXT NOT NULL DEFAULT ''"},       // 鉴权风格：''=bearer | x-api-key | codex（ChatGPT 账号池 RT→AT+协议转换）
 		{"admin_lines", "proxy", "TEXT NOT NULL DEFAULT ''"},            // 线路级出站代理（http:// 或 socks5://，空=直连；gpt 线走本机 sing-box）
+		{"requests", "key_idx", "INTEGER NOT NULL DEFAULT -1"},          // 实际使用的钥池序（codex 账号粒度用量/利润记账；-1=非钥池线或失败请求）
 	}
 	for _, a := range alters {
 		var n int

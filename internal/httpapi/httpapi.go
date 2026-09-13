@@ -155,6 +155,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/audit", a.handleAdminAudit)
 	mux.HandleFunc("GET /v1/admin/reconcile", a.handleAdminReconcile)
 	mux.HandleFunc("GET /v1/admin/supervision", a.handleAdminSupervision)
+	// —— Codex 账号池运维（账号用量/存活/利润 + 代理探测换线）——
+	mux.HandleFunc("GET /v1/admin/codex", a.handleAdminCodex)
+	mux.HandleFunc("POST /v1/admin/codex/proxy/switch", a.handleAdminCodexSwitch)
 	// —— 上游线路在线管理（DB 事实源 + 热重载；密钥/模型/线路 CRUD）——
 	mux.HandleFunc("GET /v1/admin/lines", a.handleAdminLines)
 	mux.HandleFunc("POST /v1/admin/nvidia/sync", a.handleAdminNvidiaSync) // NVIDIA 动态目录手动同步

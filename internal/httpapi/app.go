@@ -25,6 +25,8 @@ type App struct {
 
 	clientsMu sync.Mutex
 	clients   map[string]*upstream.Client
+
+	codexProxy *codexProxyHealth // codex 线代理健康状态（探测/换线，codexops.go）
 }
 
 // New 构造（上游线路 DB 优先：admin_lines 有数据则以 DB 为事实源）
@@ -44,6 +46,8 @@ func New(c *config.Cfg, d *db.DBx) *App {
 	app.startCompensator()
 	// NVIDIA 动态目录同步器（启动 30s 后首跑 + 每小时，nvidia_sync.go）
 	app.startNvidiaSyncer()
+	// Codex 代理保活探测 + 自动换线（启动 15s 后首跑 + 每 5 分钟，codexops.go）
+	app.startCodexProbe()
 	return app
 }
 

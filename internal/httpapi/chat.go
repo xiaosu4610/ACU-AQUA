@@ -210,6 +210,9 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if key != nil {
+		a.setRequestKeyIdx(rid, key.Idx) // codex 账号粒度记账：记实际使用的钥池序（换号后以最终为准）
+	}
 
 	if resp.StatusCode != 200 {
 		eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -247,6 +250,9 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 				return
+			}
+			if key != nil {
+				a.setRequestKeyIdx(rid, key.Idx)
 			}
 			if resp.StatusCode != 200 {
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -573,6 +579,14 @@ func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stre
 	}
 	id, _ := res.LastInsertId()
 	return id
+}
+
+// setRequestKeyIdx 回写实际使用的钥池序（codex 账号粒度用量/利润记账，换号后以最终为准）
+func (a *App) setRequestKeyIdx(rid int64, idx int) {
+	if rid == 0 || idx < 0 {
+		return
+	}
+	_, _ = a.DB.Exec("UPDATE requests SET key_idx=? WHERE rowid=?", idx, rid)
 }
 
 // okRequest 成功回写：usage + 金额 + 面值成本 + bill_state='billed'

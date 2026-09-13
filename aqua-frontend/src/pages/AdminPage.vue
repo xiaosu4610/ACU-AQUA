@@ -66,7 +66,7 @@ function go(v: View) {
   view.value = v
   if (v === 'dashboard') loadStats()
   if (v === 'users') loadUsers()
-  if (v === 'lines') loadLines()
+  if (v === 'lines') { loadLines(); loadCodex() }
   if (v === 'quota') loadQuota()
   if (v === 'pool') loadPool()
   if (v === 'supervision') loadSupervision()
@@ -483,6 +483,32 @@ async function refreshLine(id: string) {
 }
 function modeLabel(m: string): string {
   return m === 'per_token' ? '按量' : m === 'per_call' ? '按次' : m === 'free' ? '免费' : m
+}
+
+/* ===== Codex 账号池运维（账号用量/存活/利润 + 代理健康/换线） ===== */
+const codexData = ref<any>(null)
+const codexMsg = ref('')
+const codexBusy = ref(false)
+const codexFmtM = (t?: number): string => t == null ? '—' : t >= 1e6 ? (t / 1e6).toFixed(2) + 'M' : t >= 1e3 ? (t / 1e3).toFixed(0) + 'K' : String(t)
+const codexAgo = (ts?: number): string => {
+  if (!ts) return '—'
+  const d = Math.max(0, Math.floor(Date.now() / 1000 - ts))
+  return d < 60 ? d + '秒前' : d < 3600 ? Math.floor(d / 60) + '分前' : Math.floor(d / 3600) + '时前'
+}
+async function loadCodex() {
+  if (!token.value) return
+  try {
+    codexData.value = await apiJson<any>('/admin/codex', { key: token.value })
+  } catch (e) { codexMsg.value = errText(e) }
+}
+async function doCodexSwitch(node: string) {
+  codexBusy.value = true; codexMsg.value = ''
+  try {
+    const j = await apiJson<any>('/admin/codex/proxy/switch', { method: 'POST', key: token.value, body: { node } })
+    codexMsg.value = `已切换到 ${node}，探测 ${j.probe_ms}ms 正常`
+  } catch (e) { codexMsg.value = errText(e) }
+  await loadCodex()
+  codexBusy.value = false
 }
 
 /* 新增线路弹窗 */
@@ -1150,6 +1176,65 @@ async function doUserKeyRevoke(kid: number) {
               <button class="mini-btn ok" @click="openModelEdit(l.id)"><AqIcon name="puzzle" :size="12" /> 添加模型映射</button>
             </div>
           </template>
+        </div>
+
+        <!-- ▼ Codex 账号池运维（账号用量/存活/利润 + 代理健康/换线）▼ -->
+        <div v-if="codexData && linesItems.some(l => l.id === 'codex')" class="dash-sec">
+          <b><AqIcon name="gauge" :size="15" /> Codex 账号池运维</b>
+          <p v-if="codexMsg" class="adm-msg" :class="{ ok: codexMsg.includes('已切换'), bad: !codexMsg.includes('已切换') }">{{ codexMsg }}</p>
+          <!-- 代理健康：探测 + 换线 -->
+          <div class="adm-kv" style="margin-top:8px">
+            <span>出口探测（{{ Math.round((codexData.proxy?.interval_sec || 300) / 60) }} 分钟轮询）</span>
+            <b>
+              <span v-if="!codexData.proxy?.enabled" class="adm-tag">未启用</span>
+              <span v-else-if="codexData.proxy?.probe_ok" class="adm-tag ok">正常</span>
+              <span v-else class="adm-tag bad">异常{{ codexData.proxy?.fail_streak ? ' ×' + codexData.proxy?.fail_streak : '' }}</span>
+              <span v-if="codexData.proxy?.last_probe_ts" class="dim" style="margin-left:6px">{{ codexAgo(codexData.proxy.last_probe_ts) }}</span>
+            </b>
+            <span>当前出口</span>
+            <b><code class="adm-line-id">{{ codexData.proxy?.selector_now || '—' }}</code>
+              <span v-if="codexData.proxy?.urltest_now" class="dim">（自动选中 {{ codexData.proxy.urltest_now }}）</span></b>
+            <span v-if="codexData.proxy?.last_err">最近异常</span>
+            <b v-if="codexData.proxy?.last_err" class="hl" style="color:#dc2626">{{ codexData.proxy.last_err }}</b>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 2px">
+            <button v-for="n in codexData.proxy?.nodes ? Object.keys(codexData.proxy.nodes) : []" :key="n"
+              class="mini-btn" :class="codexData.proxy.nodes[n]?.healthy ? 'ok' : 'danger'"
+              :disabled="codexBusy" @click="doCodexSwitch(n)"
+              :title="codexData.proxy.nodes[n]?.last_err || ('切换到 ' + n)">
+              {{ n }} {{ codexData.proxy.nodes[n]?.ms ? codexData.proxy.nodes[n].ms + 'ms' : '' }}
+            </button>
+            <button class="mini-btn" :disabled="codexBusy" @click="doCodexSwitch('auto-us')" title="切回自动测优（urltest 按延迟选最快节点）">自动测优</button>
+            <button class="mini-btn" :disabled="codexBusy" @click="loadCodex()"><AqIcon name="refresh" :size="12" /> 刷新</button>
+          </div>
+          <p v-if="codexData.proxy?.switches?.length" class="adm-hint" style="margin:6px 0 0">换线记录：{{ codexData.proxy.switches.slice().reverse().join('；') }}</p>
+
+          <!-- 账号池表格 -->
+          <table class="adm-table" style="margin-top:10px">
+            <thead><tr><th>#</th><th>账号</th><th>状态</th><th class="num">已用/额度</th><th class="num">请求(成/总)</th>
+              <th class="num">收入</th><th class="num">成本</th><th class="num">利润</th><th class="num">最近成功</th></tr></thead>
+            <tbody>
+              <tr v-if="!codexData.accounts?.length"><td colspan="9" class="adm-empty">暂无账号记录</td></tr>
+              <tr v-for="acc in codexData.accounts" :key="acc.idx">
+                <td class="num">{{ acc.idx }}</td>
+                <td class="hs">{{ acc.note || ('账号#' + acc.idx) }}</td>
+                <td>
+                  <span class="adm-tag" :class="acc.dead ? 'bad' : 'ok'">{{ acc.dead ? '已判死' : '存活' }}</span>
+                  <span v-if="!acc.dead && acc.remain_ratio <= 0.1" class="adm-tag warn" title="额度余量不足 10%">将耗尽</span>
+                </td>
+                <td class="num">
+                  <div class="adm-quota-bar" style="width:120px"><span :style="{ width: Math.min(100, (1 - (acc.remain_ratio || 0)) * 100) + '%' }"></span></div>
+                  <span class="dim" style="font-size:11.5px">{{ codexFmtM(acc.total_tokens) }} / {{ codexFmtM(acc.quota_tokens) }}</span>
+                </td>
+                <td class="num">{{ acc.ok_calls }}/{{ acc.calls }}</td>
+                <td class="num">¥{{ yuan(acc.income_micro) }}</td>
+                <td class="num">¥{{ yuan(acc.cost_micro) }}</td>
+                <td class="num" :class="acc.profit_micro >= 0 ? 'hl' : 'bad'">¥{{ yuan(acc.profit_micro) }}</td>
+                <td class="num">{{ codexAgo(acc.last_ok_ts) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="adm-hint">额度按号商口径 8M/号记账（剩余比例=1-已用/额度）；利润=计费收入-成本台账；探测 401=穿透风控健康，403 地域拦截/连接失败自动换线（selector 依次试其他节点，恢复即停）。</p>
         </div>
       </div>
 

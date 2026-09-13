@@ -131,6 +131,9 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if key != nil {
+		a.setRequestKeyIdx(rid, key.Idx)
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_status")
