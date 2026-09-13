@@ -50,7 +50,8 @@ export function useModels() {
     loading.value = true
     error.value = ''
     try {
-      const j = await apiJson<{ data: any[] }>('/models')
+      // 带登录态：后端按用户价格组下发 VIP 拿货价（vip 价目）+ base_* 原价对照字段；匿名/未登录得 normal 视角
+      const j = await apiJson<{ data: any[] }>('/models', { session: true })
       const all: any[] = j?.data || []
       let ids: string[] = all.map((m: any) => (typeof m === 'string' ? m : m.id)).filter(Boolean)
       ids = [...new Set(ids)]
@@ -78,6 +79,13 @@ export function useModels() {
           out_price: raw.out_price,
           per_image: raw.per_image,
           floor_micro: raw.floor_micro,
+          // VIP 拿货价对照：base_* 原价字段透传（模型卡片「VIP 拿货价」标签与划线原价依赖这些字段）
+          base_price_micro: raw.base_price_micro,
+          base_in_price: raw.base_in_price,
+          base_cache_price: raw.base_cache_price,
+          base_out_price: raw.base_out_price,
+          base_floor_micro: raw.base_floor_micro,
+          base_per_image: raw.base_per_image,
           subsidized: raw.subsidized === true,
         }
       })
