@@ -471,39 +471,39 @@ function fmtTime(ts: number): string {
 
         <!-- ▼▼▼ 总览 ▼▼▼ -->
         <div v-show="view === 'dashboard'" class="view">
-          <!-- 欢迎条 -->
-          <div class="ov-hero">
-            <div class="avatar-box" @click="fileInput?.click()" title="点击更换头像">
-              <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + avatarBust" alt="头像" />
-              <span v-else class="avatar-fallback">{{ (me?.username || '?').slice(0, 1) }}</span>
-              <span class="avatar-edit">更换</span>
-            </div>
-            <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" @change="onPickAvatar" />
-            <div class="ov-hero-txt">
-              <b>{{ me?.username || '…' }}<span class="ov-hi">，欢迎回来</span></b>
-              <span>{{ me?.email }} · UID #{{ me?.id }} · 注册于 {{ me ? fmtTime(me.created_ts) : '…' }}</span>
-            </div>
-            <button class="mini-btn danger ov-logout" @click="doLogout">退出登录</button>
-          </div>
-          <p v-if="profileMsg" class="hint-line" :class="{ ok: profileOk }">{{ profileMsg }}</p>
-
-          <!-- 余额卡（收费模型，预充值制） -->
-          <div class="dash-sec bal-card">
-            <div class="bal-main">
-              <div class="bal-num">
-                <b>¥{{ yuan(balance?.balance_micro) }}</b>
-                <span>当前余额 · 仅用于收费模型 aqua/（按量计费）专线（预充值、先付后用、用完即停）</span>
+          <!-- HUD 驾驶舱：欢迎 + 余额 + 快捷操作（科技感主视觉，v5.5） -->
+          <div class="hud">
+            <i class="hud-grid" aria-hidden="true"></i>
+            <i class="hud-glow g1" aria-hidden="true"></i>
+            <i class="hud-glow g2" aria-hidden="true"></i>
+            <div class="hud-top">
+              <div class="avatar-box" @click="fileInput?.click()" title="点击更换头像">
+                <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + avatarBust" alt="头像" />
+                <span v-else class="avatar-fallback">{{ (me?.username || '?').slice(0, 1) }}</span>
+                <span class="avatar-edit">更换</span>
               </div>
-              <div class="bal-sub">
-                <span>今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
-                <span>累计消费 ¥{{ yuan(balance?.total_cost_micro) }}</span>
+              <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" @change="onPickAvatar" />
+              <div class="ov-hero-txt">
+                <b>{{ me?.username || '…' }}<span class="ov-hi">，欢迎回来</span></b>
+                <span>{{ me?.email }} · UID #{{ me?.id }} · 注册于 {{ me ? fmtTime(me.created_ts) : '…' }}</span>
+              </div>
+              <button class="mini-btn danger ov-logout" @click="doLogout">退出登录</button>
+            </div>
+            <p v-if="profileMsg" class="hint-line" :class="{ ok: profileOk }">{{ profileMsg }}</p>
+            <div class="hud-main">
+              <div class="hud-bal">
+                <span class="hud-label">当前余额 · 仅用于收费模型 aqua/（按量计费）专线 · 预充值、先付后用、用完即停</span>
+                <b class="hud-num">¥{{ yuan(balance?.balance_micro) }}</b>
+                <span class="hud-sub">今日消费 <b>¥{{ yuan(balance?.today_cost_micro) }}</b> · 累计消费 <b>¥{{ yuan(balance?.total_cost_micro) }}</b> · 失败请求自动全额退回 · 每笔流水永久可查</span>
+              </div>
+              <div class="hud-ops">
+                <button class="btn tool-run" @click="go('topup')"><AqIcon name="spark" :size="14" /> 立即充值</button>
+                <button class="mini-btn" @click="go('billing')"><AqIcon name="bolt" :size="12" /> 消费账单</button>
               </div>
             </div>
-            <div class="bal-strip">
-              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（按量计费：输入 / 缓存命中 / 输出按 tokens 三段精算），其余全部模型依然完全免费，无余额照样用</span>
-              <span>支持在线充值（支付金额 100% 全额到账，渠道手续费由本站承担）· 失败请求自动全额退回 · 每笔流水永久可查</span>
-              <button class="mini-btn ok" @click="go('topup')"><AqIcon name="spark" :size="12" /> 余额充值</button>
-              <button class="mini-btn" @click="go('billing')"><AqIcon name="bolt" :size="12" /> 消费账单</button>
+            <div class="hud-strip">
+              <span>余额只影响收费模型 <b>aqua/ 收费专线</b>（输入 / 缓存命中 / 输出按 tokens 三段精算），其余全部模型完全免费，无余额照样用</span>
+              <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）</span>
             </div>
           </div>
 
@@ -1031,10 +1031,10 @@ function fmtTime(ts: number): string {
 .cnav { display: flex; flex-direction: column; gap: 3px; }
 .cnav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: none; background: transparent; border-radius: 10px; color: var(--muted, #8a94a6); font-size: 13.5px; cursor: pointer; text-align: left; transition: background .15s, color .15s; font-family: inherit; }
 .cnav-item:hover { background: rgba(128,140,160,.1); color: inherit; }
-.cnav-item.on { background: linear-gradient(90deg, rgba(56,189,248,.16), rgba(56,189,248,.04)); color: var(--aqua, #38bdf8); font-weight: 700; box-shadow: inset 2.5px 0 0 var(--aqua, #38bdf8); }
+.cnav-item.on { background: linear-gradient(90deg, rgba(56,189,248,.16), rgba(56,189,248,.04)); color: var(--aqua, #38bdf8); font-weight: 700; box-shadow: inset 2.5px 0 0 var(--aqua, #38bdf8), 0 0 14px rgba(56,189,248,.12); }
 .cnav-item .cnav-label { flex: none; }
 .cnav-badge { margin-left: auto; font-style: normal; font-size: 10.5px; font-weight: 700; background: rgba(128,140,160,.2); color: var(--muted, #8a94a6); border-radius: 999px; padding: 1px 7px; }
-.cnav-item.on .cnav-badge { background: rgba(11,108,255,.18); color: var(--accent, #0b6cff); }
+.cnav-item.on .cnav-badge { background: rgba(56,189,248,.18); color: var(--aqua, #38bdf8); }
 .cside.mini .cnav-item { justify-content: center; padding: 10px 0; }
 .cside.mini .cnav-badge { display: none; }
 .cside-foot { border-top: 1px solid var(--border, rgba(128,140,160,.2)); padding-top: 6px; margin-top: 2px; }
@@ -1047,7 +1047,7 @@ function fmtTime(ts: number): string {
 
 /* 视图头 */
 .vhead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.vic { width: 36px; height: 36px; flex: none; border-radius: 10px; background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); display: flex; align-items: center; justify-content: center; }
+.vic { width: 36px; height: 36px; flex: none; border-radius: 10px; background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px rgba(56,189,248,.25), 0 0 14px rgba(56,189,248,.15); }
 .vhead h2 { font-size: 17px; line-height: 1.2; }
 .vhead p { font-size: 12px; color: var(--muted, #8a94a6); margin-top: 2px; }
 
@@ -1109,9 +1109,10 @@ function fmtTime(ts: number): string {
 .fresh-key code { display: block; word-break: break-all; font-size: 13.5px; font-weight: 700; color: var(--accent, #0b6cff); }
 .fresh-key-ops { display: flex; gap: 8px; margin-top: 10px; }
 .key-list { display: flex; flex-direction: column; gap: 6px; }
-.key-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.2)); font-size: 13px; flex-wrap: wrap; }
+.key-row { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-radius: 11px; border: 1px solid var(--border, rgba(128,140,160,.2)); background: var(--card2, transparent); font-size: 13px; flex-wrap: wrap; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.key-row:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.4); box-shadow: 0 4px 16px rgba(56,189,248,.10); }
 .key-grp { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-.key-grp.call { background: rgba(11,108,255,.12); color: var(--accent, #0b6cff); }
+.key-grp.call { background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); }
 .key-grp.token { background: rgba(52,211,153,.14); color: #34d399; }
 .key-grp.free { background: rgba(34,197,94,.14); color: #16a34a; border: 1px solid rgba(34,197,94,.35); }
 .key-grp.legacy { background: rgba(128,140,160,.15); color: var(--muted, #8a94a6); }
@@ -1161,18 +1162,104 @@ function fmtTime(ts: number): string {
 .hist-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .hist-pageinfo { font-size: 12px; color: var(--muted, #8a94a6); }
 
-/* 余额卡：资金入口渐变描边（与 topup-card 同语言） */
-.bal-card { display: flex; flex-direction: column; background: linear-gradient(var(--card), var(--card)) padding-box, linear-gradient(120deg, rgba(56,189,248,.4), rgba(129,140,248,.35), rgba(56,189,248,.4)) border-box; border: 1.5px solid transparent; }
-.bal-main { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
-.bal-num { display: flex; flex-direction: column; gap: 3px; }
-.bal-num b { font-size: 30px; font-weight: 800; font-family: var(--mono, monospace); background: linear-gradient(120deg, var(--aqua, #22d3ee), #818cf8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-.bal-num > span { font-size: 11.5px; color: var(--muted, #8a94a6); }
-.bal-sub { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted, #8a94a6); }
-.bal-sub b { color: inherit; font-family: var(--mono, monospace); }
-.bal-price { color: var(--accent, #0b6cff); }
-.bal-strip { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted, #8a94a6); margin-top: 10px; }
+/* ===== HUD 驾驶舱（v5.5 科技感主视觉） ===== */
+.hud {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-card, 16px);
+  border: 1px solid var(--glass-border, var(--border));
+  background:
+    linear-gradient(135deg, rgba(56,189,248,.10), rgba(129,140,248,.06) 42%, transparent 72%),
+    var(--glass-bg, var(--card));
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-highlight), transparent);
+  pointer-events: none;
+}
+/* 科技网格：右上角透视淡出 */
+.hud-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(56,189,248,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56,189,248,.07) 1px, transparent 1px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(62% 100% at 72% 0%, #000, transparent 78%);
+  mask-image: radial-gradient(62% 100% at 72% 0%, #000, transparent 78%);
+  pointer-events: none;
+}
+/* 双色氛围光斑 */
+.hud-glow {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  filter: blur(72px);
+  opacity: .55;
+  pointer-events: none;
+}
+.hud-glow.g1 { background: rgba(56,189,248,.32); top: -130px; right: -70px; }
+.hud-glow.g2 { background: rgba(129,140,248,.26); bottom: -150px; left: 8%; }
+.hud-top { position: relative; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.hud-main {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--glass-border, var(--border));
+}
+.hud-bal { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.hud-label { font-size: 12px; color: var(--muted, #8a94a6); letter-spacing: .05em; }
+/* 超大发光余额数字：三色渐变 + 外发光 */
+.hud-num {
+  font-size: clamp(34px, 5.2vw, 48px);
+  font-weight: 800;
+  font-family: var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.12;
+  letter-spacing: -.01em;
+  background: linear-gradient(120deg, #67e8f9, #38bdf8 45%, #818cf8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 20px rgba(56,189,248,.35));
+}
+.hud-sub { font-size: 12.5px; color: var(--muted, #8a94a6); }
+.hud-sub b { color: var(--text, inherit); font-family: var(--mono, monospace); }
+.hud-ops { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.hud-strip {
+  position: relative;
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted, #8a94a6);
+  margin-top: 15px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--glass-border, var(--border));
+  line-height: 1.7;
+}
+.hud-strip b { color: var(--text, inherit); }
+@media (max-width: 640px) {
+  .hud { padding: 16px; }
+  .hud-ops { width: 100%; }
+  .hud-ops .btn { flex: 1; }
+}
+
+/* 充值视图余额条（dash-sec + bal-strip 组合） */
+.bal-strip { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted, #8a94a6); }
 .bal-strip b { font-family: var(--mono, monospace); color: var(--text, inherit); }
-.bal-strip .mini-btn { margin-left: auto; }
 
 /* 计费列 / 账单表 */
 .bill-chg { color: #f87171; font-family: var(--mono, monospace); }

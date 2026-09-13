@@ -309,10 +309,10 @@ code { border-radius: 6px; }
   padding: 14px 34px; border-radius: 14px;
   background: var(--accent, #0b6cff); color: #fff;
   font-size: 16.5px; font-weight: 800; text-decoration: none;
-  box-shadow: 0 6px 22px rgba(11,108,255,.35);
+  box-shadow: 0 6px 22px rgba(8,145,178,.35);
   transition: transform .15s ease, box-shadow .15s ease;
 }
-.cta-main:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(11,108,255,.45); }
+.cta-main:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(8,145,178,.45); }
 .cta-sub {
   padding: 14px 26px; border-radius: 14px;
   border: 1.5px solid var(--border, rgba(128,140,160,.35)); color: var(--text, inherit);
@@ -900,4 +900,63 @@ html[data-theme="light"] .cta-main { color: #fff; }
 /* 区块卡标题带品牌色点缀（图标随语义色，文字保持层级） */
 .dash-sec > b {
   letter-spacing: .01em;
+}
+
+/* ===========================================================================
+   17. v5.5 高科技层 —— 全站网格氛围 + 发光指标卡 + 状态光晕
+   原则：纯装饰层零交互不产生重排；网格/光效只走 background/transform；
+   reduced-motion 全关；亮色主题自动减淡。
+   =========================================================================== */
+
+/* —— 全站科技网格（顶部透视淡出，body::before 是光斑、::after 是网格） —— */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(56, 189, 248, .04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, .04) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(72% 58% at 50% 0%, #000 20%, transparent 100%);
+  mask-image: radial-gradient(72% 58% at 50% 0%, #000 20%, transparent 100%);
+}
+html[data-theme="light"] body::after { opacity: .55; }
+
+/* —— 指标卡：品牌光带 + 渐变发光数字 + 悬停增亮 —— */
+.dash-card { position: relative; overflow: hidden; }
+.dash-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--aqua), #818cf8, transparent);
+  opacity: .65;
+  transition: opacity .2s ease;
+}
+.dash-card:hover::before { opacity: 1; }
+.dash-card b {
+  background: linear-gradient(120deg, var(--text) 20%, var(--accent-soft, #a5d8fb));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 14px rgba(56, 189, 248, .18));
+}
+
+/* —— 侧栏/导航选中项发光条 —— */
+.cnav-item.on { box-shadow: inset 2.5px 0 0 var(--aqua), 0 0 14px rgba(56, 189, 248, .10); }
+
+/* —— 状态徽章光晕（成功/失败一眼可辨） —— */
+.hist-badge.ok { box-shadow: 0 0 10px rgba(52, 211, 153, .22); }
+.hist-badge.bad { box-shadow: 0 0 10px rgba(248, 113, 113, .22); }
+
+/* —— 表格行悬停左侧光条 —— */
+.hist-table tbody tr { position: relative; }
+.hist-table tbody tr td:first-child { box-shadow: inset 2px 0 0 transparent; transition: box-shadow .16s ease; }
+.hist-table tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--aqua); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-card::before, .dash-card b, .hist-table tbody tr td:first-child { transition: none; }
 }
