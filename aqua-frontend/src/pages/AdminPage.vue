@@ -522,6 +522,42 @@ async function doKeysAdd() {
   } catch (e) { keyAddMsg.value = errText(e) }
   keyAdding.value = false
 }
+/* 余额校准（上游真实余额为唯一真源） */
+const keyCal = ref({ line: '', text: '', pw: '' })
+const keyCalMsg = ref('')
+const keyCalOk = ref(false)
+const keyCalBusy = ref(false)
+function openKeyCal(id: string) { keyCal.value = { line: id, text: '', pw: '' }; keyCalMsg.value = ''; keyCalOk.value = false }
+async function doKeysCal() {
+  const k = keyCal.value
+  if (!k.text.trim() || !k.pw) { keyCalMsg.value = '请粘贴查询结果并输入管理密码'; keyCalOk.value = false; return }
+  keyCalBusy.value = true; keyCalMsg.value = ''
+  try {
+    const j = await apiJson<any>(`/admin/lines/${k.line}/keys/calibrate`, {
+      method: 'POST', key: token.value, body: { text: k.text, confirm_password: k.pw },
+    })
+    keyCal.value.pw = ''
+    keyCalOk.value = true
+    keyCalMsg.value = `校准完成：匹配 ${j.matched} 把（判死 ${(j.killed || []).length} 把 / 活性 ${(j.revived || []).length} 把 / 未匹配 ${j.unknown}），当前活钥余额合计 ¥${j.live_balance_yuan}`
+    await refreshLine(k.line); loadLines()
+  } catch (e) { keyCalMsg.value = errText(e); keyCalOk.value = false }
+  keyCalBusy.value = false
+}
+/* 一键查询并校准（后端代查 ge.bbs0.cc 查询服务） */
+async function doKeysCalAuto(id: string) {
+  const pw = prompt(`将实时查询该线全部存活密钥的上游余额并自动校准（余额为 0 的自动判死摘除）：请输入管理密码确认`)
+  if (!pw) return
+  keyCalBusy.value = true; keyCal.line = id; keyCalMsg.value = ''; keyCalOk.value = false
+  try {
+    const j = await apiJson<any>(`/admin/lines/${id}/keys/calibrate-auto`, {
+      method: 'POST', key: token.value, body: { confirm_password: pw },
+    })
+    keyCalOk.value = true
+    keyCalMsg.value = `查询并校准完成：查询 ${j.queried} 把（判死 ${(j.killed || []).length} 把 #${(j.killed || []).join(',#')} / 校准 ${(j.revived || []).length} 把 / 未返回 ${j.unqueried}），当前活钥余额合计 ¥${j.live_balance_yuan}`
+    await refreshLine(id); loadLines()
+  } catch (e) { keyCalMsg.value = errText(e); keyCalOk.value = false }
+  keyCalBusy.value = false
+}
 /* 密钥停用/启用/删除 */
 const keyBusy = ref(-1)
 async function doKeyDead(id: string, idx: number, dead: boolean) {
@@ -1045,6 +1081,8 @@ async function doUserKeyRevoke(kid: number) {
             </table>
             <div class="adm-line-add">
               <button class="mini-btn ok" @click="openKeyAdd(l.id)"><AqIcon name="key" :size="12" /> 批量添加密钥</button>
+              <button class="mini-btn" :disabled="keyCalBusy" @click="doKeysCalAuto(l.id)">{{ keyCalBusy ? '查询校准中…' : '一键查询并校准' }}</button>
+              <button class="mini-btn" @click="openKeyCal(l.id)">余额校准</button>
             </div>
             <p v-if="keyAdd.line === l.id && keyAddMsg" class="adm-msg" :class="{ ok: keyAddMsg.includes('已添加'), bad: !keyAddMsg.includes('已添加') }">{{ keyAddMsg }}</p>
 
@@ -1576,6 +1614,23 @@ async function doUserKeyRevoke(kid: number) {
             <button class="mini-btn" @click="keyAdd.line = ''">取消</button>
             <button class="btn tool-run" :disabled="keyAdding || !keyAdd.raw.trim() || !keyAdd.pw" @click="doKeysAdd">
               {{ keyAdding ? '添加中…' : '确认添加' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 余额校准弹窗 -->
+      <div v-if="keyCal.line" class="adm-mask" @click.self="keyCal.line = ''">
+        <div class="adm-modal">
+          <h3>{{ keyCal.line }} / 密钥余额校准</h3>
+          <p class="adm-hint">上游计费与本地台账口径不同，以上游真实余额为唯一真源：可点「一键查询并校准」由后端代查（推荐），或把批量查询结果粘贴到下面手动校准——余额为 0 的密钥自动判死摘除，其余按真实余额重置台账。</p>
+          <label>查询结果（每行一条：sk_xxx -&gt; 51.88 CNY）<textarea v-model="keyCal.text" rows="7" placeholder="sk_tr_xxx -> 51.88 CNY&#10;sk_tr_yyy -> 0.00 CNY"></textarea></label>
+          <label>管理密码确认<input v-model="keyCal.pw" type="password" autocomplete="current-password" /></label>
+          <p v-if="keyCalMsg" class="adm-msg" :class="{ ok: keyCalOk, bad: !keyCalOk }">{{ keyCalMsg }}</p>
+          <div class="adm-modal-ops">
+            <button class="mini-btn" @click="keyCal.line = ''">取消</button>
+            <button class="btn tool-run" :disabled="keyCalBusy || !keyCal.text.trim() || !keyCal.pw" @click="doKeysCal">
+              {{ keyCalBusy ? '校准中…' : '开始校准' }}
             </button>
           </div>
         </div>

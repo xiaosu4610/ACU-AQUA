@@ -155,6 +155,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}", a.handleAdminLineDelete)
 	mux.HandleFunc("GET /v1/admin/lines/{line}/keys", a.handleAdminLineKeys)
 	mux.HandleFunc("POST /v1/admin/lines/{line}/keys", a.handleAdminLineKeysAdd)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/keys/calibrate", a.handleAdminLineKeysCalibrate)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/keys/calibrate-auto", a.handleAdminLineKeysCalibrateAuto)
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}/keys/{idx}", a.handleAdminLineKeyDelete)
 	mux.HandleFunc("POST /v1/admin/lines/{line}/keys/{idx}/dead", a.handleAdminLineKeyDead)
 	mux.HandleFunc("GET /v1/admin/lines/{line}/models", a.handleAdminLineModels)

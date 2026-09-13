@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -561,6 +564,217 @@ func (a *App) handleAdminLineKeyDead(w http.ResponseWriter, r *http.Request) {
 	a.auditAppend(act, 0, fmt.Sprintf("线=%s idx=%d", lineID, idx), ip)
 	_ = a.reloadLines()
 	jsonOut(w, 200, map[string]any{"ok": true})
+}
+
+// POST /v1/admin/lines/{line}/keys/calibrate {text:"sk_xxx -> 51.88 CNY\n..."} 余额校准（上游真实余额为唯一真源）
+// 解析"密钥+余额"粘贴文本（->/=>/:/=/空白分隔，可选 CNY/元/¥ 后缀，每行一条）：
+// 余额<=0 → 台账+密钥池双判死（防粘住用户反复 402）；余额>0 → 台账 used=initial-余额（总面值连续）、误判死钥自动复活。
+// 背景：上游计费模型与本地面值记账不同构（促销倍率/缓存减免/赠送额度），本地 used 只作方向参考，定期以上游余额校准。
+func (a *App) handleAdminLineKeysCalibrate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	lineID := r.PathValue("line")
+	var req struct {
+		Text            string `json:"text"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := adminBody(r, 1<<20, &req); err != nil {
+		errAdmin(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	if !adminPasswordOk(req.ConfirmPassword) {
+		a.auditAppend("line_key_calibrate_fail", 0, lineID, clientIP(r))
+		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
+		return
+	}
+	re := regexp.MustCompile(`(sk_[A-Za-z0-9_-]+)\s*(?:->|=>|[:=])?\s*([0-9]+(?:\.[0-9]+)?)`)
+	balance := map[string]int64{}
+	for _, m := range re.FindAllStringSubmatch(req.Text, -1) {
+		yuan, err := strconv.ParseFloat(m[2], 64)
+		if err != nil {
+			continue
+		}
+		balance[m[1]] = int64(math.Round(yuan * 1e6))
+	}
+	if len(balance) == 0 {
+		errAdmin(w, 400, "bad_request", "未解析到任何「密钥+余额」条目（示例：sk_xxx -> 51.88 CNY）")
+		return
+	}
+	type krow struct {
+		idx  int
+		key  string
+		dead int
+	}
+	rows := []krow{}
+	kr, err := a.DB.Query("SELECT idx, key, dead FROM admin_line_keys WHERE line_id=?", lineID)
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "查询失败")
+		return
+	}
+	for kr.Next() {
+		var x krow
+		_ = kr.Scan(&x.idx, &x.key, &x.dead)
+		rows = append(rows, x)
+	}
+	kr.Close()
+	now := time.Now().Unix()
+	matched, killed, revived, unknown := 0, []int{}, []int{}, 0
+	for _, x := range rows {
+		bal, ok := balance[x.key]
+		if !ok {
+			unknown++
+			continue
+		}
+		matched++
+		if bal <= 0 {
+			_, _ = a.DB.Exec("UPDATE admin_line_keys SET dead=1, updated_ts=? WHERE line_id=? AND idx=?", now, lineID, x.idx)
+			_, _ = a.DB.Exec("UPDATE line_keys SET dead=1, updated_ts=? WHERE line_id=? AND idx=?", now, lineID, x.idx)
+			killed = append(killed, x.idx)
+			continue
+		}
+		_, _ = a.DB.Exec("UPDATE admin_line_keys SET dead=0, updated_ts=? WHERE line_id=? AND idx=?", now, lineID, x.idx)
+		var init, used int64
+		err := a.DB.QueryRow("SELECT initial_micro, used_micro FROM line_keys WHERE line_id=? AND idx=?", lineID, x.idx).Scan(&init, &used)
+		if err == sql.ErrNoRows {
+			_, _ = a.DB.Exec(`INSERT INTO line_keys (line_id, idx, initial_micro, used_micro, dead, updated_ts) VALUES (?,?,?,0,0,?)`,
+				lineID, x.idx, bal, now)
+		} else if err == nil {
+			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", init-bal, now, lineID, x.idx)
+		}
+		revived = append(revived, x.idx)
+	}
+	a.auditAppend("line_key_calibrate", 0,
+		fmt.Sprintf("线=%s 匹配 %d 把（判死 %v / 活性 %v / 未匹配 %d）", lineID, matched, killed, revived, unknown), clientIP(r))
+	_ = a.reloadLines()
+	jsonOut(w, 200, map[string]any{
+		"ok": true, "matched": matched, "killed": killed, "revived": revived, "unknown": unknown,
+		"live_balance_yuan": func() float64 {
+			var s float64
+			_ = a.DB.QueryRow(`SELECT COALESCE(SUM(CASE WHEN dead=0 THEN (initial_micro-used_micro) ELSE 0 END),0)/1000000.0 FROM line_keys WHERE line_id=?`, lineID).Scan(&s)
+			return math.Round(s*100) / 100
+		}(),
+	})
+}
+
+// geBalanceQuery 批量查询上游真实余额（采购商提供的查询服务 ge.bbs0.cc，POST /query 表单接口）。
+// 返回 map[key]余额微元（解析失败/格式错误的条目不出现在 map 中）。
+func geBalanceQuery(keys []string) (map[string]int64, error) {
+	form := url.Values{"keys": {strings.Join(keys, "\n")}, "detail": {"0"}}
+	req, err := http.NewRequest("POST", "https://ge.bbs0.cc/query", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("响应解析失败: %w", err)
+	}
+	re := regexp.MustCompile(`(sk_[A-Za-z0-9_-]+)\s*->\s*([0-9]+(?:\.[0-9]+)?)`)
+	balance := map[string]int64{}
+	for _, m := range re.FindAllStringSubmatch(out.Result, -1) {
+		yuan, err := strconv.ParseFloat(m[2], 64)
+		if err != nil {
+			continue
+		}
+		balance[m[1]] = int64(math.Round(yuan * 1e6))
+	}
+	return balance, nil
+}
+
+// POST /v1/admin/lines/{line}/keys/calibrate-auto {confirm_password} 一键查询上游真实余额并校准。
+// 活钥明文批量提交查询服务 → 解析余额 → 复用校准逻辑（0 判死摘除 / 有余额重置台账）→ 返回明细。
+func (a *App) handleAdminLineKeysCalibrateAuto(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	lineID := r.PathValue("line")
+	var req struct {
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := adminBody(r, 4096, &req); err != nil {
+		errAdmin(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	if !adminPasswordOk(req.ConfirmPassword) {
+		a.auditAppend("line_key_calibrate_auto_fail", 0, lineID, clientIP(r))
+		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
+		return
+	}
+	type krow struct {
+		idx int
+		key string
+	}
+	rows := []krow{}
+	kr, err := a.DB.Query("SELECT idx, key FROM admin_line_keys WHERE line_id=? AND dead=0", lineID)
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "查询失败")
+		return
+	}
+	for kr.Next() {
+		var x krow
+		_ = kr.Scan(&x.idx, &x.key)
+		rows = append(rows, x)
+	}
+	kr.Close()
+	if len(rows) == 0 {
+		errAdmin(w, 400, "bad_request", "该线路没有存活密钥可查询")
+		return
+	}
+	keys := make([]string, 0, len(rows))
+	for _, x := range rows {
+		keys = append(keys, x.key)
+	}
+	balance, err := geBalanceQuery(keys)
+	if err != nil {
+		errAdmin(w, 502, "upstream_error", "查询服务不可用："+err.Error())
+		return
+	}
+	now := time.Now().Unix()
+	killed, revived, unqueried := []int{}, []int{}, 0
+	for _, x := range rows {
+		bal, ok := balance[x.key]
+		if !ok {
+			unqueried++ // 查询服务未返回该钥（格式错误/限流），保持现状不动
+			continue
+		}
+		if bal <= 0 {
+			_, _ = a.DB.Exec("UPDATE admin_line_keys SET dead=1, updated_ts=? WHERE line_id=? AND idx=?", now, lineID, x.idx)
+			_, _ = a.DB.Exec("UPDATE line_keys SET dead=1, updated_ts=? WHERE line_id=? AND idx=?", now, lineID, x.idx)
+			killed = append(killed, x.idx)
+			continue
+		}
+		var init int64
+		err := a.DB.QueryRow("SELECT initial_micro FROM line_keys WHERE line_id=? AND idx=?", lineID, x.idx).Scan(&init)
+		if err == sql.ErrNoRows {
+			_, _ = a.DB.Exec(`INSERT INTO line_keys (line_id, idx, initial_micro, used_micro, dead, updated_ts) VALUES (?,?,?,0,0,?)`,
+				lineID, x.idx, bal, now)
+		} else if err == nil {
+			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", init-bal, now, lineID, x.idx)
+		}
+		revived = append(revived, x.idx)
+	}
+	a.auditAppend("line_key_calibrate_auto", 0,
+		fmt.Sprintf("线=%s 查询 %d 把（判死 %v / 校准 %v / 未返回 %d）", lineID, len(rows), killed, revived, unqueried), clientIP(r))
+	_ = a.reloadLines()
+	var live float64
+	_ = a.DB.QueryRow(`SELECT COALESCE(SUM(CASE WHEN dead=0 THEN (initial_micro-used_micro) ELSE 0 END),0)/1000000.0 FROM line_keys WHERE line_id=?`, lineID).Scan(&live)
+	jsonOut(w, 200, map[string]any{
+		"ok": true, "queried": len(rows), "killed": killed, "revived": revived, "unqueried": unqueried,
+		"live_balance_yuan": math.Round(live*100) / 100,
+	})
 }
 
 // GET /v1/admin/lines/{line}/models → 模型映射清单
