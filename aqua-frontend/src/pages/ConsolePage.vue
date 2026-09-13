@@ -606,6 +606,9 @@ function fmtTime(ts: number): string {
                 <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
                   <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
                 </button>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'official' }" @click="newKeyGrp = 'official'">
+                  <b>官方中转 · 高速专线</b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
+                </button>
                 <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'free' }" @click="newKeyGrp = 'free'">
                   <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
                 </button>
@@ -631,6 +634,7 @@ function fmtTime(ts: number): string {
                 <span v-if="k.billing_grp === 'per_call'" class="key-grp call" title="该密钥调用收费模型时按次计费">按次</span>
                 <span v-else-if="k.billing_grp === 'per_token'" class="key-grp token" title="该密钥调用收费模型时按 tokens 计费">按量</span>
                 <span v-else-if="k.billing_grp === 'free'" class="key-grp free" title="纯免费分组：仅可调用免费模型，调收费模型直接拒绝">纯免费</span>
+                <span v-else-if="k.billing_grp === 'official'" class="key-grp official" title="官方中转分组：tlk/ 前缀独占高速模型，按官方原价 6 折计费">官方中转</span>
                 <span v-else class="key-grp legacy" title="旧式密钥未选分组，收费模型按默认分组（按次）计费">未分组</span>
                 <span class="key-time">{{ fmtTime(k.created_ts) }}</span>
                 <button v-if="!k.revoked && k.can_reveal !== false" class="mini-btn ok" @click="copyKey(k)">
@@ -657,6 +661,9 @@ function fmtTime(ts: number): string {
               </button>
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_token' }" @click="grpEdit.grp = 'per_token'">
                 <b>免费 + 按量计费</b><span>收费模型按 tokens 三段计费，模型最全</span>
+              </button>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'official' }" @click="grpEdit.grp = 'official'">
+                <b>官方中转 · 高速专线</b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
               </button>
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'free' }" @click="grpEdit.grp = 'free'">
                 <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
@@ -1115,6 +1122,7 @@ function fmtTime(ts: number): string {
 .key-grp.call { background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); }
 .key-grp.token { background: rgba(52,211,153,.14); color: #34d399; }
 .key-grp.free { background: rgba(34,197,94,.14); color: #16a34a; border: 1px solid rgba(34,197,94,.35); }
+.key-grp.official { background: rgba(129,140,248,.16); color: #818cf8; border: 1px solid rgba(129,140,248,.4); }
 .key-grp.legacy { background: rgba(128,140,160,.15); color: var(--muted, #8a94a6); }
 .grp-pick { display: flex; gap: 8px; }
 .grp-pick.vertical { flex-direction: column; }

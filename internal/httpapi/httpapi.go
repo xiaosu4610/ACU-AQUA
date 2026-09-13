@@ -405,6 +405,14 @@ func (a *App) statusModelNorm() map[string]string {
 		if l.Mode == "free" {
 			continue
 		}
+		if l.Mode == "official" {
+			// tlk 官方中转线：独立前缀（tlk/xxx），目录/状态/请求三方同 ID 恒等映射
+			for j := range l.Models {
+				full := config.ModelFullName(l.ID, l.Models[j].SiteID)
+				m[full] = full
+			}
+			continue
+		}
 		for j := range l.Models {
 			u := up + "/" + l.Models[j].SiteID
 			m[up+"/"+l.Models[j].SiteID] = u                   // 统一前缀原文（aqua 线下架后 tide 承接，仍需恒等映射）
@@ -575,7 +583,8 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		mergedLines := a.linesSnap()
 		for i := range mergedLines {
 			l := &mergedLines[i]
-			if l.Mode == "free" {
+			if l.Mode == "free" || l.Mode == "official" {
+				// official（tlk 官方中转）线不参与统一前缀合并：独立前缀单独输出（下方）
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
@@ -701,6 +710,38 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["degraded"] = true
 			}
 			data = append(data, item)
+		}
+		// tlk 官方中转线：独立前缀（tlk/xxx）单独输出——官方原价 6 折、仅官方中转分组密钥可调
+		for i := range mergedLines {
+			l := &mergedLines[i]
+			if l.Mode != "official" {
+				continue
+			}
+			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			for j := range l.Models {
+				m := &l.Models[j]
+				full := config.ModelFullName(l.ID, m.SiteID)
+				p := a.pricingFor(full, "normal")
+				if p == nil {
+					continue // 无生效 normal 价：不下发（与统一线"下架即消失"口径一致）
+				}
+				if vip {
+					if vp := a.pricingFor(full, "vip"); vp != nil {
+						p = vp
+					}
+				}
+				data = append(data, map[string]any{
+					"id": full, "object": "model",
+					"created": created, "owned_by": "acu", "paid": true,
+					"type": "chat",
+					"groups": []string{"official"}, "mode": "official",
+					"floor_micro": p.FloorMicro,
+					"in_price":    float64(p.InRate10) / 10000,
+					"cache_price": float64(p.CacheRate10) / 10000,
+					"out_price":   float64(p.OutRate10) / 10000,
+					"description": pricingDescription(m, p),
+				})
+			}
 		}
 	} else {
 		// 线前缀直连模式（统一路由未启用）：按线逐条输出

@@ -278,6 +278,8 @@ function sortTokenLine(arr: typeof paidModels.value) {
 }
 const tokenLineRows = computed(() => sortTokenLine(paidTokenLine.value))
 const callLineRows = computed(() => sortTokenLine(paidCallLine.value))
+/** 官方中转专线（tlk/ 前缀，official 分组密钥专用：官方原价 6 折） */
+const officialLineRows = computed(() => sortTokenLine(paidModels.value.filter(m => m.groups.includes('official'))))
 
 /** 微元 → 元字符串（去尾零：2000→"0.002"，3800→"0.0038"） */
 function microYuan(v?: number): string {
@@ -431,6 +433,37 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             </div>
           </div>
           <div v-if="!tokenLineRows.length" class="model-empty">未找到匹配的收费模型</div>
+        </template>
+        <!-- 官方中转 · 高速专线（tlk/ 前缀，official 分组密钥专用） -->
+        <template v-if="officialLineRows.length">
+          <div class="pms-line-title">官方中转 · 高速专线<small>（密钥选「官方中转」分组时可用：tlk/ 前缀独占模型，按官方原价 6 折分段计价）</small></div>
+          <div class="pms-grid">
+            <div v-for="m in officialLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
+              <div class="pms-top">
+                <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
+              </div>
+              <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
+                :title="'状态由最近 200 次真实请求推断（剔除调用方参数错误）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
+                <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
+              </div>
+              <div class="pms-price pms-price-token">
+                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-floor">官方中转专线 · 官方原价 6 折 · 先付后用</div>
+              </div>
+              <div class="pms-live-metrics" :title="'最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
+              </div>
+              <div class="pms-actions">
+                <CopyBtn :text="m.id" />
+                <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
+              </div>
+            </div>
+          </div>
         </template>
       </div>
       <!-- 收费模型与免费政策说明（用户必读） -->

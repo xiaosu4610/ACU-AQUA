@@ -86,7 +86,7 @@ export async function listKeys(): Promise<KeyItem[]> {
 }
 
 /** 计费分组：per_call=免费+按次计费；per_token=免费+按量计费；free=纯免费（仅可调免费模型）；''=旧式未分组 */
-export type BillingGrp = '' | 'per_call' | 'per_token' | 'free'
+export type BillingGrp = '' | 'per_call' | 'per_token' | 'free' | 'official'
 
 export async function createKey(name: string, billingGrp: BillingGrp = ''): Promise<{ key: string; prefix: string; billing_grp: string }> {
   return apiJson('/my/keys', { method: 'POST', session: true, body: { name, billing_grp: billingGrp } })

@@ -88,6 +88,17 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
 	}
+	if line != nil && line.Mode == "official" {
+		// tlk 官方中转线（线前缀直连）：仅官方中转分组密钥可调（独占高速模型，官方原价 6 折计费）
+		kg := actx.KeyGrp
+		if kg == "" {
+			kg = a.Cfg.Billing.DefaultGrp
+		}
+		if kg != "official" {
+			errOut(w, 403, "official_line_restricted", "tlk/ 官方中转模型仅限官方中转分组密钥调用——请在控制台创建或切换为「官方中转」分组密钥")
+			return
+		}
+	}
 	if unified {
 		// 统一前缀：按密钥计费分组选线；未分组旧密钥按配置默认分组
 		grp := actx.KeyGrp
@@ -97,6 +108,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		if grp == "free" {
 			// 纯免费分组密钥：收费模型全部拦截（免费模型走裸名不经此分支）
 			errOut(w, 403, "free_grp_restricted", "当前密钥为纯免费分组，仅可调用免费模型（不带 aqua/ 前缀的裸模型名）；收费模型请在控制台将该密钥切换为按次/按量分组")
+			return
+		}
+		if grp == "official" {
+			// 官方中转分组密钥：专属 tlk/ 前缀模型（下方线前缀直连分支承接），不走统一前缀分组路由
+			errOut(w, 403, "official_grp_scope", "当前密钥为官方中转分组，请直接调用 tlk/ 前缀模型（如 tlk/kimi-k3）；按次/按量模型请使用对应分组的密钥")
 			return
 		}
 		line = a.lineForMode(grp)
