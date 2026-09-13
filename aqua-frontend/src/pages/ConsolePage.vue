@@ -111,6 +111,32 @@ const creating = ref(false)
 const freshKey = ref('') // 仅创建后展示一次
 const keysMsg = ref('')
 const copiedId = ref(0) // 刚复制成功的密钥 id（按钮短暂反馈）
+const mkOpen = ref(false) // 创建密钥弹窗
+const mkDone = ref(false) // 弹窗成功态（展示密钥原文）
+const freshCopied = ref(false) // 弹窗内复制反馈
+
+/** 打开创建弹窗（清空上次表单） */
+function openMk() {
+  newKeyName.value = ''
+  newKeyGrp.value = 'per_token'
+  mkDone.value = false
+  freshCopied.value = false
+  keysMsg.value = ''
+  mkOpen.value = true
+}
+
+/** 关闭创建弹窗（成功后清空密钥原文防残留） */
+function closeMk() {
+  mkOpen.value = false
+  mkDone.value = false
+  freshKey.value = ''
+  freshCopied.value = false
+}
+
+/** 分组显示名（成功态提示用） */
+function grpLabel(g: BillingGrp) {
+  return g === 'per_call' ? '按次计费' : g === 'per_token' ? '按量计费' : g === 'official' ? '官方中转' : g === 'free' ? '纯免费' : '未分组'
+}
 
 async function loadKeys() {
   try { keys.value = await listKeys() } catch (e) { keysMsg.value = errText(e) }
@@ -124,6 +150,7 @@ async function doCreateKey() {
     const j = await createKey(name, newKeyGrp.value)
     freshKey.value = j.key
     newKeyName.value = ''
+    mkDone.value = true // 弹窗切成功态：展示密钥原文（仅此一次）
     await loadKeys()
     loadCheckup()
   } catch (e) { keysMsg.value = errText(e) }
@@ -172,7 +199,11 @@ function setDefaultKey() {
 }
 
 async function copyFresh() {
-  if (await copyText(freshKey.value)) note('密钥已复制到剪贴板', true)
+  if (await copyText(freshKey.value)) {
+    freshCopied.value = true
+    setTimeout(() => { freshCopied.value = false }, 1500)
+    note('密钥已复制到剪贴板', true)
+  }
 }
 
 /* ===== 用量 ===== */
@@ -597,35 +628,11 @@ function fmtTime(ts: number): string {
             <div><h2>API 密钥</h2><p>调用 https://api.ltzy.top/v1 全部端点；支持随时复制查看</p></div>
           </div>
           <div class="dash-sec">
-            <div class="key-create">
-              <input v-model="newKeyName" maxlength="32" placeholder="密钥备注，如：我的笔记本 / 生产环境" @keydown.enter="doCreateKey" />
-              <div class="grp-pick">
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" @click="newKeyGrp = 'per_call'">
-                  <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro 系 ¥0.008/次</span>
-                </button>
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
-                  <b>免费 + 按量计费</b><span>按 tokens 三段计费，模型最全</span>
-                </button>
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'official' }" @click="newKeyGrp = 'official'">
-                  <b>官方中转 · 高速专线</b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
-                </button>
-                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'free' }" @click="newKeyGrp = 'free'">
-                  <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
-                </button>
-              </div>
-              <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">创建密钥</button>
+            <div class="keys-head">
+              <p class="keys-head-txt">一把密钥即可调用全部端点；分组决定收费模型的计费方式，随时可切换。</p>
+              <button class="btn tool-run keys-cta" @click="openMk"><AqIcon name="plus" :size="14" /> 创建密钥</button>
             </div>
-            <p class="hint-line">分组只影响收费模型计费方式：调用 aqua/ 模型时，按次分组按次数扣费（deepseek-v4-flash / glm-5.3-flash ¥0.004/次，deepseek-v4-pro / glm-5.2 / glm-5.3 ¥0.008/次），按量分组按 tokens 三段精算（免费模型不受影响）；「纯免费」密钥只能调用免费模型，调收费模型会被直接拒绝，绝不产生扣费。分组随时可在下方列表切换。</p>
-            <!-- 新密钥首次展示（之后可在列表随时复制） -->
-            <div v-if="freshKey" class="fresh-key">
-              <code>{{ freshKey }}</code>
-              <div class="fresh-key-ops">
-                <button class="mini-btn ok" @click="copyFresh"><AqIcon name="copy" :size="12" /> 复制</button>
-                <button class="mini-btn" @click="setDefaultKey">设为站内默认</button>
-                <button class="mini-btn danger" @click="freshKey = ''">关闭</button>
-              </div>
-              <p class="hint-line ok">此密钥已加密保存在你的账号里，之后可在下方列表随时复制。</p>
-            </div>
+            <p class="hint-line neutral">按次分组：flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次；按量分组：按 tokens 三段精算，模型最全；官方中转分组：tlk/ 前缀独占高速模型，官方原价 6 折；纯免费密钥只可调免费模型，绝不产生扣费。</p>
             <div class="key-list">
               <div v-if="!keys.length" class="dash-empty">还没有密钥，创建一把开始调用</div>
               <div v-for="k in keys" :key="k.id" class="key-row" :class="{ revoked: k.revoked }">
@@ -654,25 +661,69 @@ function fmtTime(ts: number): string {
         <div v-if="grpEdit.open" class="grp-mask" @click.self="grpEdit.open = false">
           <div class="grp-edit-modal">
             <h3>切换密钥计费分组</h3>
-            <p class="hint-line">密钥 <code>{{ grpEdit.prefix }}</code>（{{ grpEdit.name }}）——切换立即生效，无需重建密钥。</p>
-            <div class="grp-pick vertical">
-              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" @click="grpEdit.grp = 'per_call'">
-                <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro 系 ¥0.008/次</span>
-              </button>
+            <p class="hint-line neutral">密钥 <code>{{ grpEdit.prefix }}</code>（{{ grpEdit.name }}）——切换立即生效，无需重建密钥。</p>
+            <div class="grp-pick grid">
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_token' }" @click="grpEdit.grp = 'per_token'">
-                <b>免费 + 按量计费</b><span>收费模型按 tokens 三段计费，模型最全</span>
+                <b>免费 + 按量计费</b><span>按 tokens 三段精算 · 模型最全</span>
               </button>
-              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'official' }" @click="grpEdit.grp = 'official'">
-                <b>官方中转 · 高速专线</b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
+              <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'per_call' }" @click="grpEdit.grp = 'per_call'">
+                <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次</span>
+              </button>
+              <button type="button" class="grp-opt official" :class="{ on: grpEdit.grp === 'official' }" @click="grpEdit.grp = 'official'">
+                <b>官方中转 · 高速专线<i class="mk-new">NEW</i></b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
               </button>
               <button type="button" class="grp-opt" :class="{ on: grpEdit.grp === 'free' }" @click="grpEdit.grp = 'free'">
-                <b>纯免费</b><span>仅免费模型，绝不产生扣费</span>
+                <b>纯免费</b><span>仅免费模型 · 绝不产生扣费</span>
               </button>
             </div>
             <div class="grp-edit-ops">
               <button class="mini-btn" @click="grpEdit.open = false">取消</button>
               <button class="btn tool-run" :disabled="grpSaving" @click="doChangeGrp">{{ grpSaving ? '保存中…' : '保存' }}</button>
             </div>
+          </div>
+        </div>
+
+        <!-- 创建 API 密钥弹窗（表单态 → 成功态） -->
+        <div v-if="mkOpen" class="grp-mask" @click.self="closeMk">
+          <div class="grp-edit-modal mk-modal">
+            <template v-if="!mkDone">
+              <h3><AqIcon name="key" :size="16" /> 创建 API 密钥</h3>
+              <p class="hint-line neutral">密钥原文仅在创建后展示一次，之后可随时在列表「复制」查看，请妥善保管。</p>
+              <input v-model="newKeyName" class="mk-name" maxlength="32" placeholder="密钥备注，如：我的笔记本 / 生产环境" @keydown.enter="doCreateKey" />
+              <p class="mk-label">选择计费分组 <span>仅影响收费模型 · 随时可切换</span></p>
+              <div class="grp-pick grid">
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_token' }" @click="newKeyGrp = 'per_token'">
+                  <b>免费 + 按量计费</b><span>按 tokens 三段精算 · 模型最全</span>
+                </button>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'per_call' }" @click="newKeyGrp = 'per_call'">
+                  <b>免费 + 按次计费</b><span>flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次</span>
+                </button>
+                <button type="button" class="grp-opt official" :class="{ on: newKeyGrp === 'official' }" @click="newKeyGrp = 'official'">
+                  <b>官方中转 · 高速专线<i class="mk-new">NEW</i></b><span>tlk/ 前缀独占模型 · 官方原价 6 折</span>
+                </button>
+                <button type="button" class="grp-opt" :class="{ on: newKeyGrp === 'free' }" @click="newKeyGrp = 'free'">
+                  <b>纯免费</b><span>仅免费模型 · 绝不产生扣费</span>
+                </button>
+              </div>
+              <p v-if="keysMsg" class="hint-line">{{ keysMsg }}</p>
+              <div class="grp-edit-ops">
+                <button class="mini-btn" @click="closeMk">取消</button>
+                <button class="btn tool-run" :disabled="creating || !newKeyName.trim()" @click="doCreateKey">{{ creating ? '创建中…' : '创建密钥' }}</button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="mk-done-head">
+                <span class="mk-done-ic"><AqIcon name="check" :size="20" /></span>
+                <h3>密钥已创建</h3>
+              </div>
+              <p class="hint-line neutral">分组 <b>{{ grpLabel(newKeyGrp) }}</b> · 已加密保存在账号里，可随时在列表复制或切换分组。</p>
+              <code class="mk-key">{{ freshKey }}</code>
+              <div class="grp-edit-ops">
+                <button class="mini-btn" @click="setDefaultKey">设为站内默认</button>
+                <button class="mini-btn ok" @click="copyFresh"><AqIcon :name="freshCopied ? 'check' : 'copy'" :size="12" /> {{ freshCopied ? '已复制' : '复制密钥' }}</button>
+                <button class="btn tool-run" @click="closeMk">完成</button>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -1110,11 +1161,10 @@ function fmtTime(ts: number): string {
 .checkup-item.lv-bad svg { color: #f87171; }
 
 /* 密钥 */
-.key-create { display: flex; gap: 8px; margin: 12px 0 10px; }
-.key-create input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; }
-.fresh-key { background: rgba(56,189,248,.08); border: 1px dashed var(--aqua, #38bdf8); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
-.fresh-key code { display: block; word-break: break-all; font-size: 13.5px; font-weight: 700; color: var(--accent, #0b6cff); }
-.fresh-key-ops { display: flex; gap: 8px; margin-top: 10px; }
+/* 区头部：说明 + 创建 CTA（创建走弹窗） */
+.keys-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 2px; }
+.keys-head-txt { margin: 0; font-size: 13px; color: var(--muted, #8a94a6); }
+.keys-cta { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .key-list { display: flex; flex-direction: column; gap: 6px; }
 .key-row { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-radius: 11px; border: 1px solid var(--border, rgba(128,140,160,.2)); background: var(--card2, transparent); font-size: 13px; flex-wrap: wrap; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
 .key-row:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.4); box-shadow: 0 4px 16px rgba(56,189,248,.10); }
@@ -1124,18 +1174,38 @@ function fmtTime(ts: number): string {
 .key-grp.free { background: rgba(34,197,94,.14); color: #16a34a; border: 1px solid rgba(34,197,94,.35); }
 .key-grp.official { background: rgba(129,140,248,.16); color: #818cf8; border: 1px solid rgba(129,140,248,.4); }
 .key-grp.legacy { background: rgba(128,140,160,.15); color: var(--muted, #8a94a6); }
-.grp-pick { display: flex; gap: 8px; }
-.grp-pick.vertical { flex-direction: column; }
-/* 密钥切换分组弹窗 */
-.grp-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.grp-edit-modal { background: var(--card, #121a26); border: 1px solid var(--border, rgba(128,140,160,.3)); border-radius: 16px; padding: 20px 22px; width: min(420px, 92vw); max-height: 86vh; overflow-y: auto; }
-.grp-edit-modal h3 { margin: 0 0 10px; font-size: 16px; }
+/* 密钥弹窗（切换分组 / 创建密钥共用） */
+.grp-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(3px); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; animation: aquaFade .18s ease; }
+.grp-edit-modal { background: var(--card, #121a26); border: 1px solid var(--border, rgba(128,140,160,.3)); border-radius: 16px; padding: 20px 22px; width: min(420px, 92vw); max-height: 86vh; overflow-y: auto; animation: aquaPop .22s cubic-bezier(.2,.9,.3,1.15); }
+.grp-edit-modal h3 { margin: 0 0 10px; font-size: 16px; display: flex; align-items: center; gap: 7px; }
 .grp-edit-modal .hint-line { margin: 0 0 12px; }
 .grp-edit-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.grp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; cursor: pointer; font-size: 12px; color: inherit; text-align: left; }
-.grp-opt b { font-size: 12.5px; }
-.grp-opt span { color: var(--muted, #8a94a6); font-size: 11px; }
-.grp-opt.on { border-color: var(--aqua, #38bdf8); background: rgba(56,189,248,.10); }
+@keyframes aquaFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes aquaPop { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+/* 分组选择：2×2 网格 */
+.grp-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.grp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; cursor: pointer; font-size: 12px; color: inherit; text-align: left; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.grp-opt:hover { border-color: rgba(56,189,248,.45); background: rgba(56,189,248,.06); }
+.grp-opt b { font-size: 13px; }
+.grp-opt span { color: var(--muted, #8a94a6); font-size: 11px; line-height: 1.5; }
+.grp-opt.on { border-color: var(--aqua, #38bdf8); background: rgba(56,189,248,.12); box-shadow: 0 0 0 1px rgba(56,189,248,.35), 0 4px 14px rgba(56,189,248,.15); }
+.grp-opt.on b { color: var(--aqua, #38bdf8); }
+.grp-opt.official.on { border-color: #818cf8; background: rgba(129,140,248,.12); box-shadow: 0 0 0 1px rgba(129,140,248,.4), 0 4px 14px rgba(129,140,248,.18); }
+.grp-opt.official.on b { color: #a5b4fc; }
+/* 官方中转 NEW 角标 */
+.mk-new { font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 1px 6px; border-radius: 999px; margin-left: 6px; vertical-align: 2px; color: #fff; background: linear-gradient(135deg, #6366f1, #818cf8); box-shadow: 0 2px 6px rgba(99,102,241,.4); }
+/* 创建密钥弹窗细节 */
+.mk-modal { width: min(560px, 94vw); }
+.hint-line.neutral { color: var(--muted, #8a94a6); }
+.mk-name { width: 100%; box-sizing: border-box; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 13.5px; margin-bottom: 13px; }
+.mk-name:focus { outline: none; border-color: var(--aqua, #38bdf8); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+.mk-label { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
+.mk-label span { font-weight: 400; color: var(--muted, #8a94a6); font-size: 11.5px; margin-left: 5px; }
+/* 创建成功态 */
+.mk-done-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+.mk-done-head h3 { margin: 0; }
+.mk-done-ic { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(52,211,153,.14); color: #34d399; border: 1px solid rgba(52,211,153,.4); flex: none; }
+.mk-key { display: block; word-break: break-all; font-size: 14.5px; font-weight: 700; padding: 13px 14px; border-radius: 12px; background: rgba(56,189,248,.08); border: 1px dashed var(--aqua, #38bdf8); margin: 0 0 2px; color: var(--aqua, #38bdf8); }
 .key-row.revoked { opacity: .5; }
 .key-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-prefix { color: var(--accent, #0b6cff); font-size: 12px; }
@@ -1332,5 +1402,9 @@ function fmtTime(ts: number): string {
 }
 @media (max-width: 640px) {
   .key-time { display: none; }
+  .keys-head { flex-direction: column; align-items: stretch; gap: 8px; }
+  .keys-cta { justify-content: center; }
+  .grp-pick { grid-template-columns: 1fr; }
+  .mk-modal, .grp-edit-modal { width: min(440px, 94vw); }
 }
 </style>
