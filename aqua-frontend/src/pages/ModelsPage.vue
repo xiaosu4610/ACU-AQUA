@@ -470,6 +470,37 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             </div>
           </div>
         </template>
+        <!-- GPT · Codex 专线（codex/ 前缀，ChatGPT 账号池专属：按量分段计价，任意按量密钥可调） -->
+        <template v-if="codexLineRows.length">
+          <div class="pms-line-title">GPT · Codex 专线<small>（codex/ 前缀独占模型，ChatGPT 账号池直连：输入 / 缓存命中 / 输出分段计价，按量密钥即可调用）</small></div>
+          <div class="pms-grid">
+            <div v-for="(m, i) in codexLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }" :style="{ '--i': i }">
+              <div class="pms-top">
+                <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
+              </div>
+              <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
+                :title="'状态由近 6 小时内最近 200 次真实请求推断（剔除调用方参数错误与限流）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
+                <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
+              </div>
+              <div class="pms-price pms-price-token">
+                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
+                <div class="tp-floor">Codex 账号池专线 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span> · 先付后用</div>
+              </div>
+              <div class="pms-live-metrics" :title="'近 6 小时 · 最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
+                <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
+              </div>
+              <div class="pms-actions">
+                <CopyBtn :text="m.id" />
+                <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
+              </div>
+            </div>
+          </div>
+        </template>
         <!-- 按量计费分组（密钥选「免费+按量」时可用；三段价、无保底、先付后用） -->
         <template v-if="tokenLineRows.length">
           <div class="pms-line-title">按量计费分组<small>（密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
@@ -531,37 +562,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
                 <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
                 <div class="tp-floor">官方中转专线 · 官方原价 6 折 · 先付后用</div>
-              </div>
-              <div class="pms-live-metrics" :title="'近 6 小时 · 最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
-                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
-                <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
-                <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
-              </div>
-              <div class="pms-actions">
-                <CopyBtn :text="m.id" />
-                <router-link class="pms-detail" :to="m.link">能力详情<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></router-link>
-              </div>
-            </div>
-          </div>
-        </template>
-        <!-- GPT · Codex 专线（codex/ 前缀，ChatGPT 账号池专属：按量分段计价，任意按量密钥可调） -->
-        <template v-if="codexLineRows.length">
-          <div class="pms-line-title">GPT · Codex 专线<small>（codex/ 前缀独占模型，ChatGPT 账号池直连：输入 / 缓存命中 / 输出分段计价，按量密钥即可调用）</small></div>
-          <div class="pms-grid">
-            <div v-for="(m, i) in codexLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }" :style="{ '--i': i }">
-              <div class="pms-top">
-                <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
-              </div>
-              <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
-                :title="'状态由近 6 小时内最近 200 次真实请求推断（剔除调用方参数错误与限流）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
-                <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
-                <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
-              </div>
-              <div class="pms-price pms-price-token">
-                <div class="tp-row"><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-                <div class="tp-row"><i>缓存命中</i><b>¥{{ perMYuan(m.cachePrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-                <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
-                <div class="tp-floor">Codex 账号池专线 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span> · 先付后用</div>
               </div>
               <div class="pms-live-metrics" :title="'近 6 小时 · 最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
