@@ -601,8 +601,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		mergedLines := a.linesSnap()
 		for i := range mergedLines {
 			l := &mergedLines[i]
-			if l.Mode == "free" || l.Mode == "official" {
-				// official（tlk 官方中转）线不参与统一前缀合并：独立前缀单独输出（下方）
+			if l.Mode == "free" || l.Mode == "official" || l.AuthStyle == "codex" {
+				// official（tlk 官方中转）/ codex（GPT 账号池）线不参与统一前缀合并：
+				// 专属前缀（线 id 即前缀）单独输出（下方）
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
@@ -753,6 +754,38 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"created": created, "owned_by": "acu", "paid": true,
 					"type": "chat",
 					"groups": []string{"official"}, "mode": "official",
+					"floor_micro": p.FloorMicro,
+					"in_price":    float64(p.InRate10) / 10000,
+					"cache_price": float64(p.CacheRate10) / 10000,
+					"out_price":   float64(p.OutRate10) / 10000,
+					"description": pricingDescription(m, p),
+				})
+			}
+		}
+		// codex（GPT 账号池）线：专属前缀（codex/xxx）单独输出——按量分段计价，任意登录密钥可调
+		for i := range mergedLines {
+			l := &mergedLines[i]
+			if l.AuthStyle != "codex" {
+				continue
+			}
+			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			for j := range l.Models {
+				m := &l.Models[j]
+				full := config.ModelFullName(l.ID, m.SiteID)
+				p := a.pricingFor(full, "normal")
+				if p == nil {
+					continue
+				}
+				if vip {
+					if vp := a.pricingFor(full, "vip"); vp != nil {
+						p = vp
+					}
+				}
+				data = append(data, map[string]any{
+					"id": full, "object": "model",
+					"created": created, "owned_by": "acu", "paid": true,
+					"type": "chat",
+					"groups": []string{l.Mode}, "mode": l.Mode,
 					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
 					"cache_price": float64(p.CacheRate10) / 10000,

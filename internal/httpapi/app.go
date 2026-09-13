@@ -78,7 +78,7 @@ func (a *App) lineForModel(grp, siteID string) *config.Line {
 	defer a.linesMu.RUnlock()
 	for i := range a.Cfg.Lines {
 		l := &a.Cfg.Lines[i]
-		if l.Mode != grp {
+		if l.Mode != grp || l.AuthStyle == "codex" { // codex 线走专属前缀，不参与统一前缀路由
 			continue
 		}
 		for j := range l.Models {

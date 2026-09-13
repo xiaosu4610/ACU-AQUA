@@ -272,11 +272,14 @@ func codexChatChunk(id, model, content string, role string, finish string, usage
 	return m
 }
 
-// codexUsage Responses usage → chat/completions usage
+// codexUsage Responses usage → chat/completions usage（缓存命中透传，三段计费用）
 type codexUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens        int64 `json:"input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	TotalTokens        int64 `json:"total_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
 }
 
 func (u *codexUsage) toChat() map[string]any {
@@ -284,6 +287,9 @@ func (u *codexUsage) toChat() map[string]any {
 		"prompt_tokens":     u.InputTokens,
 		"completion_tokens": u.OutputTokens,
 		"total_tokens":      u.TotalTokens,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens": u.InputTokensDetails.CachedTokens,
+		},
 	}
 }
 
