@@ -17,6 +17,14 @@
 # 运维敏感目录（密钥/脚本/备份/文档）
 /private/
 
+# 密钥/凭据类文件（严禁入库）
+/build/keypickup/
+/keypickup-*.zip
+/build/wgcf/
+*.priv
+*.pem
+gpt_email_account.txt
+
 # 本地临时与备份
 /.tmp/
 /.tools/
