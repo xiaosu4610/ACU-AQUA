@@ -57,6 +57,7 @@ let pollTimer: number | null = null
 const AMTS = [5, 10, 30, 100]
 
 const topupMicro = computed(() => Math.round((Number(topupAmt.value) || 0) * 1_000_000))
+const giftYuan = computed(() => (((Number(topupAmt.value) || 0) * 2).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')))
 function yuan(v?: number): string {
   if (v == null) return '--'
   return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
@@ -85,7 +86,7 @@ function startPolling() {
       const j = await apiJson<any>(`/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`, { session: true })
       if (j.status === 'paid') {
         payOk.value = true
-        payMsg.value = `充值成功：¥${yuan(j.amount_micro)} 已注入众筹池（当前池子 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
+        payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
         stopPolling(); payingOrder.value = null
         loadStatus(); loadFlows(); loadRanks()
       }
@@ -99,7 +100,7 @@ async function manualCheck() {
     const j = await apiJson<any>(`/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`, { session: true })
     if (j.status === 'paid') {
       payOk.value = true
-      payMsg.value = `充值成功：¥${yuan(j.amount_micro)} 已注入众筹池（当前池子 ¥${yuan(j.pool_balance_micro)}）`
+      payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
       stopPolling(); payingOrder.value = null
       loadStatus(); loadFlows(); loadRanks()
     } else payMsg.value = '还未查询到支付结果，完成支付后稍等几秒'
@@ -109,7 +110,7 @@ onUnmounted(stopPolling)
 
 /* ===== 展示辅助 ===== */
 const alive = computed(() => !!status.value && status.value.balance_micro > 0)
-const tokensOf = (micro: number) => Math.floor(micro / 1_000_000 * 10_000_000) // ¥1 ≈ 1000 万输入 tokens（v4f 五折口径）
+const tokensOf = (micro: number) => Math.floor(micro / 1_000_000 * 50) // ¥1 ≈ 50 万输入 tokens（v4f 官方原价 ¥2/1M 口径）
 function fmtTs(t: number): string {
   const d = new Date((t || 0) * 1000)
   const p = (x: number) => (x < 10 ? '0' : '') + x
@@ -127,17 +128,17 @@ onMounted(async () => {
   <section class="route-page">
     <div class="pool-head">
       <h1><span class="ic"><AqIcon name="coin" :size="22" /></span>众筹公共算力池</h1>
-      <p>acu/ 前缀模型（deepseek-v4-flash / glm-5.3-flash）按官方原价 <b>五折</b> 从公共池扣费——人人可调、无需充值、个人余额分文不动。池子余额由大家共同充值扩充，见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。</p>
+      <p>acu/ 前缀众筹模型按<b>官方原价</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。充值翻倍：充 1 元 = 2 元站点额度，额度由大家共同充值扩充，见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。</p>
     </div>
 
     <!-- 池子驾驶舱 -->
     <div class="dash-card pool-main" :class="{ empty: status && !alive }">
       <div class="pool-state">
         <span class="dot" :class="alive ? 'on' : 'off'"></span>
-        {{ status ? (alive ? '供血中' : '已熔断 · 等待充值复活') : '加载中…' }}
+        {{ status ? (alive ? '额度可用' : '额度已用完 · 等待充值复活') : '加载中…' }}
       </div>
       <div class="pool-balance"><small>¥</small>{{ status ? yuan(status.balance_micro) : '--' }}</div>
-      <div class="pool-sub">当前池子余额 ≈ 可供 {{ status ? tokensOf(status.balance_micro).toLocaleString() : '--' }} 万输入 tokens（v4f 五折口径）</div>
+      <div class="pool-sub">当前站点额度 ≈ 可供 {{ status ? tokensOf(status.balance_micro).toLocaleString() : '--' }} 万输入 tokens（v4f 官方原价口径）</div>
       <div class="pool-stats">
         <div><b>{{ status ? yuan(status.charged_micro) : '--' }}</b><span>累计充值</span></div>
         <div><b>{{ status ? yuan(status.used_micro) : '--' }}</b><span>累计消耗</span></div>
@@ -148,8 +149,8 @@ onMounted(async () => {
 
     <!-- 充值 -->
     <div class="dash-card pool-topup">
-      <h2><AqIcon name="plus" :size="15" /> 扩充池子</h2>
-      <p class="topup-note">充值即注入公共池，由所有人共用消耗，<b>不可退、不可转个人余额</b>；无最低充值限制，任意金额都能点亮池子。救场者（池子归零后第一笔充值）将登上荣誉墙。</p>
+      <h2><AqIcon name="plus" :size="15" /> 充值翻倍 · 扩充站点额度</h2>
+      <p class="topup-note"><b>充值翻倍：充 1 元 = 2 元站点额度</b>（实付 ¥10 → 到账 ¥20），注入公共池由所有人共用消耗，<b>不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。</p>
       <div class="amt-row">
         <button v-for="a in AMTS" :key="a" type="button" class="amt" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>
         <input v-model.number="topupAmt" type="number" min="0.01" max="1000" placeholder="自定义" />
@@ -158,7 +159,7 @@ onMounted(async () => {
         <button type="button" class="ch" :class="{ on: topupChannel === 'alipay' }" @click="topupChannel = 'alipay'">支付宝</button>
         <button type="button" class="ch" :class="{ on: topupChannel === 'wxpay' }" @click="topupChannel = 'wxpay'">微信</button>
         <button class="btn topup-go" :disabled="paying || !isLoggedIn()" @click="createTopup">
-          {{ paying ? '下单中…' : isLoggedIn() ? `注入 ¥${topupAmt || 0}` : '请先登录' }}
+          {{ paying ? '下单中…' : isLoggedIn() ? `充 ¥${topupAmt || 0} → 到账 ¥${giftYuan}` : '请先登录' }}
         </button>
       </div>
       <p v-if="payingOrder" class="pay-wait">

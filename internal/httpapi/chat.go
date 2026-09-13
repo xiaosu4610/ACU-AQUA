@@ -120,15 +120,15 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if grp == "official" {
-			// 官方中转分组密钥：专属 tlk/ 前缀模型（下方线前缀直连分支承接），不走统一前缀分组路由
-			errOut(w, 403, "official_grp_scope", "当前密钥为官方中转分组，请直接调用 tlk/ 前缀模型（如 tlk/kimi-k3）；按次/按量模型请使用对应分组的密钥")
+			// 官方中转分组密钥：官方中转通道已并入众筹池（tlk 线下架），引导直调众筹模型
+			errOut(w, 403, "official_grp_scope", "官方中转通道已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，如 acu/glm-5.3，按官方原价扣站点额度）；按量模型请使用按量分组密钥")
 			return
 		}
 		line = a.lineForMode(grp)
 		if line == nil {
 			if grp == "per_call" {
-				// 按次线临时下架（admin_lines.enabled=0）：明确告知并引导切换按量分组
-				errOut(w, 403, "per_call_suspended", "按次计费已临时下架，当前仅按量计费开放——请在控制台将该密钥的计费分组切换为「按量计费」后重试（免费模型不受影响）")
+				// 按次线下架并入众筹池（admin_lines.enabled=0）：引导众筹池/按量分组
+				errOut(w, 403, "per_call_suspended", "按次计费已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，按官方原价扣站点额度，充 1 元 = 2 元额度）；按量模型请切换「按量计费」分组（免费模型不受影响）")
 				return
 			}
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")

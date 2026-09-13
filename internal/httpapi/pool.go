@@ -1,13 +1,14 @@
 package httpapi
 
 // 众筹池（acu/ 公共算力池）：与个人余额物理隔离的共享钱包。
-// 计费口径：acu/ 模型按五折（0.5 倍率）从池子扣账（pricing 表 mode='per_token'，grp 固定 normal）；
-// 池子归零即熔断（403 crowd_pool_empty），用户充值（payments.product='pool'）或官方注入即复活；
+// 计费口径（站点额度）：充值翻倍到账（实付 1 元 = 2 元站点额度），acu/ 模型按 TokenLinks 官方原价从池子扣账
+// （pricing 表 rate10 = 官方原价档，grp 固定 normal）；池子归零即熔断（403 crowd_pool_empty），充值即复活；
 // 每一笔充值/扣费落 pool_flows 全透明可查，榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
 
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -19,7 +20,7 @@ import (
 
 const (
 	poolID       = "acu"
-	poolDailyCap = 1_000_000 // 单用户每日扣费上限（微元，¥1.00 五折口径）——防单人掏空
+	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，官方原价口径 ¥2.00 站点额度，等效旧五折口径 ¥1.00）——防单人掏空
 )
 
 var (
@@ -55,7 +56,7 @@ func (a *App) poolGate(uid int64) (int, string, string) {
 	used := poolQuota[uid]
 	poolQuotaMu.Unlock()
 	if used >= poolDailyCap {
-		return 429, "crowd_quota_daily", "今日众筹模型额度已用完（每用户每日 ¥1.00 口径），明日再来；急需可用个人余额调用 aqua/ 或 tlk/ 模型"
+		return 429, "crowd_quota_daily", "今日众筹站点额度已用完（每用户每日 ¥2.00 站点额度），明日再来；急需可用个人余额调用 aqua/ 按量模型"
 	}
 	return 0, "", ""
 }
@@ -71,7 +72,7 @@ func poolQuotaAdd(uid, amount int64) {
 	poolQuotaMu.Unlock()
 }
 
-// poolConsume 众筹池结算扣账（acu/ 请求响应后按实际 usage 五折扣账；final<=0 不扣）。
+// poolConsume 众筹池结算扣账（acu/ 请求响应后按实际 usage 以官方原价口径扣站点额度；final<=0 不扣）。
 // 允许轻微透支至 0 以下（下一笔 gate 熔断），账实相符；失败重试 2 次后落错误中心。
 func (a *App) poolConsume(uid, final, rid int64, note string) {
 	if final <= 0 {
@@ -113,9 +114,10 @@ func (a *App) poolConsumeOnce(uid, final, rid int64, note string) error {
 	return tx.Commit()
 }
 
-// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：净到手金额直接进池子；
-// 池子此前余额 ≤ 0 时标记 revival（救场英雄）。
-func poolChargeTx(tx *sql.Tx, uid, amount int64, note string) error {
+// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——实付 amount，
+// 到账 2×amount（充值翻倍营销：充 1 元 = 2 元站点额度）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
+func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
+	credit := amount * 2 // 充值翻倍：实付 amount → 到账 2×amount 站点额度（扣费按官方原价走账，购买力等效）
 	var prev int64
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&prev); err != nil {
 		if err != sql.ErrNoRows {
@@ -127,20 +129,21 @@ func poolChargeTx(tx *sql.Tx, uid, amount int64, note string) error {
 		prev = 0
 	}
 	revival := 0
-	if prev <= 0 && amount > 0 {
+	if prev <= 0 && credit > 0 {
 		revival = 1
 	}
 	if _, err := tx.Exec("UPDATE pool_wallet SET balance_micro=balance_micro+?, charged_micro=charged_micro+?, updated_ts=? WHERE id=?",
-		amount, amount, time.Now().Unix(), poolID); err != nil {
+		credit, credit, time.Now().Unix(), poolID); err != nil {
 		return err
 	}
 	var balance int64
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance); err != nil {
 		return err
 	}
+	flowNote := fmt.Sprintf("充值翻倍 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
 	_, err := tx.Exec(
 		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, revival, note, ts) VALUES (?, 'charge', ?, ?, ?, ?, ?)",
-		uid, amount, balance, revival, note, time.Now().Unix())
+		uid, credit, balance, revival, flowNote, time.Now().Unix())
 	return err
 }
 
@@ -272,16 +275,16 @@ func (a *App) poolRankCharge(w http.ResponseWriter, since int64) {
 	jsonOut(w, 200, map[string]any{"items": items})
 }
 
-// poolBadge 充值段位徽章（¥5 铜 / ¥20 银 / ¥50 金 / ¥100 钻）
+// poolBadge 充值段位徽章（站点额度口径：¥10 铜 / ¥40 银 / ¥100 金 / ¥200 钻，实付减半）
 func poolBadge(chargedMicro int64) string {
 	switch {
-	case chargedMicro >= 100_000_000:
+	case chargedMicro >= 200_000_000:
 		return "钻石赞助"
-	case chargedMicro >= 50_000_000:
+	case chargedMicro >= 100_000_000:
 		return "金牌赞助"
-	case chargedMicro >= 20_000_000:
+	case chargedMicro >= 40_000_000:
 		return "银牌赞助"
-	case chargedMicro >= 5_000_000:
+	case chargedMicro >= 10_000_000:
 		return "助力者"
 	}
 	return ""
@@ -520,8 +523,9 @@ func (a *App) handleAdminPoolSeed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	credit := req.AmountMicro * 2 // 站点额度口径：注入实付 ×2 到账（与充值翻倍一致）
 	if _, err := tx.Exec("UPDATE pool_wallet SET balance_micro=balance_micro+?, charged_micro=charged_micro+?, updated_ts=? WHERE id=?",
-		req.AmountMicro, req.AmountMicro, time.Now().Unix(), poolID); err != nil {
+		credit, credit, time.Now().Unix(), poolID); err != nil {
 		_ = tx.Rollback()
 		errAdmin(w, 500, "internal_error", "注入失败")
 		return
@@ -529,8 +533,8 @@ func (a *App) handleAdminPoolSeed(w http.ResponseWriter, r *http.Request) {
 	var balance int64
 	_ = tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance)
 	if _, err := tx.Exec(
-		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, note, ts) VALUES (0, 'seed', ?, ?, '官方注入', ?)",
-		req.AmountMicro, balance, time.Now().Unix()); err != nil {
+		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, note, ts) VALUES (0, 'seed', ?, ?, ?, ?)",
+		credit, balance, fmt.Sprintf("官方注入 实付¥%.2f · 到账¥%.2f 站点额度", float64(req.AmountMicro)/1e6, float64(credit)/1e6), time.Now().Unix()); err != nil {
 		_ = tx.Rollback()
 		errAdmin(w, 500, "internal_error", "注入失败")
 		return

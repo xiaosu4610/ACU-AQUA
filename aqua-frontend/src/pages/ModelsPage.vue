@@ -216,7 +216,7 @@ const viewRows = computed(() => {
     .map(m => ({ row: m, st: statusOf(m), exhausted: isExhausted(m), health: healthOf(m) }))
 })
 
-/** 众筹专区：acu/ 前缀大卡片（官方自营通道，五折扣费走众筹池） */
+/** 众筹专区：acu/ 前缀大卡片（官方自营通道，官方原价扣站点额度，充值翻倍） */
 const crowdModels = computed(() => orderedModels.value
   .filter(m => isCrowd(m.id))
   .map(m => ({
@@ -349,7 +349,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <a class="repo-link" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee 仓库 <AqIcon name="star" :size="14" /></a>
         <a class="repo-link" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub 仓库 <AqIcon name="star" :size="14" /></a>
       </div>
-      <!-- 众筹模型专区：官方自营通道（acu/ 前缀，五折扣费走众筹池） -->
+      <!-- 众筹模型专区：官方自营通道（acu/ 前缀，官方原价扣站点额度，充值翻倍） -->
       <div v-if="crowdModels.length" class="crowd-sec" :class="{ off: poolStatus && !poolAlive }">
         <div class="cs-head">
           <div class="cs-title">
@@ -357,34 +357,33 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <b>众筹公共模型 · 官方自营通道</b>
             <span class="cs-live">
               <span class="pb-dot" :class="poolAlive ? 'on' : 'off'"></span>
-              {{ poolStatus ? (poolAlive ? '池子供血中' : '池子已用完 · 等待充值复活') : '状态同步中…' }}
-              <template v-if="poolStatus"> · 池余 ¥{{ (poolStatus.balance_micro / 1e6).toFixed(2).replace(/\.00$/, '') }}</template>
+              {{ poolStatus ? (poolAlive ? '站点额度可用' : '站点额度已用完 · 等待充值复活') : '状态同步中…' }}
+              <template v-if="poolStatus"> · 站点额度 ¥{{ (poolStatus.balance_micro / 1e6).toFixed(2).replace(/\.00$/, '') }}</template>
             </span>
           </div>
           <router-link to="/pool" class="cs-go">账本与榜单 →</router-link>
         </div>
-        <p class="cs-desc">acu/ 前缀模型按<b>官方原价五折</b>从<b>众筹公共池</b>扣费——无需充值即可调用，任何分组密钥可用，<b>个人余额分文不动</b>；池子见底即暂停，充值立刻复活，救场者登上荣誉墙。</p>
+        <p class="cs-desc">acu/ 前缀模型按<b>官方原价</b>从<b>众筹站点额度</b>扣费——无需充值即可调用，任何分组密钥可用，<b>个人余额分文不动</b>；充值翻倍：充 1 元 = 2 元站点额度，额度见底即暂停，充值立刻复活，救场者登上荣誉墙。</p>
         <div class="cs-cards">
           <div v-for="m in crowdModels" :key="m.id" class="cs-card">
             <div class="cs-model">
               <router-link :to="m.link" class="cs-id">{{ m.id }}</router-link>
               <CopyBtn :text="m.id" />
             </div>
-            <div class="cs-prices">
-              <div><i>输入</i><b>¥{{ perMYuan(m.inPrice) }}</b><span>/1M</span></div>
-              <div><i>缓存</i><b>¥{{ perMYuan(m.cachePrice) }}</b><span>/1M</span></div>
-              <div><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><span>/1M</span></div>
+            <div class="cs-official">
+              <b>按官方原价扣费</b>
+              <span>充 1 元 = 2 元站点额度 · 个人余额分文不动</span>
             </div>
             <div class="cs-foot">
-              <span class="cs-tag">五折扣费 · 池子供血</span>
+              <span class="cs-tag">官方原价 · 站点额度</span>
               <span v-if="m.health" class="cs-h">健康 {{ m.health.score }}</span>
               <router-link :to="m.link" class="cs-detail">详情 →</router-link>
             </div>
           </div>
           <div class="cs-card cs-cta">
-            <b>扩充池子</b>
-            <p>池子是大家的——充值即给所有人扩容，无最低限制，池子归零后第一笔充值自动登上荣誉墙</p>
-            <router-link to="/pool" class="cs-btn">去众筹充值</router-link>
+            <b>充值翻倍</b>
+            <p>充 1 元 = 2 元站点额度——充 10 到账 20，给所有人的公共算力扩容，无最低限制，额度归零后第一笔充值自动登上荣誉墙</p>
+            <router-link to="/pool" class="cs-btn">去充值翻倍</router-link>
           </div>
         </div>
       </div>
@@ -606,7 +605,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <div v-else-if="!viewRows.length" class="model-empty">未找到匹配的模型</div>
         <template v-else>
           <div v-for="r in viewRows" :key="r.row.id" class="model-item" :class="{ exhausted: r.exhausted }">
-            <span v-if="isCrowd(r.row.id)" class="mtag m-crowd" title="众筹公共算力池：按官方原价五折从公共池扣费，个人余额不动">众筹</span>
+            <span v-if="isCrowd(r.row.id)" class="mtag m-crowd" title="众筹公共算力池：按官方原价从站点额度扣费，充 1 元 = 2 元额度，个人余额不动">众筹</span>
             <span v-if="!hideTag(r.row.type)" class="mtag" :class="'m-' + r.row.platform" :title="r.row.type">{{ platformLabel(r.row.platform) }} · {{ typeLabel(r.row.type) }}</span>
             <span v-if="r.st" class="mtag" :class="r.st.cls" :title="r.st.title">{{ r.st.text }}</span>
             <span v-if="r.health" class="mtag m-health" :class="r.health.cls" :title="r.health.tip">健康 {{ r.health.score }}</span>
@@ -646,11 +645,9 @@ button.hub-tab { font-family: inherit; }
 .cs-card:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.45); box-shadow: 0 8px 24px rgba(56,189,248,.12); }
 .cs-model { display: flex; align-items: center; gap: 8px; }
 .cs-id { font-weight: 800; font-size: 14px; color: var(--aqua,#38bdf8); text-decoration: none; word-break: break-all; }
-.cs-prices { display: flex; gap: 8px; }
-.cs-prices > div { flex: 1; display: flex; flex-direction: column; gap: 1px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.15); border-radius: 9px; padding: 7px 9px; }
-.cs-prices i { font-style: normal; font-size: 10.5px; color: var(--muted,#8a94a6); }
-.cs-prices b { font-size: 14px; font-variant-numeric: tabular-nums; }
-.cs-prices span { font-size: 9.5px; color: var(--muted,#8a94a6); }
+.cs-official { display: flex; flex-direction: column; gap: 3px; background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.15); border-radius: 9px; padding: 8px 10px; }
+.cs-official b { font-size: 13px; color: var(--aqua,#38bdf8); }
+.cs-official span { font-size: 10.5px; color: var(--muted,#8a94a6); line-height: 1.5; }
 .cs-foot { display: flex; align-items: center; gap: 8px; }
 .cs-tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: rgba(129,140,248,.14); color: #a5b4fc; border: 1px solid rgba(129,140,248,.35); }
 .cs-h { font-size: 11px; color: var(--muted,#8a94a6); }

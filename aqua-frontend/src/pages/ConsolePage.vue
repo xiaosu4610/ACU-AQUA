@@ -647,7 +647,7 @@ function fmtTime(ts: number): string {
               <p class="keys-head-txt">一把密钥即可调用全部端点；分组决定收费模型的计费方式，随时可切换。</p>
               <button class="btn tool-run keys-cta" @click="openMk"><AqIcon name="plus" :size="14" /> 创建密钥</button>
             </div>
-            <p class="hint-line neutral">按次分组：flash 系 ¥0.004/次 · pro/glm 系 ¥0.006–0.009/次；按量分组：按 tokens 三段精算，模型最全；官方中转分组：tlk/ 前缀独占高速模型，官方原价 6 折；纯免费密钥只可调免费模型，绝不产生扣费。acu/ 前缀为<router-link to="/pool">众筹公共模型</router-link>——任何分组密钥都可调用，从公共池五折扣费，个人余额不受影响。</p>
+            <p class="hint-line neutral">按量分组：按 tokens 三段精算，模型最全；纯免费密钥只可调免费模型，绝不产生扣费；acu/ 前缀为<router-link to="/pool">众筹公共模型</router-link>——任何分组密钥都可调用，按<b>官方原价</b>从<router-link to="/pool">站点额度</router-link>扣费（充 1 元 = 2 元额度），个人余额不受影响。</p>
             <div class="key-list">
               <div v-if="!keys.length" class="dash-empty">还没有密钥，创建一把开始调用</div>
               <div v-for="k in keys" :key="k.id" class="key-row" :class="{ revoked: k.revoked }">
@@ -765,15 +765,15 @@ function fmtTime(ts: number): string {
             </div>
             <p v-if="usageMsg" class="hint-line">{{ usageMsg }}</p>
           </div>
-          <!-- 我的众筹池（acu/ 前缀模型从公共池扣费，与个人余额无关） -->
+          <!-- 我的众筹池（acu/ 前缀模型按官方原价从站点额度扣费，与个人余额无关） -->
           <div class="dash-sec" style="margin-top:14px;">
             <div class="vhead" style="margin-bottom:10px;">
               <span class="vic" style="color:#a5b4fc;"><AqIcon name="coin" :size="16" /></span>
-              <div><h2 style="font-size:15px;">我的众筹池</h2><p>acu/ 前缀众筹模型从公共池扣费（五折口径），个人余额未动</p></div>
-              <router-link to="/pool" class="mini-btn" style="margin-left:auto;text-decoration:none;">池子账本与榜单 →</router-link>
+              <div><h2 style="font-size:15px;">我的众筹池</h2><p>acu/ 前缀众筹模型按官方原价从站点额度扣费（充 1 元 = 2 元额度），个人余额未动</p></div>
+              <router-link to="/pool" class="mini-btn" style="margin-left:auto;text-decoration:none;">额度账本与榜单 →</router-link>
             </div>
             <div class="dash-cards">
-              <div class="dash-card"><b>¥{{ poolYuan(myPool.balance_micro) }}</b><span>池子当前余额</span></div>
+              <div class="dash-card"><b>¥{{ poolYuan(myPool.balance_micro) }}</b><span>站点额度余额</span></div>
               <div class="dash-card"><b>¥{{ poolYuan(myPool.my_charged_micro) }}</b><span>我累计注入</span></div>
               <div class="dash-card"><b>¥{{ poolYuan(myPool.my_used_micro) }}</b><span>我累计消耗</span></div>
               <div class="dash-card"><b :style="{ color: myPool.net_micro >= 0 ? '#34d399' : '#fbbf24' }">¥{{ poolYuan(myPool.net_micro) }}</b><span>我的净贡献</span></div>
