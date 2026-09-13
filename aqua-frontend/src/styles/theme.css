@@ -867,3 +867,37 @@ html[data-theme="light"] .cta-main { color: #fff; }
   .adm-card strong.num { font-size: 22px; }
   .adm-card::before { height: 2.5px; }
 }
+
+/* ===========================================================================
+   16. v5.4 控制台与数据页玻璃化统一层
+   症结：v5.3 沧溟层只玻璃化了 .card 系列公开页卡片，个人控制台的
+   .dash-sec（总览/密钥/用量等区块卡）仍是旧版纯色卡，与已升级页面
+   同站两种视觉语言。本层把 .dash-sec 纳入沧溟语言（scoped 侧已在
+   ConsolePage 内同步升级 .cside/.ov-hero/.bal-card）。
+   =========================================================================== */
+.dash-sec {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  position: relative;
+  box-shadow: var(--shadow-card);
+}
+.dash-sec::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: linear-gradient(90deg, transparent, var(--glass-highlight), transparent);
+  pointer-events: none;
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dash-sec {
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+  }
+}
+/* 区块卡标题带品牌色点缀（图标随语义色，文字保持层级） */
+.dash-sec > b {
+  letter-spacing: .01em;
+}

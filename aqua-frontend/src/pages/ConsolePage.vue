@@ -1031,7 +1031,7 @@ function fmtTime(ts: number): string {
 .cnav { display: flex; flex-direction: column; gap: 3px; }
 .cnav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: none; background: transparent; border-radius: 10px; color: var(--muted, #8a94a6); font-size: 13.5px; cursor: pointer; text-align: left; transition: background .15s, color .15s; font-family: inherit; }
 .cnav-item:hover { background: rgba(128,140,160,.1); color: inherit; }
-.cnav-item.on { background: linear-gradient(90deg, rgba(11,108,255,.16), rgba(11,108,255,.05)); color: var(--accent, #0b6cff); font-weight: 700; box-shadow: inset 2.5px 0 0 var(--accent, #0b6cff); }
+.cnav-item.on { background: linear-gradient(90deg, rgba(56,189,248,.16), rgba(56,189,248,.04)); color: var(--aqua, #38bdf8); font-weight: 700; box-shadow: inset 2.5px 0 0 var(--aqua, #38bdf8); }
 .cnav-item .cnav-label { flex: none; }
 .cnav-badge { margin-left: auto; font-style: normal; font-size: 10.5px; font-weight: 700; background: rgba(128,140,160,.2); color: var(--muted, #8a94a6); border-radius: 999px; padding: 1px 7px; }
 .cnav-item.on .cnav-badge { background: rgba(11,108,255,.18); color: var(--accent, #0b6cff); }
@@ -1047,12 +1047,12 @@ function fmtTime(ts: number): string {
 
 /* 视图头 */
 .vhead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.vic { width: 36px; height: 36px; flex: none; border-radius: 10px; background: rgba(11,108,255,.12); color: var(--accent, #0b6cff); display: flex; align-items: center; justify-content: center; }
+.vic { width: 36px; height: 36px; flex: none; border-radius: 10px; background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); display: flex; align-items: center; justify-content: center; }
 .vhead h2 { font-size: 17px; line-height: 1.2; }
 .vhead p { font-size: 12px; color: var(--muted, #8a94a6); margin-top: 2px; }
 
 /* ===== 总览 ===== */
-.ov-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--card, #fff); border: 1px solid var(--border, rgba(128,140,160,.25)); border-radius: 14px; padding: 16px 20px; margin-bottom: 16px; }
+.ov-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--glass-bg, var(--card)); border: 1px solid var(--glass-border, var(--border)); border-radius: var(--radius-card, 16px); padding: 16px 20px; margin-bottom: 16px; box-shadow: var(--shadow-card); }
 .ov-hero-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .ov-hero-txt b { font-size: 17px; }
 .ov-hi { font-size: 13px; color: var(--muted, #8a94a6); font-weight: 400; }
@@ -1105,7 +1105,7 @@ function fmtTime(ts: number): string {
 /* 密钥 */
 .key-create { display: flex; gap: 8px; margin: 12px 0 10px; }
 .key-create input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; }
-.fresh-key { background: rgba(11,108,255,.08); border: 1px dashed var(--accent, #0b6cff); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+.fresh-key { background: rgba(56,189,248,.08); border: 1px dashed var(--aqua, #38bdf8); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
 .fresh-key code { display: block; word-break: break-all; font-size: 13.5px; font-weight: 700; color: var(--accent, #0b6cff); }
 .fresh-key-ops { display: flex; gap: 8px; margin-top: 10px; }
 .key-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1126,7 +1126,7 @@ function fmtTime(ts: number): string {
 .grp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; cursor: pointer; font-size: 12px; color: inherit; text-align: left; }
 .grp-opt b { font-size: 12.5px; }
 .grp-opt span { color: var(--muted, #8a94a6); font-size: 11px; }
-.grp-opt.on { border-color: var(--accent, #0b6cff); background: rgba(11,108,255,.10); }
+.grp-opt.on { border-color: var(--aqua, #38bdf8); background: rgba(56,189,248,.10); }
 .key-row.revoked { opacity: .5; }
 .key-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-prefix { color: var(--accent, #0b6cff); font-size: 12px; }
@@ -1161,8 +1161,8 @@ function fmtTime(ts: number): string {
 .hist-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .hist-pageinfo { font-size: 12px; color: var(--muted, #8a94a6); }
 
-/* 余额卡 */
-.bal-card { display: flex; flex-direction: column; }
+/* 余额卡：资金入口渐变描边（与 topup-card 同语言） */
+.bal-card { display: flex; flex-direction: column; background: linear-gradient(var(--card), var(--card)) padding-box, linear-gradient(120deg, rgba(56,189,248,.4), rgba(129,140,248,.35), rgba(56,189,248,.4)) border-box; border: 1.5px solid transparent; }
 .bal-main { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .bal-num { display: flex; flex-direction: column; gap: 3px; }
 .bal-num b { font-size: 30px; font-weight: 800; font-family: var(--mono, monospace); background: linear-gradient(120deg, var(--aqua, #22d3ee), #818cf8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
@@ -1189,7 +1189,7 @@ function fmtTime(ts: number): string {
 .topup-card { display: flex; flex-direction: column; gap: 10px; }
 .topup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .topup-presets, .topup-channels { display: flex; gap: 6px; flex-wrap: wrap; }
-.mini-btn.on { background: rgba(11, 108, 255, .14); border-color: var(--accent, #0b6cff); color: var(--accent, #0b6cff); font-weight: 700; }
+.mini-btn.on { background: var(--btn-grad); border-color: transparent; color: #fff; font-weight: 700; box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 2px 8px rgba(8,145,178,.35); }
 .topup-input input { width: 220px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; font-size: 13px; }
 .topup-input input:focus { outline: none; border-color: var(--accent, #0b6cff); }
 .topup-msg { font-size: 12.5px; color: #f87171; }

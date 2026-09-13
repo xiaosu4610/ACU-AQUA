@@ -15,13 +15,14 @@ import { isLoggedIn } from '@/composables/useAuth'
 .auth-banner {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 12px 16px; margin-bottom: 16px;
-  border: 1px solid rgba(11,108,255,.35); border-radius: 12px;
-  background: rgba(11,108,255,.08); font-size: 13.5px;
+  border: 1px solid rgba(56,189,248,.35); border-radius: 12px;
+  background: rgba(56,189,248,.08); font-size: 13.5px;
 }
-.auth-banner svg { width: 18px; height: 18px; color: var(--accent, #0b6cff); flex-shrink: 0; }
+.auth-banner svg { width: 18px; height: 18px; color: var(--aqua, #38bdf8); flex-shrink: 0; }
 .auth-banner-btn {
   margin-left: auto; padding: 6px 14px; border-radius: 8px;
-  background: var(--accent, #0b6cff); color: #fff; font-size: 12.5px; font-weight: 700; white-space: nowrap;
+  background: var(--btn-grad); color: #fff; font-size: 12.5px; font-weight: 700; white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(2, 32, 71, .25);
 }
 .auth-banner-btn:hover { opacity: .88; }
 </style>

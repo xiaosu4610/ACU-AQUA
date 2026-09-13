@@ -1707,7 +1707,7 @@ async function doUserKeyRevoke(kid: number) {
 /* 密码门 */
 .adm-gate { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
 .adm-gate-card { width: 340px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 34px 30px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
-.adm-gate-logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: rgba(11,108,255,.12); color: var(--accent, #0b6cff); display: flex; align-items: center; justify-content: center; }
+.adm-gate-logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: rgba(56,189,248,.12); color: var(--aqua, #38bdf8); display: flex; align-items: center; justify-content: center; }
 .adm-gate-card h1 { font-size: 19px; }
 .adm-gate-sub { font-size: 12px; color: var(--muted, #8a94a6); }
 .adm-gate-card input { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3)); background: transparent; color: inherit; text-align: center; font-size: 15px; }
@@ -1721,7 +1721,7 @@ async function doUserKeyRevoke(kid: number) {
 .adm-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
 .adm-tab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border: none; background: transparent; border-radius: 10px; color: var(--muted, #8a94a6); font-size: 13px; cursor: pointer; }
 .adm-tab:hover { background: rgba(128,140,160,.1); color: inherit; }
-.adm-tab.on { background: rgba(11,108,255,.14); color: var(--accent, #0b6cff); font-weight: 700; }
+.adm-tab.on { background: rgba(56,189,248,.14); color: var(--aqua, #38bdf8); font-weight: 700; }
 
 .adm-view { animation: viewin .18s ease; }
 @keyframes viewin { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
