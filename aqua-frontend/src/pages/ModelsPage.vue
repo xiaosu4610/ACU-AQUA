@@ -70,10 +70,11 @@ function fmtAgo(ts?: number): string {
   if (d < 3600) return Math.floor(d / 60) + ' 分钟前'
   return Math.floor(d / 3600) + ' 小时前'
 }
-/* 卡片实时状态灯：ok 绿 / degraded 黄 / down 红 / 无数据灰（待命中） */
-function liveStatusOf(id: string): { key: 'ok' | 'degraded' | 'down' | 'idle'; text: string } {
+/* 卡片实时状态灯：great 发光绿 / ok 绿 / degraded 黄 / down 红 / 无数据灰（待命中） */
+function liveStatusOf(id: string): { key: 'great' | 'ok' | 'degraded' | 'down' | 'idle'; text: string } {
   const live = liveMap.value[id]
   if (!live) return { key: 'idle', text: '待命中' }
+  if (live.status === 'great') return { key: 'great', text: '状态极佳' }
   if (live.status === 'ok') return { key: 'ok', text: '运行正常' }
   if (live.status === 'degraded') return { key: 'degraded', text: '部分异常' }
   return { key: 'down', text: '故障' }
@@ -437,7 +438,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <template v-if="callLineRows.length">
           <div class="pms-line-title">按次计费分组<small>（密钥选「免费 + 按次计费」时可用：每次成功请求扣一次，与生成长度无关）</small></div>
           <div class="pms-grid">
-            <div v-for="m in callLineRows" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }">
+            <div v-for="(m, i) in callLineRows" :key="m.id + ':call'" class="pms-card" :class="{ paused: !!m.st }" :style="{ '--i': i }">
               <div class="pms-top">
                 <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
                 <span v-if="m.st" class="pms-st" :title="m.st.title">{{ m.st.text }}</span>
@@ -458,15 +459,15 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <template v-if="tokenLineRows.length">
           <div class="pms-line-title">按量计费分组<small>（密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，缓存命中大幅更省，无保底）</small></div>
           <div class="pms-grid">
-            <div v-for="m in tokenLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
+            <div v-for="(m, i) in tokenLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }" :style="{ '--i': i }">
               <div class="pms-top">
                 <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
                 <span v-if="m.subsidized && rateBadgeOf(m)" class="pms-rate-badge" title="官方原价 × 补贴倍率 = 现价，活动结束后恢复原价">{{ rateBadgeOf(m) }}</span>
                 <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="pms-vip-badge" title="VIP 专享拿货价已生效">VIP</span>
               </div>
-              <!-- 实时状态灯行：最近 200 次请求推断（20 秒轮询） -->
+              <!-- 实时状态灯行：近 6 小时内最近 200 次请求推断（20 秒轮询） -->
               <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
-                :title="'状态由最近 200 次真实请求推断（剔除调用方参数错误）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                :title="'状态由近 6 小时内最近 200 次真实请求推断（剔除调用方参数错误与限流）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
                 <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
                 <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
               </div>
@@ -484,7 +485,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="tp-floor">先付后用 · 用多少付多少 · <span class="tp-cache-tip" title="重复前缀会命中缓存价，显著降低输入成本">缓存命中更省</span></div>
               </div>
               <!-- 实时指标：平均时延 / 生成速度 / 成功率（最近 200 次请求聚合） -->
-              <div class="pms-live-metrics" :title="'最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+              <div class="pms-live-metrics" :title="'近 6 小时 · 最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
@@ -501,12 +502,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <template v-if="officialLineRows.length">
           <div class="pms-line-title">官方中转 · 高速专线<small>（密钥选「官方中转」分组时可用：tlk/ 前缀独占模型，按官方原价 6 折分段计价）</small></div>
           <div class="pms-grid">
-            <div v-for="m in officialLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }">
+            <div v-for="(m, i) in officialLineRows" :key="m.id" class="pms-card" :class="{ paused: !!m.st }" :style="{ '--i': i }">
               <div class="pms-top">
                 <code class="pms-id" :title="'完整模型 ID：' + m.id"><span class="pms-ns">{{ m.id.split('/')[0] }}/</span>{{ m.id.split('/').slice(1).join('/') }}</code>
               </div>
               <div class="pms-live" :class="'lv-' + liveStatusOf(m.id).key"
-                :title="'状态由最近 200 次真实请求推断（剔除调用方参数错误）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
+                :title="'状态由近 6 小时内最近 200 次真实请求推断（剔除调用方参数错误与限流）· 每 20 秒自动刷新' + (liveMap[m.id] ? ' · 最近活动 ' + fmtAgo(liveMap[m.id].last_ts) : '')">
                 <span class="lv-dot"></span><span class="lv-text">{{ liveStatusOf(m.id).text }}</span>
                 <span v-if="liveMap[m.id]" class="lv-last">{{ fmtAgo(liveMap[m.id].last_ts) }}</span>
               </div>
@@ -516,7 +517,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="tp-row"><i>输出</i><b>¥{{ perMYuan(m.outPrice) }}</b><i class="tp-unit">/百万tokens</i></div>
                 <div class="tp-floor">官方中转专线 · 官方原价 6 折 · 先付后用</div>
               </div>
-              <div class="pms-live-metrics" :title="'最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
+              <div class="pms-live-metrics" :title="'近 6 小时 · 最近 200 次真实请求聚合 · 数据时间 ' + (liveTs ? new Date(liveTs * 1000).toLocaleTimeString() : '--')">
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) : '--' }}<u>tok/s</u></b></span>
                 <span class="lm-item" :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
@@ -841,4 +842,45 @@ button.hub-tab { font-family: inherit; }
 .paid-policy-card .pp-rules span::before { content: "✓"; position: absolute; left: 0; color: #16a34a; font-weight: 700; }
 .paid-policy-card .pp-rules span b { font-size: 13px; color: #d97706; }
 @media (max-width: 640px) { .paid-policy-card { padding: 14px; } .paid-policy-card .pp-rules { grid-template-columns: 1fr; } }
+
+/* ---- rc20 动效改版：交错入场编排 / 悬停微交互 / 状态极佳发光 / 横幅流光 ----
+   视图由 v-if 切换重挂载，入场动画随每次切换自动重放——免费/收费/能力三视图自带过渡 */
+@keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes secIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+/* 卡片按序交错浮入（backwards 填充：动画结束后不锁定 transform，悬停上浮照常生效） */
+.pms-card { animation: cardIn .45s cubic-bezier(.22, 1, .36, 1) backwards; animation-delay: calc(min(var(--i, 0), 14) * 45ms); }
+.crowd-sec .cs-card { animation: cardIn .45s cubic-bezier(.22, 1, .36, 1) backwards; }
+.crowd-sec .cs-card:nth-child(1) { animation-delay: 0ms; }
+.crowd-sec .cs-card:nth-child(2) { animation-delay: 60ms; }
+.crowd-sec .cs-card:nth-child(3) { animation-delay: 120ms; }
+.crowd-sec .cs-card:nth-child(n + 4) { animation-delay: 180ms; }
+/* 区块标题 / 横幅 / 政策卡入场 */
+.pms-line-title, .rate-banner, .paid-policy-card, .crowd-sec { animation: secIn .5s cubic-bezier(.22, 1, .36, 1) backwards; }
+.pms-line-title { animation-delay: 40ms; }
+.paid-policy-card { animation-delay: .15s; }
+/* 状态极佳：翡翠绿发光脉冲（区别于普通"运行正常"） */
+.lv-great .lv-dot { background: #10b981; animation: greatpulse 1.8s infinite; }
+.lv-great .lv-text { color: #10b981; }
+@keyframes greatpulse {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, .5), 0 0 8px rgba(16, 185, 129, .85); }
+  70% { box-shadow: 0 0 0 7px rgba(16, 185, 129, 0), 0 0 8px rgba(16, 185, 129, .85); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0), 0 0 8px rgba(16, 185, 129, .85); }
+}
+/* 悬停微交互增强：更深上浮 + 青蓝描边光 + 价格行高亮 + 箭头滑动 */
+.pms-card:hover { transform: translateY(-4px); box-shadow: 0 14px 32px -10px rgba(0, 0, 0, .45), 0 0 0 1px rgba(56, 189, 248, .18); }
+.pms-price-token .tp-row { border-radius: 8px; padding: 1px 6px; margin: 0 -6px; transition: background .16s ease; }
+.pms-card:hover .pms-price-token .tp-row:hover { background: rgba(56, 189, 248, .08); }
+.pms-detail svg { transition: transform .18s ease; }
+.pms-detail:hover svg { transform: translateX(3px); }
+/* 倍率补贴角标呼吸辉光 */
+.pms-rate-badge { animation: badgeGlow 2.4s ease-in-out infinite; }
+@keyframes badgeGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); } 50% { box-shadow: 0 0 14px 2px rgba(251, 191, 36, .3); } }
+/* 倍率横幅背景缓移（叠于既有流光扫过之上） */
+.rate-banner { background-size: 170% 170%; animation: secIn .5s cubic-bezier(.22, 1, .36, 1) backwards, rbdrift 9s ease-in-out infinite alternate; }
+@keyframes rbdrift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+/* 无障碍：偏好减弱动效时全部关闭 */
+@media (prefers-reduced-motion: reduce) {
+  .pms-card, .crowd-sec .cs-card, .pms-line-title, .rate-banner, .paid-policy-card, .crowd-sec,
+  .pms-rate-badge, .pms-live .lv-dot { animation: none !important; }
+}
 </style>

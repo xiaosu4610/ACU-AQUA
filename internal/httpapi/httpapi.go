@@ -430,14 +430,16 @@ func (a *App) statusModelNorm() map[string]string {
 	return m
 }
 
-// handleModelsStatus 模型实时状态（公开匿名，最近 200 次请求口径）：
-// 每模型取最近 200 条真实请求，聚合请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
+// handleModelsStatus 模型实时状态（公开匿名，最近 200 次请求 + 近 6 小时窗口口径）：
+// 每模型取最近 6 小时内最近 200 条真实请求，聚合请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
 // 平均输出速度（tok/s）为流式生成阶段口径（首字之后），并剔除 <3 tok/s 异常样本（短输出/保底估算/非流式总耗时口径）。
 // 只统计收费线流量（resolved_line 非空）：免费分发流量（裸名走免费上游、resolved_line 为空）
 // 的上游故障与收费模型健康无关，不得计入（避免免费上游 NIM 故障污染收费模型状态）。
 // 成功率剔除与模型健康无关的失败：400/404/422（调用方参数错）、429（高峰限流，模型本身正常）、
 // 402（密钥面值耗尽，钥已判死）——只统计真实服务端失败（5xx/断流/网络错）。
-// 状态判定：样本≥10 时 ≥95% 正常 / ≥80% 部分异常 / 其余故障；小样本有失败最多判"部分异常"，不下重判。
+// 6h 窗口（rc20）：低频模型的历史失败不再永久拖累状态——窗口外请求自然过期，无近期流量则不出现在列表（前端显示待命中）。
+// 状态判定（rc20 放宽）：样本≥10 时 ≥99.5% 状态极佳 / ≥95% 正常 / ≥85% 部分异常 / 其余故障；
+// 小样本有失败最多判"部分异常"，不下重判。
 // 只输出聚合运行指标，不含成本/渠道/用户信息；模型名统一规范化后合并聚合。
 func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(`
@@ -452,7 +454,9 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 			SELECT model, ok, latency_ms, tps, ts, status_code,
 			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY rowid DESC) rn
 			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code
-		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != '' ORDER BY rowid DESC LIMIT 50000)
+		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != ''
+		        AND ts > strftime('%s','now') - 21600
+		      ORDER BY rowid DESC LIMIT 50000)
 		) WHERE rn <= 200 GROUP BY model`)
 	if err != nil {
 		errOut(w, 500, "internal_error", "查询失败")
@@ -505,10 +509,15 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		status := "ok"
 		if denom >= 10 {
 			switch {
-			case rate < 0.80:
-				status = "down"
+			case rate < 0.85:
+				status = "down" // 小样本（<30）不下重判：真实证据不足，最多"部分异常"
+				if denom < 30 {
+					status = "degraded"
+				}
 			case rate < 0.95:
 				status = "degraded"
+			case rate >= 0.995 && denom >= 30:
+				status = "great" // 近期表现近乎完美：状态极佳
 			}
 		} else if rate < 1 {
 			status = "degraded" // 小样本：有失败最多"部分异常"，绝不误判故障
