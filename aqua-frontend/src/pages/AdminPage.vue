@@ -3,8 +3,23 @@
  * 视图：仪表盘 / 客户管理（搜索+批余额）/ 上游额度（充值换算）/ 审计日志（哈希链）/ 对账
  * 资金红线：高危操作二次密码；金额全程微元整数。 */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { apiJson, errText, fmt } from '@/composables/useApi'
+import { apiJson as apiJsonRaw, errText, fmt } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
+
+/* 管理会话 401 全局兜底：任一接口 401 → 清 token 回登录视图，避免"莫名失效"卡在各页面 */
+const sessMsg = ref('')
+async function apiJson<T = any>(path: string, opts: Parameters<typeof apiJsonRaw>[1] = {}): Promise<T> {
+  try {
+    return await apiJsonRaw<T>(path, opts)
+  } catch (e: any) {
+    if (e?.status === 401 && token.value) {
+      token.value = ''
+      try { localStorage.removeItem(TOKEN_KEY) } catch { /* 忽略 */ }
+      sessMsg.value = '管理会话已失效，请重新登录'
+    }
+    throw e
+  }
+}
 
 type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'pool' | 'update' | 'settings'
 const NAV: { id: View; label: string; icon: string }[] = [
@@ -913,6 +928,7 @@ async function doUserKeyRevoke(kid: number) {
           {{ logging ? '验证中…' : '进入' }}
         </button>
         <p v-if="loginMsg" class="adm-msg bad">{{ loginMsg }}</p>
+        <p v-if="sessMsg" class="adm-msg bad">{{ sessMsg }}</p>
       </div>
     </div>
 

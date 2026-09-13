@@ -5,6 +5,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -147,6 +148,8 @@ func InitTables(d *sql.DB) error {
 			target TEXT NOT NULL DEFAULT '',
 			detail TEXT NOT NULL DEFAULT '',
 			ip TEXT NOT NULL DEFAULT '',
+			prev_hash TEXT NOT NULL DEFAULT 'GENESIS',
+			self_hash TEXT NOT NULL DEFAULT '',
 			ts INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS payments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -321,9 +324,36 @@ func InitTables(d *sql.DB) error {
 			rows.Close()
 		}
 		if !has {
-			if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.def)); err != nil {
-				return fmt.Errorf("补列失败 %s.%s: %w", a.table, a.col, err)
+		if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.def)); err != nil {
+			return fmt.Errorf("补列失败 %s.%s: %w", a.table, a.col, err)
+		}
+	}
+	// admin_audit 列名统一：旧迁移库列名是 target_user，代码统一用 target（SQLite 3.25+ RENAME）
+	{
+		hasOld, hasNew := false, false
+		rows, err := d.Query("PRAGMA table_info(admin_audit)")
+		if err == nil {
+			for rows.Next() {
+				var cid int
+				var name, ctype string
+				var notnull, pk int
+				var dflt sql.NullString
+				if rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk) == nil {
+					switch name {
+					case "target_user":
+						hasOld = true
+					case "target":
+						hasNew = true
+					}
+				}
 			}
+			rows.Close()
+		}
+		if hasOld && !hasNew {
+			if _, err := d.Exec("ALTER TABLE admin_audit RENAME COLUMN target_user TO target"); err != nil {
+				return fmt.Errorf("admin_audit 列名统一失败: %w", err)
+			}
+			log.Printf("[db] admin_audit.target_user 已统一为 target")
 		}
 	}
 	return nil

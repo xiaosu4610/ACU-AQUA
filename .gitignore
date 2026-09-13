@@ -35,6 +35,16 @@ assets/*
 /dist/
 /internal/httpapi/data/
 
+# build 目录：脚本/文本入库，二进制与压缩包不入库
+/build/*.tgz
+/build/*.gz
+/build/*.br
+/build/aqua
+/build/aqua2
+/build/aqua-rc*
+/build/aqua-gateway-go*
+/build/aqua-frontend*
+
 # 本地环境与数据
 .env
 config.toml
