@@ -415,6 +415,7 @@ func (a *App) statusModelNorm() map[string]string {
 
 // handleModelsStatus 模型实时状态（公开匿名，最近 200 次请求口径）：
 // 每模型取最近 200 条真实请求，聚合请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
+// 平均输出速度（tok/s）为流式生成阶段口径（首字之后），并剔除 <3 tok/s 异常样本（短输出/保底估算/非流式总耗时口径）。
 // 只统计收费线流量（resolved_line 非空）：免费分发流量（裸名走免费上游、resolved_line 为空）
 // 的上游故障与收费模型健康无关，不得计入（避免免费上游 NIM 故障污染收费模型状态）。
 // 成功率剔除与模型健康无关的失败：400/404/422（调用方参数错）、429（高峰限流，模型本身正常）、
@@ -427,8 +428,8 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(SUM(CASE WHEN status_code IN (400,404,422,429,402) THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN 1 ELSE 0 END),0),
-		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN tps ELSE 0 END),0),
-		       COALESCE(SUM(CASE WHEN ok=1 AND tps>0 THEN 1 ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN tps ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN 1 ELSE 0 END),0),
 		       MAX(ts)
 		FROM (
 			SELECT model, ok, latency_ms, tps, ts, status_code,

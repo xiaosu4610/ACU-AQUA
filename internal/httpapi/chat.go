@@ -313,6 +313,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	w.WriteHeader(200)
 
 	var u billing.Usage
+	var firstByte time.Time // 首帧到达时间：tps 按生成阶段（首字之后）计，等待不计入生成速度
 	final := int64(0)
 	faceTotal := int64(0)
 	settled := false
@@ -337,7 +338,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
 			a.settleSafely(uid, prehold, final, rid, final, "billed")
-			a.okRequest(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200)
+			a.okRequestGen(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200, genMs(firstByte))
 		} else if interrupted {
 			// 一帧有效内容都没有且上游异常中断：全额退回
 			a.settleSafely(uid, prehold, 0, rid, 0, "stream_incomplete")
@@ -368,6 +369,9 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 		}
 		n, err := resp.Body.Read(tmp)
 		if n > 0 {
+			if firstByte.IsZero() {
+				firstByte = time.Now()
+			}
 			buf = append(buf, tmp[:n]...)
 			// 按 SSE 行处理：完整行才转发（便于剥层与 usage 抓取）
 			for {
@@ -541,13 +545,31 @@ func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stre
 // src=usage 来源口径（actual=上游实发 / estimated=保底估算）；latMs/sc 回写观测口径，
 // tps=输出 tokens/秒（生成速度，非流式为总耗时口径）；消除生产旧表列默认值造成的统计失真
 func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int) {
+	a.okRequestGen(rid, u, amount, face, src, latMs, sc, latMs)
+}
+
+// okRequestGen 成功回写（生成阶段口径）：genMs=生成阶段耗时（流式为首字之后；≤0 时回退总耗时）
+// tps 按 genMs 计——等待（建连/prompt 处理/首字）不计入生成速度，latency_ms 仍按总耗时口径
+func (a *App) okRequestGen(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int, genMs int64) {
+	tpsMs := genMs
+	if tpsMs <= 0 {
+		tpsMs = latMs
+	}
 	tps := 0.0
-	if latMs > 0 {
-		tps = float64(u.CompletionTokens) * 1000 / float64(latMs)
+	if tpsMs > 0 {
+		tps = float64(u.CompletionTokens) * 1000 / float64(tpsMs)
 	}
 	_, _ = a.DB.Exec(
 		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=?, tps=? WHERE rowid=?",
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, tps, rid)
+}
+
+// genMs 生成阶段耗时（毫秒）：首帧未到达（无有效输出）返回 0，由调用方回退总耗时
+func genMs(firstByte time.Time) int64 {
+	if firstByte.IsZero() {
+		return 0
+	}
+	return time.Since(firstByte).Milliseconds()
 }
 
 // failRequest 失败回写（诊断 D2：reason 必填区分失败原因，status_code 回写真实状态码供统计）

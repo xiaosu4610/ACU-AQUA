@@ -611,17 +611,21 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 	w.WriteHeader(resp.StatusCode)
 
 	var u billing.Usage
+	var firstByte time.Time // 首帧到达时间：tps 按生成阶段（首字之后）计
 	buf := make([]byte, 0, 32<<10)
 	tmp := make([]byte, 16<<10)
 	for {
 		select {
 		case <-r.Context().Done():
-			a.finishFreeStream(rid, model, u, start)
+			a.finishFreeStream(rid, model, u, start, firstByte)
 			return
 		default:
 		}
 		n, rerr := resp.Body.Read(tmp)
 		if n > 0 {
+			if firstByte.IsZero() {
+				firstByte = time.Now()
+			}
 			buf = append(buf, tmp[:n]...)
 			for {
 				i := bytes.IndexByte(buf, '\n')
@@ -637,19 +641,19 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 			}
 		}
 		if rerr != nil {
-			a.finishFreeStream(rid, model, u, start)
+			a.finishFreeStream(rid, model, u, start, firstByte)
 			return
 		}
 	}
 }
 
 // finishFreeStream 流结束：健康记录 + usage 落库（免费口径：billed=0）
-func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time) {
+func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time, firstByte time.Time) {
 	lat := time.Since(start).Milliseconds()
 	ok := u.PromptTokens > 0 || u.CompletionTokens > 0
 	a.recordHealth(model, ok, healthResultType(ok, 200), 200, lat)
 	if ok {
-		a.okFreeRequest(rid, u, 200, "actual", lat)
+		a.okFreeRequestGen(rid, u, 200, "actual", lat, genMs(firstByte))
 	} else {
 		a.failRequest(rid, "stream_incomplete", 502)
 	}
@@ -665,9 +669,18 @@ func healthResultType(ok bool, code int) string {
 
 // okFreeRequest 免费模型成功回写（usage 照记，不计费；src=usage 来源口径；tps=输出 tokens/秒）
 func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int, src string, latMs int64) {
+	a.okFreeRequestGen(rid, u, statusCode, src, latMs, latMs)
+}
+
+// okFreeRequestGen 免费模型成功回写（生成阶段口径）：genMs=生成阶段耗时（≤0 回退总耗时）
+func (a *App) okFreeRequestGen(rid int64, u billing.Usage, statusCode int, src string, latMs int64, genMs int64) {
+	tpsMs := genMs
+	if tpsMs <= 0 {
+		tpsMs = latMs
+	}
 	tps := 0.0
-	if latMs > 0 {
-		tps = float64(u.CompletionTokens) * 1000 / float64(latMs)
+	if tpsMs > 0 {
+		tps = float64(u.CompletionTokens) * 1000 / float64(tpsMs)
 	}
 	_, _ = a.DB.Exec(
 		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=?, tps=? WHERE rowid=?",
