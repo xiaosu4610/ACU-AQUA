@@ -6,7 +6,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { apiJson, errText, fmt } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
 
-type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'pool' | 'update'
+type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'pool' | 'update' | 'settings'
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: '仪表盘', icon: 'chart' },
   { id: 'users', label: '客户管理', icon: 'user' },
@@ -17,6 +17,7 @@ const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'audit', label: '审计日志', icon: 'list' },
   { id: 'reconcile', label: '对账', icon: 'shield' },
   { id: 'update', label: '系统更新', icon: 'refresh' },
+  { id: 'settings', label: '站点设置', icon: 'settings' },
 ]
 
 const TOKEN_KEY = 'aqua_admin_token'
@@ -73,6 +74,41 @@ function go(v: View) {
   if (v === 'audit') loadAudit()
   if (v === 'reconcile') loadReconcile()
   if (v === 'update') loadUpdate()
+  if (v === 'settings') loadSettings()
+}
+
+/* ===== 站点设置（settings 表外置化：改完即时生效，无需改代码发版） ===== */
+const SETTINGS_FIELDS: { key: string; label: string; ph: string; hint?: string }[] = [
+  { key: 'site_name', label: '站点名称', ph: 'AQUA Gateway' },
+  { key: 'qq_group', label: 'QQ 一群号', ph: '' },
+  { key: 'qq_group_url', label: 'QQ 一群加群链接', ph: 'https://qm.qq.com/…' },
+  { key: 'qq_group2', label: 'QQ 二群号', ph: '' },
+  { key: 'qq_group_url2', label: 'QQ 二群加群链接', ph: '' },
+  { key: 'rate_promo', label: '活动倍率', ph: '0.1', hint: '收费模型活动期计费倍率' },
+  { key: 'rate_normal', label: '常规倍率', ph: '0.5', hint: '活动期结束后回落的常规倍率' },
+  { key: 'rate_promo_vip', label: 'VIP 倍率', ph: '0.05' },
+  { key: 'announcement', label: '全站公告内容', ph: '（支持一句自然文案，空=不展示）' },
+  { key: 'announcement_enabled', label: '公告开关', ph: '1 开 / 0 关', hint: '仅 1 时前端展示公告' },
+]
+const settingsForm = ref<Record<string, string>>({})
+const settingsMsg = ref('')
+const settingsBusy = ref(false)
+
+async function loadSettings() {
+  settingsMsg.value = ''
+  try {
+    const j = await apiJson<any>('/admin/settings', { key: token.value })
+    settingsForm.value = j.settings || {}
+  } catch (e) { settingsMsg.value = errText(e) }
+}
+
+async function saveSettings() {
+  settingsBusy.value = true; settingsMsg.value = ''
+  try {
+    const j = await apiJson<any>('/admin/settings', { method: 'POST', key: token.value, body: settingsForm.value })
+    settingsMsg.value = j.message || '已保存'
+  } catch (e) { settingsMsg.value = errText(e) }
+  settingsBusy.value = false
 }
 
 /* ===== 众筹池（acu/ 公共算力池）：状态 + 官方注入 ===== */
@@ -1606,6 +1642,39 @@ async function doUserKeyRevoke(kid: number) {
               <span v-if="rel.asset_size" class="dim">附件 {{ (rel.asset_size / 1048576).toFixed(1) }} MB</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 站点设置：settings 表 kv 外置（改完即时生效） -->
+      <div v-else-if="view === 'settings'" class="adm-view">
+        <div class="adm-cards">
+          <div class="adm-card wide">
+            <b>站点配置（数据库外置 · 保存即生效）</b>
+            <span>留空 = 回退配置文件默认值。费率与公告改动即时下发到全站前端，无需重启网关。</span>
+          </div>
+        </div>
+        <table class="adm-table">
+          <tbody>
+            <tr v-for="f in SETTINGS_FIELDS" :key="f.key">
+              <td style="width:180px;">
+                {{ f.label }}
+                <div v-if="f.hint" class="dim" style="font-size:11px;">{{ f.hint }}</div>
+              </td>
+              <td>
+                <input
+                  class="adm-input" style="width:100%;" :placeholder="f.ph"
+                  v-model.trim="settingsForm[f.key]"
+                  :disabled="settingsBusy"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="adm-card-foot" style="margin-top:10px;">
+          <button class="mini-btn" :disabled="settingsBusy" @click="saveSettings">
+            {{ settingsBusy ? '保存中…' : '保存站点配置' }}
+          </button>
+          <span v-if="settingsMsg" :class="settingsMsg.includes('失败') ? 'bad' : 'dim'">{{ settingsMsg }}</span>
         </div>
       </div>
 

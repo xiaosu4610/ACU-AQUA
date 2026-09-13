@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { avatarUrl, isLoggedIn, me } from '@/composables/useAuth'
@@ -7,6 +7,33 @@ import AqIcon from '@/components/AqIcon.vue'
 
 const route = useRoute()
 const { theme, set } = useTheme()
+
+/** 工作台外壳：这些路径下用侧栏工作台替代门户顶栏（New API 式集中操作） */
+const BENCH_PATHS = ['/console', '/finance', '/usage', '/pool', '/admin']
+const isBench = computed(() => BENCH_PATHS.some(p => route.path === p || route.path.startsWith(p + '/')))
+
+/** 工作台侧栏导航 */
+const benchNav = [
+  { grp: '工作台', items: [
+    { to: '/console', label: '总览 · 密钥', d: 'M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5M9 21v-6h6v6' },
+    { to: '/finance', label: '账单中心', d: 'M2 6h20v14H2zM2 10h20M6 15h4' },
+    { to: '/usage', label: '我的用量', d: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z' },
+    { to: '/pool', label: '众筹池', d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
+  ] },
+  { grp: '快捷入口', items: [
+    { to: '/models', label: '模型中心', d: 'M12 2 2 7l10 5 10-5-10-5zm-10 15 10 5 10-5m-20-5 10 5 10-5' },
+    { to: '/playground', label: 'AI 对话', d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
+    { to: '/api', label: 'API 文档', d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' },
+  ] },
+  { grp: '站长', items: [
+    { to: '/admin', label: '站点管理', d: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' },
+  ] },
+]
+function benchActive(to: string): boolean {
+  const p = route.path
+  if (to === '/console') return p === '/console'
+  return p === to || p.startsWith(to + '/')
+}
 
 /** 打开的下拉菜单（同一时间最多一个；点击外部/切路由自动收起） */
 const openMenu = ref('')
@@ -41,6 +68,63 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
 </script>
 
 <template>
+  <!-- ===== 工作台外壳（/console /finance /usage /pool /admin）：侧栏集中操作 ===== -->
+  <div v-if="isBench" class="bench-wrap">
+    <nav class="topnav">
+      <div class="wrap nav-inner">
+        <router-link class="nav-brand" to="/home">
+          <img src="/favicon.ico" alt="AQUA" width="34" height="34" style="border-radius:8px; display:block;" class="nav-logo">
+          <span>AQUA</span>
+        </router-link>
+        <div class="nav-right">
+          <div class="theme-switch">
+            <button class="theme-btn" :class="{ active: theme === 'light' }" data-theme="light" title="白天亮色" @click="set('light')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            </button>
+            <button class="theme-btn" :class="{ active: theme === 'dark' }" data-theme="dark" title="深蓝模式" @click="set('dark')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+            </button>
+          </div>
+          <router-link v-if="isLoggedIn()" to="/console" class="nav-avatar" :title="me?.username || '个人控制台'">
+            <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + me?.created_ts" alt="" />
+            <span v-else class="nav-avatar-txt">{{ (me?.username || '我').slice(0, 1) }}</span>
+          </router-link>
+          <router-link v-else to="/login" class="nav-login-btn">登录 / 注册</router-link>
+        </div>
+      </div>
+    </nav>
+    <div class="wrap bench">
+      <aside class="bench-side">
+        <template v-for="g in benchNav" :key="g.grp">
+          <div class="bench-side-title">{{ g.grp }}</div>
+          <router-link v-for="it in g.items" :key="it.to" :to="it.to" class="bench-link" :class="{ active: benchActive(it.to) }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="it.d"/></svg>
+            <span>{{ it.label }}</span>
+          </router-link>
+        </template>
+        <div class="bench-user" v-if="isLoggedIn()">
+          <span class="bu-avatar">
+            <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + me?.created_ts" alt="" />
+            <template v-else>{{ (me?.username || '我').slice(0, 1) }}</template>
+          </span>
+          <span style="min-width:0;">
+            <div class="bu-name">{{ me?.username || '我' }}</div>
+            <div class="bu-sub">已登录 · 工作台</div>
+          </span>
+        </div>
+        <router-link to="/home" class="bench-back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+          返回门户首页
+        </router-link>
+      </aside>
+      <main class="bench-main route-page">
+        <router-view />
+      </main>
+    </div>
+  </div>
+
+  <!-- ===== 门户外壳（首页 / 模型 / 体验 / 文档） ===== -->
+  <template v-else>
   <!-- ===== 顶部切换栏 ===== -->
   <nav class="topnav">
     <div class="wrap nav-inner">
@@ -145,6 +229,7 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
   <div class="wrap">
     <router-view />
   </div>
+  </template><!-- /门户外壳 -->
 
   <footer>
     <p>AQUA · <b>ACU 工程系列</b>开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</p>
@@ -159,14 +244,14 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
     </p>
   </footer>
 
-  <!-- 全局悬浮 Q 群入口（每个页面可见） -->
-  <router-link to="/community" class="qq-fab" title="加入官方 Q 群（一群 / 二群 / 频道）" aria-label="加入官方 Q 群">
+  <!-- 全局悬浮 Q 群入口（门户页面可见） -->
+  <router-link v-if="!isBench" to="/community" class="qq-fab" title="加入官方 Q 群（一群 / 二群 / 频道）" aria-label="加入官方 Q 群">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
     <span>Q群</span>
   </router-link>
 
-  <!-- ===== 移动端底部标签栏（≤860px，样式见 theme.css）===== -->
-  <nav class="tabbar">
+  <!-- ===== 移动端底部标签栏（≤860px，样式见 theme.css，仅门户）===== -->
+  <nav v-if="!isBench" class="tabbar">
     <router-link to="/home" :class="{ active: isActive('home') }">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9 21v-6h6v6"/></svg>
       <span>首页</span>
@@ -189,8 +274,8 @@ const openSheet = () => { openMenu.value = ''; sheet.value = true }
     </button>
   </nav>
 
-  <!-- 「更多」抽屉：底部 Tab 未收录的全部入口 -->
-  <div class="sheet-mask" v-if="sheet" @click="sheet = false">
+  <!-- 「更多」抽屉：底部 Tab 未收录的全部入口（仅门户） -->
+  <div class="sheet-mask" v-if="!isBench && sheet" @click="sheet = false">
     <div class="sheet" @click.stop>
       <div class="sheet-grid">
         <router-link v-for="link in sheetLinks" :key="link.to" :to="link.to" @click="sheet = false">

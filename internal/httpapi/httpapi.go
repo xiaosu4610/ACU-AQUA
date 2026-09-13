@@ -204,6 +204,8 @@ func (a *App) Routes() http.Handler {
 	// 系统更新（gitee 发行版源；config [update] enabled=true 才开放）
 	mux.HandleFunc("GET /v1/admin/update/check", a.handleAdminUpdateCheck)
 	mux.HandleFunc("POST /v1/admin/update/apply", a.handleAdminUpdateApply)
+	mux.HandleFunc("GET /v1/admin/settings", a.handleAdminSettingsGet)
+	mux.HandleFunc("POST /v1/admin/settings", a.handleAdminSettingsSave)
 
 	// 其余全部反代旧网关（绞杀者迁移残留；纯 Go 单体模式下未注册路径 404）
 	mux.HandleFunc("/", a.handleLegacy)
@@ -390,19 +392,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 var gatewayVersion = "go-2026.09"
 
 // handleMeta 站点信息（前端渲染源，全部来自配置——代码零运营事实）
-func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, 200, map[string]any{
-		"name":          a.Cfg.Site.Name,
-		"domain":        a.Cfg.Site.Domain,
-		"docs_url":      a.Cfg.Site.DocsURL,
-		"qq_group":      a.Cfg.Site.QQGroup,
-		"qq_group_url":  a.Cfg.Site.QQGroupURL,
-		"qq_group2":     a.Cfg.Site.QQGroup2,
-		"qq_group_url2": a.Cfg.Site.QQGroupURL2,
-		"rate_promo":    a.Cfg.Site.RatePromo,
-		"rate_normal":   a.Cfg.Site.RateNormal,
-	})
-}
+// handleMeta 已迁 settings.go（站点配置 DB 外置化：settings 表优先，config 兜底）
 
 // statusModelNorm 模型名规范化映射：站内统一 ID（前缀/site_id）。
 // requests.model 历史存在三种记录口径并存：aqua/xxx（统一前缀）、tide/xxx（线前缀直连）、

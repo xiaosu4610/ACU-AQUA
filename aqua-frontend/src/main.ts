@@ -3,6 +3,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/legacy.css'
 import './styles/theme.css'
+import './styles/aurora.css'
 import { setUnauthorizedHook } from './composables/useApi'
 import { isLoggedIn, loadMe } from './composables/useAuth'
 
