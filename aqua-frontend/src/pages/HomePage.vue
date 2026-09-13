@@ -20,6 +20,9 @@ const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
         <router-link v-if="!isLoggedIn()" class="cta-main" to="/login">注册 / 登录 · 创建密钥</router-link>
         <router-link v-else class="cta-main" to="/console">进入我的控制台</router-link>
         <router-link class="cta-sub" to="/api">查看 API 文档</router-link>
+        <router-link class="cta-sub" to="/community" title="一群 / 二群 / QQ 频道 · 交流与活动通知">
+          <svg style="width:15px;height:15px;vertical-align:-2px;margin-right:5px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>加入 Q 群
+        </router-link>
       </div>
       <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 免费模型注册即用；收费模型见模型中心（aqua/ 专线，按量计费 0.2 倍率限时补贴）</p>
       <div class="badges">
