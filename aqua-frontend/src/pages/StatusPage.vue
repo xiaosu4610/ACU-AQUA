@@ -4,7 +4,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { apiJson, fmt } from '@/composables/useApi'
 import { useModels } from '@/composables/useModels'
-import { dsMaintenance } from '@/composables/modelMeta'
 import AqIcon from '@/components/AqIcon.vue'
 
 interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number }
@@ -19,11 +18,8 @@ const lineRows = ref<LiveRow[]>([])
 const lineMsg = ref('加载中…')
 const updatedAt = ref('')
 
-const DEAD_STATUS = ['exhausted', 'unavailable', 'maintenance']
-
-/* 在线模型数：/v1/models 中排除 auto、维护中与不可用状态 */
-const onlineCount = computed(() =>
-  models.value.filter(m => m.id !== 'auto' && !dsMaintenance(m.id) && !(m.status && DEAD_STATUS.includes(m.status))).length)
+/* 在线模型数：站点全部模型（/v1/models 全量，仅排除 auto 聚合项） */
+const onlineCount = computed(() => models.value.filter(m => m.id !== 'auto').length)
 const onlineShow = computed(() => (modelsLoading.value && !models.value.length ? '--' : String(onlineCount.value)))
 
 /* 模型健康热区：health.score 着色（后端近 100 次调用评分，0-100） */

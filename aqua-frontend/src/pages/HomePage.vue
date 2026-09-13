@@ -11,6 +11,7 @@ import CopyBtn from '@/components/CopyBtn.vue'
 import { apiJson, GATEWAY } from '@/composables/useApi'
 import { isLoggedIn } from '@/composables/useAuth'
 import { useMeta } from '@/composables/useMeta'
+import { useModels } from '@/composables/useModels'
 
 /* ---- 旧版保留：网关地址（Base URL 三步接入第一块） ---- */
 const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
@@ -28,7 +29,9 @@ const stVersion = ref('--')
 const stUptime = ref('--')
 const stOkRate = ref('--')
 const stLatency = ref('--')
-const stModels = ref('--')
+/* 在线模型：站点全部模型（/v1/models 全量，仅排除 auto 聚合项），useModels 单例共享 */
+const { models, load: loadModels } = useModels()
+const stModels = computed(() => models.value.filter(m => m.id !== 'auto').length || '--')
 
 function fmtUptime(sec: number): string {
   const d = Math.floor(sec / 86400)
@@ -47,14 +50,13 @@ async function loadStatus() {
       const avgLat = list.reduce((s, m) => s + (m.avg_latency_ms || 0), 0) / list.length
       stOkRate.value = avgRate.toFixed(1) + '%'
       stLatency.value = (avgLat / 1000).toFixed(2) + ' s'
-      stModels.value = String(list.length)
     }
     statusErr.value = false
   } catch { statusErr.value = true /* 保留上次成功数据，下一轮自动重试 */ }
   statusLoading.value = false
 }
 let statusTimer = 0
-onMounted(() => { loadStatus(); statusTimer = window.setInterval(loadStatus, 30000) })
+onMounted(() => { loadModels(); loadStatus(); statusTimer = window.setInterval(loadStatus, 30000) })
 onUnmounted(() => { if (statusTimer) window.clearInterval(statusTimer) })
 
 /* ---- 功能卡矩阵 ---- */
