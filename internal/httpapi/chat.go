@@ -498,7 +498,9 @@ func stripSensitive(raw []byte) []byte {
 	return out
 }
 
-// preholdAmount 预扣额：per_call=单次价；per_token=输入估算+max_tokens×输出价，≥floor
+// preholdAmount 预扣额（one-api/new-api 同款门槛哲学：预扣只做防白嫖门槛，超支由 Settle 补扣兜底）：
+// per_call=单次价；per_token=输入估算+max_tokens×输出价，≥floor。
+// maxOut 未传默认 4096（保持存量体验，实际输出超出部分由结算补扣收回）；上限 100000 对齐 new-api maxTokensLimit 防溢出
 func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte) int64 {
 	if p == nil {
 		return 1000
@@ -516,6 +518,9 @@ func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte
 	maxOut := req.MaxTokens
 	if maxOut <= 0 {
 		maxOut = 4096
+	}
+	if maxOut > 100000 {
+		maxOut = 100000
 	}
 	estCost := est*p.InRate10/10000 + maxOut*p.OutRate10/10000
 	if estCost < p.FloorMicro {

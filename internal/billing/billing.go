@@ -4,6 +4,7 @@ package billing
 
 import (
 	"database/sql"
+	"strconv"
 	"time"
 )
 
@@ -135,32 +136,64 @@ func Prehold(d *sql.DB, userID, amount int64, requestID int64) error {
 	})
 }
 
-// Settle 完成后结算（多退少补）：
-// 实际应扣 = final；已预扣 = preheld；delta = preheld - final（正=退回，负=补扣）。
+// Settle 完成后结算（多退少补，对齐 one-api/new-api 精准口径）：
+// 应扣 = final（按实际 usage 精算）；已预扣 = preheld；delta = preheld - final。
+// delta>0 退回；delta<0 补扣（长输出/估算偏差）——追扣 min(超支额, 当前余额)，余额扣到 0 为止、
+// 绝不产生负余额（政策红线：先付后用绝不透支）；仍不足的极端差额由站方兜底并经流水留痕。
 // 失败请求 final=0 → 全额退回。
 func Settle(d *sql.DB, userID, preheld, final int64, requestID int64, unitPrice int64, note string) error {
-	delta := preheld - final
-	if delta < 0 {
-		delta = 0 // 极端防御：final > preheld 时不追扣（预扣已按保守上限估）
-	}
 	return tx(d, func(tx *sql.Tx) error {
 		var balance int64
 		if err := tx.QueryRow("SELECT balance_micro FROM users WHERE id=?", userID).Scan(&balance); err != nil {
 			return err
 		}
-		if delta > 0 {
-			if _, err := tx.Exec("UPDATE users SET balance_micro=balance_micro+? WHERE id=?", delta, userID); err != nil {
-				return err
+		var charged int64
+		switch {
+		case final == 0:
+			// 全额退回：余额已含预扣，无需变动
+			charged = 0
+			if preheld > 0 {
+				if _, err := tx.Exec("UPDATE users SET balance_micro=balance_micro+? WHERE id=?", preheld, userID); err != nil {
+					return err
+				}
+				balance += preheld
 			}
+		case final > preheld:
+			// 补扣：以上游实际 usage 为准，追扣到余额上限（不产生负余额）
+			owe := final - preheld
+			take := owe
+			if take > balance {
+				take = balance
+			}
+			if take > 0 {
+				if _, err := tx.Exec("UPDATE users SET balance_micro=balance_micro-? WHERE id=?", take, userID); err != nil {
+					return err
+				}
+				balance -= take
+			}
+			charged = preheld + take
+			if charged < final {
+				note = note + "|shortfall=" + strconv.FormatInt(final-charged, 10)
+			}
+		default:
+			// 退回多预扣部分
+			if preheld > final {
+				if _, err := tx.Exec("UPDATE users SET balance_micro=balance_micro+? WHERE id=?", preheld-final, userID); err != nil {
+					return err
+				}
+				balance += preheld - final
+			}
+			charged = final
 		}
 		flowType := "billed"
-		amount := -final
+		amount := -charged
 		if final == 0 {
 			// 全额退回 flow amount 固定记 0（对账公式口径：prehold 扣款行不计入重放，
 			// 退回资金不得重复计入；退回事实由 balance_after 与 requests.error 留痕）
 			flowType = "refunded"
+			amount = 0
 		}
-		return insertFlow(tx, userID, requestID, flowType, amount, balance+delta, unitPrice, note)
+		return insertFlow(tx, userID, requestID, flowType, amount, balance, unitPrice, note)
 	})
 }
 
