@@ -1,14 +1,27 @@
 <script setup lang="ts">
-/* AI 对话（体验中心）：自旧版 pgInit/pgFillModels/pgRenderHealth/pgSend 平移 */
+/* AI 对话（体验中心）：接口对接 1:1 平移自旧版
+ * （useModels 模型池 / useSSE.streamChat 流式 / AbortController 停止 / ?model= 深链 / 试跑种子 aqua_pg_seed）
+ * UI 全新：顶部工具条 + 消息流（用户渐变边气泡 / AI 纯排版 + <think> 折叠）+ 自增高输入区 */
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useModels, type ModelRow } from '@/composables/useModels'
 import { classifyModel, dsMaintenance, dsRetired } from '@/composables/modelMeta'
 import { streamChat, type ChatMessage } from '@/composables/useSSE'
-import { errText } from '@/composables/useApi'
-import AuthBanner from '@/components/AuthBanner.vue'
+import { errText, GATEWAY } from '@/composables/useApi'
+import { isLoggedIn } from '@/composables/useAuth'
+import AqIcon from '@/components/AqIcon.vue'
 
 interface PgMsg { role: 'user' | 'assistant'; text: string; streaming?: boolean; err?: string }
+interface PgView extends PgMsg { think: string; thinkOpen: boolean; body: string }
+
+/* 思考链解析：<think>…</think> 折叠展示；未闭合时视为思考中（正文不含思考内容） */
+function parseThink(raw: string): { think: string; thinkOpen: boolean; body: string } {
+  const open = raw.indexOf('<think>')
+  if (open === -1) return { think: '', thinkOpen: false, body: raw }
+  const close = raw.indexOf('</think>')
+  if (close === -1) return { think: raw.slice(open + 7), thinkOpen: true, body: raw.slice(0, open) }
+  return { think: raw.slice(open + 7, close), thinkOpen: false, body: (raw.slice(0, open) + raw.slice(close + 8)).replace(/^\s+/, '') }
+}
 
 const route = useRoute()
 const { models, load } = useModels()
@@ -23,7 +36,7 @@ const chatEl = ref<HTMLElement | null>(null)
 
 let abort: AbortController | null = null
 let chatHistory: ChatMessage[] = []
-// 深链 ?model=（#/playground?model=xxx）：列表中出现该模型即选中
+// 深链 ?model=：列表中出现该模型即选中
 const qm = route.query.model
 let deepLink = (Array.isArray(qm) ? qm[0] : qm) || ''
 
@@ -35,7 +48,7 @@ const listRows = computed<ModelRow[]>(() => {
   const ok = baseRows.value.filter(r => !dsMaintenance(r.id) && (!r.type || r.type === 'chat'))
   return ok.length ? ok : baseRows.value
 })
-const options = computed<ModelRow[]>(() => listRows.value.map(r => ({
+const options = computed(() => listRows.value.map(r => ({
   id: r.id,
   label: r.id
     + (r.paid && r.mode === 'per_token' && r.in_price != null && r.per_image == null ? ' · 按量 ¥' + r.in_price + '/百万tok 起' : '')
@@ -63,6 +76,12 @@ watch(listRows, applySelection, { immediate: true })
 
 function onModelChange() { deepLink = '' }
 
+/* 消息视图：AI 消息拆出思考链（折叠区）与正文 */
+const views = computed<PgView[]>(() => msgs.value.map(m => {
+  if (m.role === 'user') return { ...m, think: '', thinkOpen: false, body: m.text }
+  return { ...m, ...parseThink(m.text) }
+}))
+
 function scrollBottom() {
   nextTick(() => { const el = chatEl.value; if (el) el.scrollTop = el.scrollHeight })
 }
@@ -74,8 +93,8 @@ function autoGrow() {
   el.style.height = Math.min(el.scrollHeight, 140) + 'px'
 }
 
-/* pgSend 平移：流式对话统一走 useSSE.streamChat */
-async function pgSend() {
+/* 发送：流式对话统一走 useSSE.streamChat（与旧版 pgSend 行为一致） */
+async function send() {
   if (busy.value) return
   const text = inputText.value.trim()
   if (!text || !selected.value) return
@@ -119,10 +138,10 @@ async function pgSend() {
   }
 }
 
-function pgStopStream() { if (abort) { try { abort.abort() } catch { /* 忽略 */ } } }
+function stopStream() { if (abort) { try { abort.abort() } catch { /* 忽略 */ } } }
 
-function pgClear() {
-  pgStopStream()
+function clearChat() {
+  stopStream()
   chatHistory = []
   msgs.value = []
 }
@@ -130,7 +149,7 @@ function pgClear() {
 onMounted(() => {
   // 提示词工坊「去试跑」：自动把提示词填入输入框
   try {
-    const seed = JSON.parse(sessionStorage.getItem('aqua_pg_seed') || 'null')
+    const seed = JSON.parse(sessionStorage.getItem('aqua_pg_seed') || 'null') as { prompt?: string } | null
     if (seed && seed.prompt) {
       sessionStorage.removeItem('aqua_pg_seed')
       inputText.value = String(seed.prompt)
@@ -142,57 +161,144 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="models-page-head">
-      <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>体验中心</h1>
-      <p>免登录直接对话、玩 AI 对弈游戏、用免费实用工具——所有体验与真实 API 行为完全一致。</p>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1><AqIcon name="chat" :size="22" />AI 对话</h1>
+        <div class="sub">与网关任意模型流式对话——SSE 实时输出、参数与鉴权行为和真实 API 完全一致，免登录即可体验。</div>
+      </div>
+      <div class="ops">
+        <router-link class="btn" to="/api"><AqIcon name="book" :size="14" />API 文档</router-link>
+      </div>
     </div>
-    <nav class="hub-subnav" aria-label="体验中心子导航">
-      <router-link class="hub-tab" to="/playground" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>AI 对话</router-link>
-      <router-link class="hub-tab" to="/treehole" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4-3 8-6.5 8-11a8 8 0 1 0-16 0c0 4.5 4 8 8 11z" style="display:none"/><path d="M12 3c-4.4 0-8 3.6-8 8 0 4.4 3.6 8 8 8h.5c.3 0 .5.2.5.5V21l3.8-2.6C19.9 17 20.5 14 20.5 11 20.5 6.6 16.4 3 12 3z"/><circle cx="8.5" cy="10.5" r=".8" fill="currentColor"/><circle cx="12" cy="10.5" r=".8" fill="currentColor"/><circle cx="15.5" cy="10.5" r=".8" fill="currentColor"/></svg></span>树洞</router-link>
-      <router-link class="hub-tab" to="/tools" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>工具箱</router-link>
-      <router-link class="hub-tab" to="/prompts" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>提示词工坊</router-link>
-    </nav>
 
-    <AuthBanner />
+    <!-- 未登录引导卡 -->
+    <div v-if="!isLoggedIn()" class="card accent login-card fade-up">
+      <span class="login-ic"><AqIcon name="key" :size="19" /></span>
+      <div class="login-txt">
+        <b>登录后体验更完整</b>
+        <div class="dim">注册免费——登录后在控制台一键创建 API 密钥，解锁全部模型与更高额度；当前也可以直接免登录试用。</div>
+      </div>
+      <router-link to="/login" class="btn primary"><AqIcon name="user" :size="14" />登录 / 注册</router-link>
+    </div>
 
-    <div class="pg-wrap">
-      <div class="pg-toolbar">
-        <div class="pg-model-pick">
+    <div class="card chat-shell fade-up">
+      <!-- 顶部工具条 -->
+      <div class="chat-bar">
+        <div class="cb-field cb-grow">
           <label>模型</label>
-          <select id="pg-model" v-model="selected" @change="onModelChange">
+          <select class="select" v-model="selected" @change="onModelChange">
             <option v-for="o in options" :key="o.id" :value="o.id">{{ o.label }}</option>
           </select>
         </div>
-        <div class="pg-temp">
-          <label>随机性 <span id="pg-temp-val">{{ temp }}</span></label>
-          <input type="range" id="pg-temp" min="0" max="2" step="0.1" v-model="temp">
+        <div class="cb-field cb-temp">
+          <label>随机性 <b class="num temp-val">{{ temp }}</b></label>
+          <input type="range" min="0" max="2" step="0.1" v-model="temp" />
         </div>
-        <button class="btn" id="pg-clear" @click="pgClear">清空对话</button>
+        <button class="btn" type="button" @click="clearChat"><AqIcon name="trash" :size="14" />清空</button>
       </div>
-      <div class="pg-main">
-        <div class="pg-chat" id="pg-chat" ref="chatEl">
-          <div v-if="!msgs.length" class="pg-welcome">
-            <b>开始体验 AQUA 网关</b>
-            <p>选择上方任意模型，输入消息即可对话。回复为 SSE 流式实时输出，与真实 API 行为完全一致。</p>
-          </div>
-          <div v-for="(m, i) in msgs" :key="i" class="pg-msg" :class="[m.role, { streaming: m.streaming }]">
-            <span v-if="m.err && !m.text" class="pg-err">{{ m.err }}</span>
-            <template v-else>{{ m.text }}{{ m.err ? '\n\n[' + m.err + ']' : '' }}</template>
-          </div>
+
+      <!-- 消息区 -->
+      <div ref="chatEl" class="chat-scroll">
+        <div v-if="!msgs.length" class="empty">
+          <div class="big"><AqIcon name="chat" :size="40" /></div>
+          <b>开始体验 AQUA 网关</b>
+          <div class="dim">选择上方任意模型，输入消息即可对话。回复为 SSE 流式实时输出，与真实 API 行为完全一致。</div>
+          <div class="code pg-endpoint">POST {{ GATEWAY }}/chat/completions</div>
         </div>
-        <aside class="pg-side" id="pg-side">
-          <div class="pg-side-card">
-            <b>调用方式</b>
-            <p>本页面与 API 调用行为一致，接口地址 <code>https://api.ltzy.top/v1/chat/completions</code>，登录后在控制台创建密钥即可调用。模型健康分见下拉标注与「模型中心」页。</p>
+        <template v-for="(v, i) in views" :key="i">
+          <!-- 用户：右对齐，accent 渐变边气泡 -->
+          <div v-if="v.role === 'user'" class="msg-row me">
+            <div class="bubble-user">{{ v.text }}</div>
           </div>
-        </aside>
+          <!-- AI：左对齐，无底纯排版，思考链折叠 -->
+          <div v-else class="msg-row ai">
+            <div class="ai-body">
+              <div v-if="v.err && !v.text" class="msg bad">{{ v.err }}</div>
+              <template v-else>
+                <details v-if="v.think" class="think">
+                  <summary>{{ v.thinkOpen ? '思考中…' : '思考过程' }}</summary>
+                  <div class="think-txt">{{ v.think }}</div>
+                </details>
+                <div class="ai-txt">{{ v.body }}<span v-if="v.streaming" class="stream-cur" /></div>
+              </template>
+            </div>
+          </div>
+        </template>
       </div>
-      <div class="pg-inputbar">
-        <textarea id="pg-input" ref="inputEl" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行" v-model="inputText" @keydown.enter.exact.prevent="pgSend" @input="autoGrow"></textarea>
-        <button class="btn pg-send" id="pg-send" :disabled="busy" @click="pgSend">发送</button>
-        <button class="btn pg-stop" id="pg-stop" v-show="busy" @click="pgStopStream">停止</button>
+
+      <!-- 底部输入区 -->
+      <div class="chat-input">
+        <textarea
+          ref="inputEl" v-model="inputText" class="textarea" rows="1"
+          placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+          @keydown.enter.exact.prevent="send" @input="autoGrow"
+        />
+        <div class="chat-actions">
+          <button v-show="busy" class="btn danger" type="button" @click="stopStream"><AqIcon name="cross" :size="14" />停止</button>
+          <button class="btn primary" type="button" :disabled="busy" @click="send"><AqIcon name="send" :size="14" />发送</button>
+        </div>
       </div>
     </div>
-  </section>
+  </div>
 </template>
+
+<style scoped>
+/* 布局微调：聊天壳内部结构（气泡宽度 / 思考折叠 / 输入区），颜色全部走设计令牌 */
+.chat-shell { display: flex; flex-direction: column; gap: 12px; }
+
+.chat-bar { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.cb-field { display: flex; flex-direction: column; gap: 6px; }
+.cb-field label { font-size: 12.5px; font-weight: 600; color: var(--txt2); }
+.cb-grow { flex: 1; min-width: 220px; }
+.cb-temp { width: 210px; }
+.cb-temp input[type='range'] { width: 100%; accent-color: var(--acc); margin: 9px 0 3px; }
+.temp-val { color: var(--acc); }
+
+.login-card { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.login-ic { width: 40px; height: 40px; flex: none; border-radius: 12px; background: var(--acc-soft); color: var(--acc); display: inline-flex; align-items: center; justify-content: center; }
+.login-txt { flex: 1; min-width: 240px; }
+.login-card .btn { margin-left: auto; }
+
+.chat-scroll { height: min(52vh, 540px); min-height: 300px; overflow-y: auto; padding: 4px 2px; }
+.msg-row { display: flex; margin: 14px 0; }
+.msg-row.me { justify-content: flex-end; }
+.msg-row.ai { justify-content: flex-start; }
+
+.bubble-user {
+  max-width: min(78%, 560px);
+  padding: 10px 15px;
+  border-radius: 14px 14px 4px 14px;
+  border: 1px solid transparent;
+  background: linear-gradient(var(--bg2-solid), var(--bg2-solid)) padding-box, var(--acc-grad) border-box;
+  color: var(--txt0);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.8px;
+  line-height: 1.7;
+}
+
+.ai-body { max-width: min(86%, 720px); width: 100%; }
+.ai-txt { white-space: pre-wrap; word-break: break-word; color: var(--txt1); font-size: 13.8px; line-height: 1.75; }
+.ai-body .msg { margin: 0; }
+
+.think { margin: 2px 0 8px; border-left: 2px solid var(--line-strong); padding-left: 11px; }
+.think summary { cursor: pointer; user-select: none; color: var(--txt3); font-size: 12px; }
+.think summary:hover { color: var(--acc); }
+.think-txt { margin-top: 6px; color: var(--txt2); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+
+.stream-cur { display: inline-block; width: 7px; height: 14px; margin-left: 3px; vertical-align: -2px; border-radius: 2px; background: var(--acc); animation: cur-blink 1s steps(2, start) infinite; }
+@keyframes cur-blink { 50% { opacity: 0; } }
+
+.chat-input { display: flex; align-items: flex-end; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.chat-input .textarea { flex: 1; min-height: 42px; max-height: 140px; resize: none; }
+.chat-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.pg-endpoint { display: inline-block; margin-top: 12px; }
+
+@media (max-width: 640px) {
+  .bubble-user { max-width: 88%; }
+  .ai-body { max-width: 100%; }
+  .cb-temp { width: 100%; }
+}
+</style>

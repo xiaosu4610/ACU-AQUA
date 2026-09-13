@@ -1,246 +1,372 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+/* 首页 · 沉浸式 hero + 实时数据条 + 功能卡矩阵 + 快速开始三步
+ * 接口对接（与旧版 1:1）：
+ * - GATEWAY（/composables/useApi）→ baseUrl 展示与复制（旧版 hero Base URL）
+ * - isLoggedIn()（/composables/useAuth）→ CTA 注册/登录 ↔ 控制台切换
+ * - /v1/meta（useMeta 单例）→ 公告横幅 / QQ 群链接（失败静默）
+ * - /v1/status（apiJson('/status')）→ 版本 / 连续运行 / 近 1h 成功率与时延（30 秒轮询） */
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
-import { GATEWAY } from '@/composables/useApi'
+import { apiJson, GATEWAY } from '@/composables/useApi'
 import { isLoggedIn } from '@/composables/useAuth'
+import { useMeta } from '@/composables/useMeta'
 
+/* ---- 旧版保留：网关地址（Base URL 三步接入第一块） ---- */
 const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
+
+/* ---- /v1/meta 站点配置（公告 / Q 群），失败静默走兜底 ---- */
+const { meta, loadMeta } = useMeta()
+loadMeta()
+
+/* ---- /v1/status 实时数据条 ---- */
+interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number }
+interface StatusResp { version?: string; uptime_sec?: number; window?: string; models?: StatusModel[] }
+const statusLoading = ref(true)
+const statusErr = ref(false)
+const stVersion = ref('--')
+const stUptime = ref('--')
+const stOkRate = ref('--')
+const stLatency = ref('--')
+const stModels = ref('--')
+
+function fmtUptime(sec: number): string {
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  return d > 0 ? `${d} 天 ${h} 时` : `${h} 时 ${Math.floor((sec % 3600) / 60)} 分`
+}
+async function loadStatus() {
+  statusLoading.value = true
+  try {
+    const j = await apiJson<StatusResp>('/status')
+    const list = j.models || []
+    stVersion.value = j.version || '--'
+    stUptime.value = j.uptime_sec ? fmtUptime(j.uptime_sec) : '--'
+    if (list.length) {
+      const avgRate = list.reduce((s, m) => s + (m.success_rate || 0), 0) / list.length
+      const avgLat = list.reduce((s, m) => s + (m.avg_latency_ms || 0), 0) / list.length
+      stOkRate.value = avgRate.toFixed(1) + '%'
+      stLatency.value = (avgLat / 1000).toFixed(2) + ' s'
+      stModels.value = String(list.length)
+    }
+    statusErr.value = false
+  } catch { statusErr.value = true /* 保留上次成功数据，下一轮自动重试 */ }
+  statusLoading.value = false
+}
+let statusTimer = 0
+onMounted(() => { loadStatus(); statusTimer = window.setInterval(loadStatus, 30000) })
+onUnmounted(() => { if (statusTimer) window.clearInterval(statusTimer) })
+
+/* ---- 功能卡矩阵 ---- */
+const FEATURES = [
+  { icon: 'chat', title: '在线体验', desc: '登录后流式对话，全模型切换即开即用', to: '/playground' },
+  { icon: 'layout', title: '个人控制台', desc: '创建 / 管理 API 密钥，余额与账号设置', to: '/console' },
+  { icon: 'chart', title: '我的用量', desc: '登录后查看用量统计与调用日志', to: '/usage' },
+  { icon: 'box', title: '模型中心', desc: '免费与收费模型一览，实时健康分，一键复制模型 ID', to: '/models' },
+  { icon: 'puzzle', title: '工具箱', desc: 'IP 定位 / 翻译 / 子网计算 / 小游戏，纯免费', to: '/tools' },
+  { icon: 'book', title: 'API 文档', desc: '端点、参数、错误码一览，OpenAI 协议全兼容', to: '/api' },
+  { icon: 'trophy', title: '模型竞技场', desc: '双模型盲测对比，投票揭晓身份，全站胜率排行', to: '/arena' },
+  { icon: 'activity', title: '状态大屏', desc: '全站调用量、成功率、模型健康度实时透明', to: '/status' },
+  { icon: 'heart', title: '赞助支持', desc: '请作者喝杯咖啡，助服务器与算力走得更远', to: '/sponsor' },
+]
+
+/* ---- 快速开始第三步：请求示例（curl / Python / JS 切换） ---- */
+const DEMO_LANGS = ['curl', 'python', 'js'] as const
+type DemoLang = (typeof DEMO_LANGS)[number]
+const demoLang = ref<DemoLang>('curl')
+const DEMO: Record<'curl' | 'python' | 'js', string> = {
+  curl: `curl ${baseUrl}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -d '{"model": "gpt-oss-20b", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`,
+  python: `from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-你的密钥",              # 控制台创建
+    base_url="${baseUrl}",               # 结尾已带 /v1
+)
+r = client.chat.completions.create(
+    model="gpt-oss-20b",
+    messages=[{"role": "user", "content": "用一句话介绍你自己"}],
+)
+print(r.choices[0].message.content)`,
+  js: `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "sk-你的密钥",                // 控制台创建
+  baseURL: "${baseUrl}",                 // 结尾已带 /v1
+});
+const r = await client.chat.completions.create({
+  model: "gpt-oss-20b",
+  messages: [{ role: "user", content: "用一句话介绍你自己" }],
+});
+console.log(r.choices[0].message.content);`,
+}
+const demoCode = computed(() => DEMO[demoLang.value])
+
+/* ---- 社区 / 开源（静态内容与旧版一致，Q 群以 meta 下发优先） ---- */
+const qqUrl = computed(() => meta.value?.qq_group_url || 'https://qm.qq.com/q/qoe6XbsVge')
+const qqNum = computed(() => meta.value?.qq_group || '1103667832')
 </script>
 
 <template>
-  <section>
-    <header class="home-hero">
-      <div class="logo">
-        <img src="/favicon.ico" alt="AQUA" width="60" height="60" style="border-radius:14px;" class="hero-logo">
-        <span class="brand grad-flow">AQUA</span>
-      </div>
-      <p class="tagline">免费 · 极速 · 注册即用 —— 一个接口接入 Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）</p>
-      <!-- CTA 主行动区：注册/登录入口第一眼可见 -->
+  <div class="wrap">
+    <!-- ================= 沉浸式 Hero ================= -->
+    <section class="hero fade-up">
+      <div class="orb o1" aria-hidden="true"></div>
+      <div class="orb o2" aria-hidden="true"></div>
+      <div class="orb o3" aria-hidden="true"></div>
+
+      <span class="tag acc hero-badge"><AqIcon name="bolt" :size="13" />OpenAI 兼容 · 注册即用 · 永久免费额度</span>
+      <h1 class="hero-title">
+        一个接口<br />
+        <span class="grad-text">接入全部大模型</span>
+      </h1>
+      <p class="hero-sub">
+        免费 · 极速 · 注册即用 —— Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）。
+        客户端只改 base_url 与 api_key，协议级兼容，开箱即用。
+      </p>
+
       <div class="hero-cta">
-        <router-link v-if="!isLoggedIn()" class="cta-main" to="/login">注册 / 登录 · 创建密钥</router-link>
-        <router-link v-else class="cta-main" to="/console">进入我的控制台</router-link>
-        <router-link class="cta-sub" to="/api">查看 API 文档</router-link>
-        <router-link class="cta-sub" to="/community" title="一群 / 二群 / QQ 频道 · 交流与活动通知">
-          <svg style="width:15px;height:15px;vertical-align:-2px;margin-right:5px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>加入 Q 群
+        <router-link v-if="!isLoggedIn()" class="btn primary" to="/login">
+          <AqIcon name="key" :size="15" />注册 / 登录 · 创建密钥
         </router-link>
+        <router-link v-else class="btn primary" to="/console">
+          <AqIcon name="layout" :size="15" />进入我的控制台
+        </router-link>
+        <router-link class="btn" to="/api"><AqIcon name="book" :size="15" />查看 API 文档</router-link>
       </div>
-      <p class="hero-note">注册免费 · 控制台一键创建密钥 · 随时吊销重建 · 免费模型注册即用；收费模型见模型中心（aqua/ 专线，按量计费 0.2 倍率限时补贴）</p>
-      <div class="badges">
-        <a class="badge" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="text-decoration:none;" title="Gitee 仓库 · 去点个 Star">
-          <span class="ic"><svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg></span>Gitee 仓库
-        </a>
-        <a class="badge" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="text-decoration:none;" title="GitHub 仓库 · 去点个 Star">
-          <span class="ic"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>GitHub 仓库
-        </a>
-      </div>
-    </header>
 
-    <!-- ===== 板块一：直达入口 ===== -->
-    <section id="h-quick" class="block">
-      <h2 class="sec-title"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>直达入口</h2>
-      <div class="quick-tiles">
-        <router-link class="qtile" to="/playground">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
-          <b>在线体验</b>
-          <span class="qt-desc">登录后流式对话，全模型切换即开即用</span>
-          <span class="qt-go">立即开聊 →</span>
-        </router-link>
-        <router-link class="qtile" to="/console">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
-          <b>个人控制台</b>
-          <span class="qt-desc">创建 / 管理 API 密钥，头像与账号设置</span>
-          <span class="qt-go">进入控制台 →</span>
-        </router-link>
-        <router-link class="qtile" to="/usage">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span>
-          <b>我的用量</b>
-          <span class="qt-desc">登录后查看用量统计与调用日志</span>
-          <span class="qt-go">查一查 →</span>
-        </router-link>
-        <router-link class="qtile" to="/models">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span>
-          <b>模型中心</b>
-          <span class="qt-desc">模型列表 + 能力总览，实时健康分、一键复制模型 ID</span>
-          <span class="qt-go">进入中心 →</span>
-        </router-link>
-        <router-link class="qtile" to="/tools">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
-          <b>工具箱</b>
-          <span class="qt-desc">IP 定位 / 翻译 / 子网计算 / 小游戏，纯免费</span>
-          <span class="qt-go">打开工具箱 →</span>
-        </router-link>
-        <router-link class="qtile" to="/api">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg></span>
-          <b>API 文档</b>
-          <span class="qt-desc">端点、参数、错误码一览，OpenAI 协议全兼容</span>
-          <span class="qt-go">查阅文档 →</span>
-        </router-link>
-        <router-link class="qtile" to="/arena">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6L8 2z"/><path d="M4 6h16"/><path d="M18 2l3 4v14a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6l3-4z"/></svg></span>
-          <b>模型竞技场</b>
-          <span class="qt-desc">双模型盲测对比，投票揭晓身份，全站胜率排行</span>
-          <span class="qt-go">开始对决 →</span>
-        </router-link>
-        <router-link class="qtile" to="/status">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
-          <b>状态大屏</b>
-          <span class="qt-desc">全站调用量、成功率、模型健康度实时透明</span>
-          <span class="qt-go">查看大屏 →</span>
-        </router-link>
-        <router-link class="qtile" to="/sponsor">
-          <span class="qt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span>
-          <b>赞助支持</b>
-          <span class="qt-desc">请作者喝杯咖啡，助服务器与算力走得更远</span>
-          <span class="qt-go">去支持 →</span>
+      <!-- 实时数据条：/v1/status（30 秒轮询） -->
+      <div class="card live-strip">
+        <div class="li">
+          <span>网关版本</span>
+          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 72px;"></b>
+          <b v-else class="num">{{ stVersion }}</b>
+        </div>
+        <div class="li">
+          <span>连续运行</span>
+          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 88px;"></b>
+          <b v-else class="num">{{ stUptime }}</b>
+        </div>
+        <div class="li">
+          <span>近 1h 成功率</span>
+          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 64px;"></b>
+          <b v-else class="num">{{ stOkRate }}</b>
+        </div>
+        <div class="li">
+          <span>平均时延</span>
+          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 64px;"></b>
+          <b v-else class="num">{{ stLatency }}</b>
+        </div>
+        <div class="li">
+          <span>在线模型</span>
+          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 46px;"></b>
+          <b v-else class="num">{{ stModels }}</b>
+        </div>
+        <div class="li st">
+          <span class="dot" :class="statusErr ? 'bad' : 'ok'"></span>
+          {{ statusErr ? '状态同步失败 · 自动重试中' : '实时健康' }}
+        </div>
+      </div>
+      <div v-if="statusErr" class="msg bad">实时状态获取失败（/v1/status），将在 30 秒后自动重试；其余功能不受影响。</div>
+
+      <!-- 公告：/v1/meta 配置下发 -->
+      <div v-if="meta?.announcement_enabled && meta?.announcement" class="banner">
+        <AqIcon name="info" :size="15" />
+        <span>{{ meta.announcement }}</span>
+      </div>
+    </section>
+
+    <!-- ================= 功能卡矩阵 ================= -->
+    <section class="mt24">
+      <div class="sec-head">
+        <h2><AqIcon name="grid" :size="19" />站内直达</h2>
+        <div class="sub">从对话体验到数据大屏，一个站点全覆盖</div>
+      </div>
+      <div class="grid3 fade-up">
+        <router-link v-for="f in FEATURES" :key="f.to" :to="f.to" class="card hoverable feat">
+          <span class="feat-ic"><AqIcon :name="f.icon" :size="19" /></span>
+          <b>{{ f.title }}</b>
+          <span class="dim">{{ f.desc }}</span>
+          <span class="feat-go"><AqIcon name="arrow-right" :size="14" /></span>
         </router-link>
       </div>
     </section>
 
-    <!-- ===== 板块二：生态与合作 ===== -->
-    <section id="h-eco" class="block">
-      <h2 class="sec-title"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>生态与合作</h2>
-      <div class="friends">
-        <div class="friends-title">友情链接</div>
-        <div class="friends-row">
-          <a class="friend-card" href="https://miofog.top/" target="_blank" rel="noopener" title="miofog公益API">
-            <img src="https://miofog.top/favicon.ico" alt="miofog公益API" onerror="this.style.display='none';this.parentElement.classList.add('no-logo')">
-            <span class="f-info">
-              <span class="f-name">miofog公益API</span>
-              <span class="f-desc">免费 AI 模型平台 · 首个基于 AQUA 开源版二开</span>
-            </span>
-          </a>
-          <a class="friend-card" href="https://guliang.me/guliang-ai" target="_blank" rel="noopener" title="顾凉中转站">
-            <img src="https://guliang.me/i/u/PNThg82.png" alt="顾凉中转站" loading="lazy" onerror="this.style.display='none'">
-            <span class="f-info">
-              <span class="f-name">顾凉中转站</span>
-              <span class="f-desc">自研聚合中转 · 纯免费公益</span>
-            </span>
-          </a>
-          <a class="friend-card" href="https://cloudagnetnew.nsdmc.top" target="_blank" rel="noopener" title="CloudAgent API 网关">
-            <img src="https://cloudagnetnew.nsdmc.top/favicon.ico" alt="CloudAgent API 网关" loading="lazy" onerror="this.style.display='none';this.parentElement.classList.add('no-logo')">
-            <span class="f-info">
-              <span class="f-name">CloudAgent API 网关</span>
-              <span class="f-desc">统一 API 网关 · 海量模型聚合接入</span>
-            </span>
-          </a>
+    <!-- ================= 快速开始三步 ================= -->
+    <section class="mt24">
+      <div class="sec-head">
+        <h2><AqIcon name="bolt" :size="19" />三步接入</h2>
+        <div class="sub">注册免费 · 密钥自助创建 · 随时吊销重建 · 免费模型注册即用</div>
+      </div>
+      <div class="grid3 fade-up">
+        <div class="card">
+          <div class="step-no">STEP 01</div>
+          <b><AqIcon name="server" :size="16" />Base URL（接口地址）</b>
+          <div class="row mt12" style="flex-wrap: nowrap;">
+            <code class="code" style="flex: 1; padding: 9px 12px;">{{ baseUrl }}</code>
+            <CopyBtn :text="baseUrl" />
+          </div>
+          <p class="dim mt8">客户端只需填入该地址，系统自动拼接 /chat/completions 等路径。</p>
+        </div>
+        <div class="card">
+          <div class="step-no">STEP 02</div>
+          <b><AqIcon name="key" :size="16" />API Key（密钥）</b>
+          <p class="mt12">
+            注册登录后，在<b>个人控制台一键创建密钥</b>（形如 <code>sk-****</code>）——
+            注册免费、创建自助、随时吊销重建，每个密钥独立统计用量。
+          </p>
+          <router-link to="/console" class="btn block mt12"><AqIcon name="plus" :size="14" />进入控制台创建</router-link>
+        </div>
+        <div class="card">
+          <div class="step-no">STEP 03</div>
+          <b><AqIcon name="send" :size="16" />发起第一条请求</b>
+          <div class="chips mt12">
+            <button v-for="l in DEMO_LANGS" :key="l" class="chip" :class="{ on: demoLang === l }" @click="demoLang = l">
+              {{ l === 'js' ? 'JavaScript' : l === 'curl' ? 'cURL' : 'Python' }}
+            </button>
+          </div>
+          <pre class="code mt8 demo-code">{{ demoCode }}</pre>
+          <div class="row mt8">
+            <CopyBtn :text="demoCode" />
+            <router-link to="/models" class="btn ghost sm">去模型中心选模型 <AqIcon name="arrow-right" :size="13" /></router-link>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- ===== 板块三：社区与支持 ===== -->
-    <section id="h-community" class="block">
-      <h2 class="sec-title"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>社区与支持</h2>
-      <div class="home-community">
-        <div class="qq-block">
-          <div class="qq-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/><path d="M9 12l-2 3M15 12l2 3"/></svg>
-          </div>
-          <div class="qq-info">
-            <b>AQUA 官方交流一群（QQ 群）</b>
-            <p>技术交流、使用反馈、问题求助都在这里，公告与更新同步推送，<b>一群将满时请加二群</b></p>
-            <p>群号：<span class="qq-num">1103667832</span></p>
-          </div>
-          <div class="qq-actions">
-            <a class="qq-join" href="https://qm.qq.com/q/qoe6XbsVge" target="_blank" rel="noopener">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-              加入群聊
+    <!-- ================= 开源与社区 ================= -->
+    <section class="mt24">
+      <div class="sec-head">
+        <h2><AqIcon name="heart" :size="19" />开源与社区</h2>
+        <div class="sub">AGPL-3.0 完全开源 · 网关 + 前台全量源码 · 大版本公告在 QQ 频道同步</div>
+      </div>
+      <div class="grid2 fade-up">
+        <div class="card">
+          <b><AqIcon name="star" :size="16" />AQUA · ACU 工程系列开源项目</b>
+          <p class="mt8 dim">
+            可自由自部署；二开对外提供服务需以同协议开源。喜欢就给作者点个 Star，是项目持续演进的最大动力。
+          </p>
+          <div class="row wrap mt12">
+            <a class="btn sm" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">
+              <AqIcon name="external" :size="13" />Gitee 仓库
             </a>
-            <CopyBtn text="1103667832" label="复制群号" />
-          </div>
-        </div>
-        <div class="qq-block">
-          <div class="qq-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/><path d="M9 12l-2 3M15 12l2 3"/></svg>
-          </div>
-          <div class="qq-info">
-            <b>AQUA 官方交流二群（QQ 群）</b>
-            <p>一群满员分流新群，交流内容与一群完全一致，<b>一群加不上请直接加二群</b></p>
-            <p>群号：<span class="qq-num">1006740220</span></p>
-          </div>
-          <div class="qq-actions">
-            <a class="qq-join" href="https://qm.qq.com/q/o8QDbza2Ge" target="_blank" rel="noopener">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-              加入群聊
-            </a>
-            <CopyBtn text="1006740220" label="复制群号" />
-          </div>
-        </div>
-        <div class="qq-block">
-          <div class="qq-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-          </div>
-          <div class="qq-info">
-            <b>AQUA 开源社区 · QQ 频道</b>
-            <p>大版本更新等重要公告同步于此，欢迎加入共建开源社区</p>
-            <p>频道号：<span class="qq-num">pd57362562</span></p>
-          </div>
-          <div class="qq-actions">
-            <a class="qq-join" href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-              加入频道
-            </a>
-            <CopyBtn text="pd57362562" label="复制频道号" />
-          </div>
-        </div>
-        <div class="qq-block">
-          <div class="qq-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg>
-          </div>
-          <div class="qq-info">
-            <b>AQUA 完全开源 · Gitee 仓库</b>
-            <p>ACU 工程系列旗舰项目 · 网关 + 前台全量源码，基于 <b>AGPL-3.0</b>：可自由自部署，二开对外提供服务需同协议开源</p>
-            <p>地址：<span class="qq-num">gitee.com/xiaosu4610/aqua-rust-workers</span></p>
-          </div>
-          <div class="qq-actions">
-            <a class="qq-join" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" title="Gitee · 国内访问推荐">
-              <svg viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.9 6.26L21.5 9.27l-4.75 4.63 1.12 6.53L12 17.77l-5.87 3.09 1.12-6.53L2.5 9.27l6.6-1.01L12 2z"/></svg>
-              访问仓库 / Star
+            <a class="btn sm" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">
+              <AqIcon name="external" :size="13" />GitHub 仓库
             </a>
             <CopyBtn text="https://gitee.com/xiaosu4610/aqua-rust-workers" label="复制仓库地址" />
           </div>
         </div>
-        <div class="qq-block">
-          <div class="qq-icon">
-            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          </div>
-          <div class="qq-info">
-            <b>AQUA 完全开源 · GitHub 仓库</b>
-            <p>独立仓库，与 Gitee 内容完全同步 · ACU 工程系列旗舰项目；国际访问推荐，欢迎 Follow 与 Star</p>
-            <p>地址：<span class="qq-num">github.com/xiaosu4610/aqua-rust-workers</span></p>
-          </div>
-          <div class="qq-actions">
-            <a class="qq-join" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" title="GitHub · 国际访问">
-              <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-              访问仓库 / Star
+        <div class="card">
+          <b><AqIcon name="message" :size="16" />官方交流群 · QQ 频道</b>
+          <p class="mt8 dim">
+            技术交流、使用反馈、问题求助都在这里；一群将满请加二群。频道号
+            <code>pd57362562</code>，大版本更新等重要公告同步于此。
+          </p>
+          <div class="row wrap mt12">
+            <span class="tag acc mono">群号 {{ qqNum }}</span>
+            <a class="btn sm primary" :href="qqUrl" target="_blank" rel="noopener">
+              <AqIcon name="arrow-right" :size="13" />加入群聊
             </a>
-            <CopyBtn text="https://github.com/xiaosu4610/aqua-rust-workers" label="复制仓库地址" />
+            <CopyBtn :text="qqNum" label="复制群号" />
           </div>
         </div>
       </div>
     </section>
-
-    <!-- ===== 板块四：三步接入 ===== -->
-    <section id="h-start" class="block">
-      <h2 class="sec-title"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>三步接入</h2>
-      <div class="cards">
-        <div class="card">
-          <h3><i class="step-no">STEP 01</i><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span>Base URL（接口地址）</h3>
-          <div class="copy-row">
-            <code>{{ baseUrl }}</code>
-            <CopyBtn :text="baseUrl" />
-          </div>
-          <p class="hint">客户端只需填入该地址，系统自动拼接 /chat/completions 等路径。</p>
-        </div>
-        <div class="card">
-          <h3><i class="step-no">STEP 02</i><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 21 2"/><path d="M15.5 7.5 18 10"/></svg></span>API Key（密钥）</h3>
-          <div class="copy-row">
-            <code>注册登录 → 控制台创建密钥</code>
-            <router-link class="btn" to="/console" style="text-decoration:none;">进入控制台</router-link>
-          </div>
-          <p class="hint">本站采用账号制：<b>注册登录后，在个人控制台一键创建 API 密钥</b>（形如 <code>sk-****</code>）——<b>注册免费、创建自助、随时吊销重建</b>。每个密钥独立统计用量。大版本更新与公告在 <b>QQ 频道</b>（频道号 <b>pd57362562</b>）通知，欢迎进频道交流。</p>
-        </div>
-      </div>
-      <p class="hint" style="margin-top:10px;">请求示例、全部端点与错误码：见顶部「<router-link to="/api" style="color:var(--accent);">API 文档</router-link>」页；可用模型与实时健康分见「<router-link to="/models" style="color:var(--accent);">模型中心</router-link>」。</p>
-    </section>
-  </section>
+  </div>
 </template>
+
+<style scoped>
+/* ---- Hero 区（布局微调；颜色一律取令牌） ---- */
+.hero {
+  position: relative;
+  padding: 72px 0 8px;
+  text-align: center;
+  overflow: hidden;
+}
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(72px);
+  pointer-events: none;
+  z-index: -1;
+}
+.o1 { width: 340px; height: 340px; left: 6%; top: -60px; background: var(--acc); opacity: .14; animation: twinkle 7s ease-in-out infinite; }
+.o2 { width: 300px; height: 300px; right: 4%; top: 30px; background: var(--acc-2); opacity: .15; animation: twinkle 9s ease-in-out 1.2s infinite; }
+.o3 { width: 260px; height: 260px; left: 42%; top: 140px; background: var(--acc-3); opacity: .12; animation: twinkle 11s ease-in-out 2.4s infinite; }
+@keyframes twinkle {
+  0%, 100% { opacity: .06; transform: scale(.92); }
+  50% { opacity: .17; transform: scale(1.05); }
+}
+.hero-badge { margin-bottom: 18px; }
+.hero-title {
+  font-size: clamp(38px, 6.2vw, 64px);
+  font-weight: 800;
+  letter-spacing: -.03em;
+  line-height: 1.14;
+}
+.hero-title .grad-text { font-size: 1.08em; }
+.hero-sub {
+  max-width: 640px;
+  margin: 18px auto 0;
+  color: var(--txt2);
+  font-size: 15px;
+}
+.hero-cta {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+}
+.hero-cta .btn { padding: 11px 22px; font-size: 14.5px; }
+
+/* ---- 实时数据条 ---- */
+.live-strip {
+  margin: 34px auto 0;
+  max-width: 920px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 18px;
+  text-align: left;
+  padding: 16px 20px;
+}
+.live-strip .li span { display: block; font-size: 11.5px; color: var(--txt2); }
+.live-strip .li b { font-size: 17px; color: var(--txt0); font-weight: 700; margin-top: 2px; display: inline-block; min-height: 20px; }
+.live-strip .li.st { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--txt2); justify-content: flex-end; }
+
+/* ---- 功能卡矩阵 ---- */
+.sec-head { margin: 0 0 16px; }
+.sec-head h2 { display: flex; align-items: center; gap: 9px; font-size: 21px; }
+.sec-head .sub { color: var(--txt2); font-size: 13px; margin-top: 3px; }
+.feat { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; color: inherit; position: relative; }
+.feat b { font-size: 15px; }
+.feat-ic {
+  width: 38px; height: 38px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--acc-soft); color: var(--acc);
+  margin-bottom: 4px;
+}
+.feat-go {
+  position: absolute; right: 16px; top: 22px;
+  color: var(--txt3);
+  transition: transform var(--t-fast), color var(--t-fast);
+}
+.feat:hover .feat-go { color: var(--acc); transform: translateX(3px); }
+
+/* ---- 快速开始 ---- */
+.step-no {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: var(--acc);
+  background: var(--acc-soft);
+  border-radius: 7px;
+  padding: 3px 9px;
+  width: fit-content;
+  margin-bottom: 10px;
+}
+.demo-code { min-height: 208px; white-space: pre; margin-top: 0; }
+</style>

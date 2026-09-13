@@ -1,0 +1,177 @@
+/* ============================================================
+ * AQUA Layout —— 双壳布局：门户（顶栏+页脚） / 工作台（侧栏）
+ * ============================================================ */
+
+/* ================= 门户壳 ================= */
+.ptop {
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  background: color-mix(in srgb, var(--bg0) 72%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.ptop-in {
+  max-width: var(--w-max); margin: 0 auto; padding: 0 22px;
+  height: 60px; display: flex; align-items: center; gap: 18px;
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; color: var(--txt0); letter-spacing: .02em; }
+.brand svg { width: 26px; height: 26px; }
+.brand em { font-style: normal; background: var(--acc-grad-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+.pnav { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+.pnav > .item { position: relative; }
+.pnav a.nl {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border-radius: var(--r-sm);
+  color: var(--txt2); font-size: 13.5px; font-weight: 600;
+  transition: all var(--t-fast);
+}
+.pnav a.nl:hover, .pnav a.nl.on { color: var(--txt0); background: var(--bg3); }
+.pnav a.nl.on::after { content: ''; position: absolute; left: 13px; right: 13px; bottom: -1px; height: 2px; background: var(--acc-grad); border-radius: 2px; }
+.pnav .drop {
+  position: absolute; top: calc(100% + 8px); left: 0; min-width: 210px;
+  background: var(--bg2-solid); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-2); padding: 7px; z-index: 60;
+  opacity: 0; transform: translateY(6px); pointer-events: none;
+  transition: all var(--t-med);
+}
+.pnav .item:hover .drop, .pnav .item:focus-within .drop { opacity: 1; transform: none; pointer-events: auto; }
+.pnav .drop a { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--r-sm); color: var(--txt1); font-size: 13px; }
+.pnav .drop a:hover { background: var(--acc-soft); color: var(--acc); }
+.pnav .drop .dt { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--txt3); padding: 7px 12px 3px; }
+
+.ptop-sp { flex: 1; }
+.ptop-acts { display: flex; align-items: center; gap: 8px; }
+
+/* 移动端导航 */
+@media (max-width: 860px) {
+  .pnav { display: none; }
+  .ptop-in { height: 54px; }
+}
+.mnav {
+  position: fixed; inset: 54px 0 auto 0; z-index: 49;
+  background: var(--bg2-solid); border-bottom: 1px solid var(--line);
+  padding: 10px 14px 14px; display: grid; gap: 2px;
+  box-shadow: var(--shadow-2);
+}
+.mnav a { padding: 10px 12px; border-radius: var(--r-sm); color: var(--txt1); font-weight: 600; }
+.mnav a.on { background: var(--acc-soft); color: var(--acc); }
+.mnav .dt { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--txt3); padding: 8px 12px 2px; }
+
+/* 汉堡按钮 */
+.burger { display: none; width: 38px; height: 38px; border: 1px solid var(--line); background: var(--bg2); border-radius: var(--r-sm); cursor: pointer; align-items: center; justify-content: center; color: var(--txt1); }
+@media (max-width: 860px) { .burger { display: inline-flex; } }
+
+/* ================= 页脚 ================= */
+.foot { border-top: 1px solid var(--line); margin-top: 56px; padding: 26px 0 34px; }
+.foot-in { max-width: var(--w-max); margin: 0 auto; padding: 0 22px; text-align: center; color: var(--txt3); font-size: 12.5px; display: grid; gap: 8px; }
+.foot-in a { color: var(--txt2); }
+.foot-in a:hover { color: var(--acc); }
+
+/* ================= 工作台壳 ================= */
+.bench { display: flex; min-height: 100dvh; }
+.bside {
+  width: 218px; flex-shrink: 0;
+  position: sticky; top: 0; height: 100dvh; overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg1) 82%, transparent);
+  backdrop-filter: blur(14px);
+  display: flex; flex-direction: column;
+  padding: 18px 13px;
+  gap: 3px;
+}
+.bside .grp { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--txt3); padding: 15px 11px 6px; font-weight: 700; }
+.bside .grp:first-child { padding-top: 2px; }
+.blink {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: var(--r-sm);
+  color: var(--txt2); font-size: 13.5px; font-weight: 600;
+  transition: all var(--t-fast);
+  position: relative;
+}
+.blink svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .8; }
+.blink:hover { color: var(--txt0); background: var(--bg3); }
+.blink.on { color: var(--acc); background: var(--acc-soft); }
+.blink.on::before { content: ''; position: absolute; left: -13px; top: 20%; bottom: 20%; width: 3px; border-radius: 3px; background: var(--acc-grad); }
+
+.bside .spacer { flex: 1; }
+.buser {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--bg2);
+  margin-bottom: 8px;
+}
+.buser .avatar { width: 32px; height: 32px; border-radius: 99px; background: var(--acc-grad); color: var(--on-acc); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; flex-shrink: 0; overflow: hidden; }
+.buser .avatar img { width: 100%; height: 100%; object-fit: cover; }
+.buser .nm { font-size: 13px; font-weight: 700; color: var(--txt0); line-height: 1.3; }
+.buser .st { font-size: 11px; color: var(--txt3); }
+
+/* 工作台主区顶栏 */
+.bmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.btop {
+  height: 56px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg0) 70%, transparent);
+  backdrop-filter: blur(16px);
+  position: sticky; top: 0; z-index: 40;
+}
+.btop .crumb { font-size: 13px; color: var(--txt2); }
+.btop .crumb b { color: var(--txt0); }
+.btop .sp { flex: 1; }
+.bcontent { flex: 1; padding: 24px 26px 48px; max-width: 1280px; width: 100%; margin: 0 auto; }
+@media (max-width: 720px) { .bcontent { padding: 16px 14px 40px; } }
+
+/* 移动端工作台：侧栏变横向 pill */
+@media (max-width: 860px) {
+  .bench { flex-direction: column; }
+  .bside {
+    position: sticky; top: 0; z-index: 45; height: auto;
+    width: 100%; flex-direction: row; align-items: center;
+    overflow-x: auto; overflow-y: hidden;
+    padding: 9px 12px; gap: 6px;
+    border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .bside .grp, .bside .spacer, .buser, .bside .bhide-m { display: none; }
+  .blink { flex-shrink: 0; padding: 7px 13px; border-radius: 99px; border: 1px solid var(--line); }
+  .blink.on { border-color: transparent; }
+  .blink.on::before { display: none; }
+}
+
+/* ---- 头像按钮 ---- */
+.avatar-btn {
+  width: 34px; height: 34px; border-radius: 99px;
+  background: var(--acc-grad); color: var(--on-acc);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; cursor: pointer;
+  border: 0; overflow: hidden; flex-shrink: 0;
+}
+.avatar-btn img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---- 主题切换 ---- */
+.theme-btn {
+  width: 34px; height: 34px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--bg2); color: var(--txt2);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: all var(--t-fast);
+}
+.theme-btn:hover { color: var(--acc); border-color: var(--acc); transform: rotate(12deg); }
+
+/* ---- QQ 悬浮 ---- */
+.qq-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 10px 16px; border-radius: 99px;
+  background: var(--acc-grad); color: var(--on-acc);
+  font-weight: 700; font-size: 13px;
+  box-shadow: 0 10px 30px -8px rgba(46, 230, 214, .6);
+  transition: transform var(--t-fast);
+}
+.qq-fab:hover { transform: translateY(-3px); color: var(--on-acc); }
+
+/* ---- 路由过渡 ---- */
+.page-enter-active { transition: opacity .28s var(--ease), transform .28s var(--ease); }
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-active { transition: opacity .12s ease; }
+.page-leave-to { opacity: 0; }

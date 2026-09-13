@@ -1,11 +1,10 @@
 <script setup lang="ts">
 // AqIcon —— 站点统一手绘 SVG 图标（feather 风格，24x24 stroke）
-// 全站 emoji 图标的替代品；颜色随 currentColor，尺寸由 size 控制
+// 颜色随 currentColor，尺寸由 size 控制
 import { computed } from 'vue'
 
 const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 18 })
 
-// 每个图标均为手绘 path 集合（viewBox 0 0 24 24，stroke=currentColor）
 const ICONS: Record<string, string> = {
   // —— 控制台 ——
   key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 20 3"/><path d="M16 7l3 3"/><path d="M13 10l2.5 2.5"/>',
@@ -43,17 +42,37 @@ const ICONS: Record<string, string> = {
   trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6"/><path d="M14 11v6"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor" stroke="none"/>',
-  // —— 控制台侧边栏 ——
+  // —— 导航 / 布局 ——
   menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
   layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  home: '<path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-6h4v6"/>',
+  'chevron-down': '<path d="M6 9l6 6 6-6"/>',
+  send: '<path d="M21 3 10 14"/><path d="M21 3l-7 18-4-7-7-4 18-7z"/>',
+  external: '<path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>',
+  // —— 主题 ——
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.9 4.9l1.4 1.4"/><path d="M17.7 17.7l1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M6.3 17.7l-1.4 1.4"/><path d="M19.1 4.9l-1.4 1.4"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/>',
   // —— 账号检查 ——
   stethoscope: '<path d="M6 4v6a5 5 0 0 0 10 0V4"/><path d="M6 4h2"/><path d="M14 4h2"/><path d="M11 15v1.5A4.5 4.5 0 0 0 15.5 21h0A4.5 4.5 0 0 0 20 16.5V15"/><circle cx="20" cy="13.5" r="1.8"/>',
   gauge: '<path d="M4 18a9 9 0 1 1 16 0"/><path d="M12 13l4-4"/><circle cx="12" cy="14" r="1.3" fill="currentColor" stroke="none"/>',
+  // —— 文档 / 工具 ——
+  book: '<path d="M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19a2 2 0 0 0 2 2h13"/><path d="M9 7h6"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7"/><path d="M8.5 13.5h4"/>',
+  message: '<path d="M4 5h16v11H8l-4 4V5z"/><path d="M8 9h8"/><path d="M8 12h5"/>',
+  gamepad: '<rect x="2.5" y="7.5" width="19" height="10" rx="5"/><path d="M7 10.5v4"/><path d="M5 12.5h4"/><circle cx="15.5" cy="11.5" r="0.6" fill="currentColor" stroke="none"/><circle cx="17.5" cy="13.5" r="0.6" fill="currentColor" stroke="none"/>',
+  server: '<rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/>',
+  wallet: '<path d="M20 7H5a2 2 0 0 1 0-4h13v4"/><path d="M4 5v14a2 2 0 0 0 2 2h14V7"/><path d="M16 14h.01"/>',
+  download: '<path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/>',
+  qr: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h3v3"/><path d="M20 14v.01"/><path d="M14 20v.01"/><path d="M17 20h3"/>',
   // —— 游戏棋子 ——
   'x-mark': '<path d="M5 5l14 14"/><path d="M19 5 5 19"/>',
   'circle-mark': '<circle cx="12" cy="12" r="8"/>',
+  // —— 品牌 ——
+  droplet: '<path d="M12 3s6.5 6.6 6.5 11a6.5 6.5 0 0 1-13 0C5.5 9.6 12 3 12 3z"/><path d="M9.5 14.5a2.6 2.6 0 0 0 2.6 2.4"/>',
 }
 
 const frag = computed(() => ICONS[props.name] ?? ICONS.info)

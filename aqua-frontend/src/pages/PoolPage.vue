@@ -1,300 +1,558 @@
 <script setup lang="ts">
-// 众筹池账本页：acu/ 公共算力池的驾驶舱 + 充值 + 四大榜单 + 透明流水
-// 铁律：本页零上游调用——只打本网关 /v1/pool/* 与 /v1/pay/* 接口
+/* 众筹公共算力池（acu/）：资金池驾驶舱 + 充值翻倍 + 四大榜单 + 透明流水 + 个人注入记录
+ * 铁律：本页零上游调用——只打本网关 /v1/pool/* /v1/pay/* /v1/my/pool/* 接口 */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AqIcon from '@/components/AqIcon.vue'
+import CopyBtn from '@/components/CopyBtn.vue'
 import { apiJson, errText } from '@/composables/useApi'
-import { isLoggedIn } from '@/composables/useAuth'
+import { isLoggedIn, sessionToken, me } from '@/composables/useAuth'
 
-const status = ref<any>(null)
-const flows = ref<any[]>([])
+/* ===== 类型 ===== */
+interface PoolStatus {
+  balance_micro: number
+  charged_micro: number
+  used_micro: number
+  today_used_micro: number
+  consumers: number
+}
+interface PoolFlow {
+  id: number | string
+  type: string
+  revival?: boolean
+  user: string
+  amount_micro: number
+  balance_after_micro: number
+  ts: number
+}
+interface RankRow {
+  rank: number
+  user: string
+  note?: string
+  extra?: number
+  calls?: number
+  amount_micro: number
+}
+interface HeroRow { user: string; saves: number; amount_micro: number; ts: number }
+interface ElderRow { rank: number; user: string; amount_micro: number }
+interface MyPoolFlow {
+  ts: number
+  type: string
+  model?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  amount_micro: number
+}
+interface MyPool {
+  balance_micro?: number
+  my_charged_micro?: number
+  my_used_micro?: number
+  net_micro?: number
+  items?: MyPoolFlow[]
+}
+
+/* ===== 池子状态与公开流水 ===== */
+const status = ref<PoolStatus | null>(null)
+const flows = ref<PoolFlow[]>([])
 const loading = ref(true)
+const statusMsg = ref('')
+const flowsMsg = ref('')
 
 async function loadStatus() {
-  try { status.value = await apiJson<any>('/pool/status') } catch { /* 忽略 */ }
+  statusMsg.value = ''
+  try {
+    status.value = await apiJson<PoolStatus>('/pool/status')
+  } catch (e) {
+    statusMsg.value = errText(e)
+    status.value = null
+  }
 }
 async function loadFlows() {
-  try { const j = await apiJson<any>('/pool/flows?limit=80'); flows.value = j.items || [] } catch { /* 忽略 */ }
+  flowsMsg.value = ''
+  try {
+    const j = await apiJson<{ items?: PoolFlow[] }>('/pool/flows?limit=80')
+    flows.value = j.items || []
+  } catch (e) {
+    flowsMsg.value = errText(e)
+    flows.value = []
+  }
+}
+
+/* ===== 个人注入记录（登录态） ===== */
+const myPool = ref<MyPool>({})
+const myPoolMsg = ref('')
+async function loadMyPool() {
+  myPoolMsg.value = ''
+  try {
+    myPool.value = await apiJson<MyPool>('/my/pool/flows', { session: true })
+  } catch (e) {
+    myPoolMsg.value = errText(e)
+  }
 }
 
 /* ===== 榜单 ===== */
-const rankTab = ref<'charge' | 'usage' | 'honor' | 'net'>('charge')
+type RankTab = 'charge' | 'usage' | 'honor' | 'net'
+const RANK_TABS: { id: RankTab; label: string }[] = [
+  { id: 'charge', label: '充值榜' },
+  { id: 'usage', label: '用量榜' },
+  { id: 'honor', label: '荣誉墙' },
+  { id: 'net', label: '净贡献榜' },
+]
+const rankTab = ref<RankTab>('charge')
 const rankRange = ref<'week' | 'all'>('all')
-const rankItems = ref<any[]>([])
-const heroes = ref<any[]>([])
-const elders = ref<any[]>([])
+const rankItems = ref<RankRow[]>([])
+const heroes = ref<HeroRow[]>([])
+const elders = ref<ElderRow[]>([])
 const rankLoading = ref(false)
+const rankMsg = ref('')
 
 async function loadRanks() {
   rankLoading.value = true
+  rankMsg.value = ''
   try {
     if (rankTab.value === 'honor') {
-      const j = await apiJson<any>('/pool/ranks?type=honor')
-      heroes.value = j.heroes || []; elders.value = j.elders || []; rankItems.value = []
+      const j = await apiJson<{ heroes?: HeroRow[]; elders?: ElderRow[] }>('/pool/ranks?type=honor')
+      heroes.value = j.heroes || []
+      elders.value = j.elders || []
+      rankItems.value = []
     } else {
-      const j = await apiJson<any>(`/pool/ranks?type=${rankTab.value}&range=${rankRange.value}`)
-      rankItems.value = j.items || []; heroes.value = []; elders.value = []
+      const j = await apiJson<{ items?: RankRow[] }>(`/pool/ranks?type=${rankTab.value}&range=${rankRange.value}`)
+      rankItems.value = j.items || []
+      heroes.value = []
+      elders.value = []
     }
-  } catch { /* 忽略 */ }
+  } catch (e) {
+    rankMsg.value = errText(e)
+    rankItems.value = []
+    heroes.value = []
+    elders.value = []
+  }
   rankLoading.value = false
 }
-function setTab(t: 'charge' | 'usage' | 'honor' | 'net') {
+function setTab(t: RankTab) {
   rankTab.value = t
   if (t === 'usage') rankRange.value = 'week' // 用量榜仅周榜
   loadRanks()
 }
-function setRange(r: 'week' | 'all') { rankRange.value = r; loadRanks() }
+function setRange(r: 'week' | 'all') {
+  rankRange.value = r
+  loadRanks()
+}
+function isMe(u?: string): boolean {
+  return !!u && !!me.value && u === me.value.username
+}
+const amtLabel = computed(() =>
+  rankTab.value === 'charge' ? '累计充值（¥）' : rankTab.value === 'usage' ? '消耗金额（¥）' : '净贡献（¥）',
+)
+const emptyHint = computed(() =>
+  rankTab.value === 'charge'
+    ? '第一笔充值将载入史册'
+    : rankTab.value === 'usage'
+      ? '本周还没有众筹模型调用'
+      : '充值大于消耗即可上榜',
+)
 
 /* ===== 充值（复用站内支付：product=pool 进公共池） ===== */
-const topupOpen = ref(false)
-const topupAmt = ref(10)
+const payOpen = ref(false)
+const topupAmt = ref<number>(10)
 const topupChannel = ref<'alipay' | 'wxpay'>('alipay')
 const paying = ref(false)
 const payMsg = ref('')
 const payOk = ref(false)
-const payingOrder = ref<{ out_trade_no: string } | null>(null)
+const payingOrder = ref<{ out_trade_no: string; pay_url: string } | null>(null)
 let pollTimer: number | null = null
 const AMTS = [5, 10, 30, 100]
 
-const topupMicro = computed(() => Math.round((Number(topupAmt.value) || 0) * 1_000_000))
-const giftYuan = computed(() => (((Number(topupAmt.value) || 0) * 2).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')))
-function yuan(v?: number): string {
+function yuan(v?: number | null): string {
   if (v == null) return '--'
   return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
 }
+const topupMicro = computed(() => Math.round((Number(topupAmt.value) || 0) * 1_000_000))
+const giftYuan = computed(() => yuan((Number(topupAmt.value) || 0) * 2 * 1_000_000))
+const alive = computed(() => !!status.value && status.value.balance_micro > 0)
+const tokensOf = (micro: number) => Math.floor((micro / 1_000_000) * 50) // ¥1 ≈ 50 万输入 tokens（v4f 官方原价口径）
 
 async function createTopup() {
-  if (!isLoggedIn()) { payMsg.value = '请先登录再充值'; return }
-  if (topupMicro.value < 10_000) { payMsg.value = '单笔金额须在 0.01 ~ 1000 元之间'; return }
-  paying.value = true; payMsg.value = ''
+  if (!isLoggedIn()) {
+    payMsg.value = '请先登录再充值'
+    payOk.value = false
+    return
+  }
+  if (topupMicro.value < 10_000) {
+    payMsg.value = '单笔金额须在 0.01 ~ 1000 元之间'
+    payOk.value = false
+    return
+  }
+  paying.value = true
+  payMsg.value = ''
   try {
-    const j = await apiJson<any>('/pay/create', {
-      method: 'POST', session: true,
+    const j = await apiJson<{ out_trade_no: string; pay_url: string }>('/pay/create', {
+      method: 'POST',
+      session: true,
       body: { amount_micro: topupMicro.value, channel: topupChannel.value, product: 'pool' },
     })
-    payingOrder.value = { out_trade_no: j.out_trade_no }
+    payingOrder.value = { out_trade_no: j.out_trade_no, pay_url: j.pay_url }
+    payOpen.value = true
     window.open(j.pay_url, '_blank')
     startPolling()
-  } catch (e) { payMsg.value = errText(e) }
+  } catch (e) {
+    payMsg.value = errText(e)
+    payOk.value = false
+  }
   paying.value = false
 }
 function startPolling() {
   stopPolling()
   pollTimer = window.setInterval(async () => {
-    if (!payingOrder.value) { stopPolling(); return }
+    if (!payingOrder.value) {
+      stopPolling()
+      return
+    }
     try {
-      const j = await apiJson<any>(`/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`, { session: true })
+      const j = await apiJson<{ status: string; amount_micro: number; pool_balance_micro: number }>(
+        `/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`,
+        { session: true },
+      )
       if (j.status === 'paid') {
         payOk.value = true
         payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
-        stopPolling(); payingOrder.value = null
-        loadStatus(); loadFlows(); loadRanks()
+        stopPolling()
+        payingOrder.value = null
+        payOpen.value = false
+        loadStatus()
+        loadFlows()
+        loadRanks()
+        loadMyPool()
       }
-    } catch { /* 轮询失败忽略 */ }
+    } catch {
+      /* 轮询失败忽略 */
+    }
   }, 3000)
 }
-function stopPolling() { if (pollTimer != null) { clearInterval(pollTimer); pollTimer = null } }
+function stopPolling() {
+  if (pollTimer != null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
 async function manualCheck() {
   if (!payingOrder.value) return
   try {
-    const j = await apiJson<any>(`/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`, { session: true })
+    const j = await apiJson<{ status: string; amount_micro: number; pool_balance_micro: number }>(
+      `/pay/status?out_trade_no=${payingOrder.value.out_trade_no}`,
+      { session: true },
+    )
     if (j.status === 'paid') {
       payOk.value = true
       payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
-      stopPolling(); payingOrder.value = null
-      loadStatus(); loadFlows(); loadRanks()
-    } else payMsg.value = '还未查询到支付结果，完成支付后稍等几秒'
-  } catch (e) { payMsg.value = errText(e) }
+      stopPolling()
+      payingOrder.value = null
+      payOpen.value = false
+      loadStatus()
+      loadFlows()
+      loadRanks()
+      loadMyPool()
+    } else {
+      payMsg.value = '还未查询到支付结果，完成支付后稍等几秒'
+      payOk.value = false
+    }
+  } catch (e) {
+    payMsg.value = errText(e)
+    payOk.value = false
+  }
+}
+function closePay() {
+  payingOrder.value = null
+  payOpen.value = false
+  stopPolling()
 }
 onUnmounted(stopPolling)
 
 /* ===== 展示辅助 ===== */
-const alive = computed(() => !!status.value && status.value.balance_micro > 0)
-const tokensOf = (micro: number) => Math.floor(micro / 1_000_000 * 50) // ¥1 ≈ 50 万输入 tokens（v4f 官方原价 ¥2/1M 口径）
+const typeLabel: Record<string, string> = { charge: '充值', seed: '官方注入', consume: '扣费', adjust: '调整' }
 function fmtTs(t: number): string {
   const d = new Date((t || 0) * 1000)
   const p = (x: number) => (x < 10 ? '0' : '') + x
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
-const typeLabel: Record<string, string> = { charge: '充值', seed: '官方注入', consume: '扣费', adjust: '调整' }
+function myTypeText(f: MyPoolFlow): string {
+  if (f.type === 'consume') return f.model || '扣费'
+  if (f.type === 'charge') return '充值'
+  if (f.type === 'seed') return '官方注入'
+  return '调整'
+}
+const netCls = computed(() => ((myPool.value.net_micro ?? 0) >= 0 ? 'pos' : 'negw'))
 
 onMounted(async () => {
   await Promise.all([loadStatus(), loadFlows(), loadRanks()])
   loading.value = false
+  if (sessionToken.value) loadMyPool()
 })
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="pool-head">
-      <h1><span class="ic"><AqIcon name="coin" :size="22" /></span>众筹公共算力池</h1>
-      <p>acu/ 前缀众筹模型按<b>官方原价</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。充值翻倍：充 1 元 = 2 元站点额度，额度由大家共同充值扩充，见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。</p>
-    </div>
-
-    <!-- 池子驾驶舱 -->
-    <div class="dash-card pool-main" :class="{ empty: status && !alive }">
-      <div class="pool-state">
-        <span class="dot" :class="alive ? 'on' : 'off'"></span>
-        {{ status ? (alive ? '额度可用' : '额度已用完 · 等待充值复活') : '加载中…' }}
-      </div>
-      <div class="pool-balance"><small>¥</small>{{ status ? yuan(status.balance_micro) : '--' }}</div>
-      <div class="pool-sub">当前站点额度 ≈ 可供 {{ status ? tokensOf(status.balance_micro).toLocaleString() : '--' }} 万输入 tokens（v4f 官方原价口径）</div>
-      <div class="pool-stats">
-        <div><b>{{ status ? yuan(status.charged_micro) : '--' }}</b><span>累计充值</span></div>
-        <div><b>{{ status ? yuan(status.used_micro) : '--' }}</b><span>累计消耗</span></div>
-        <div><b>{{ status ? yuan(status.today_used_micro) : '--' }}</b><span>今日消耗</span></div>
-        <div><b>{{ status ? status.consumers : '--' }}</b><span>共同使用者</span></div>
-      </div>
-    </div>
-
-    <!-- 充值 -->
-    <div class="dash-card pool-topup">
-      <h2><AqIcon name="plus" :size="15" /> 充值翻倍 · 扩充站点额度</h2>
-      <p class="topup-note"><b>充值翻倍：充 1 元 = 2 元站点额度</b>（实付 ¥10 → 到账 ¥20），注入公共池由所有人共用消耗，<b>不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。</p>
-      <div class="amt-row">
-        <button v-for="a in AMTS" :key="a" type="button" class="amt" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>
-        <input v-model.number="topupAmt" type="number" min="0.01" max="1000" placeholder="自定义" />
-      </div>
-      <div class="ch-row">
-        <button type="button" class="ch" :class="{ on: topupChannel === 'alipay' }" @click="topupChannel = 'alipay'">支付宝</button>
-        <button type="button" class="ch" :class="{ on: topupChannel === 'wxpay' }" @click="topupChannel = 'wxpay'">微信</button>
-        <button class="btn topup-go" :disabled="paying || !isLoggedIn()" @click="createTopup">
-          {{ paying ? '下单中…' : isLoggedIn() ? `充 ¥${topupAmt || 0} → 到账 ¥${giftYuan}` : '请先登录' }}
-        </button>
-      </div>
-      <p v-if="payingOrder" class="pay-wait">
-        已打开支付页，完成支付后本页自动确认 <button class="mini-btn" @click="manualCheck">我已支付，立即检查</button>
-      </p>
-      <p v-if="payMsg" class="pay-msg" :class="{ ok: payOk }">{{ payMsg }}</p>
-    </div>
-
-    <!-- 四大榜单 -->
-    <div class="dash-card pool-ranks">
-      <h2><AqIcon name="trophy" :size="15" /> 榜单与荣誉</h2>
-      <div class="rank-tabs">
-        <button v-for="t in [['charge','充值榜'],['usage','用量榜'],['honor','荣誉墙'],['net','净贡献榜']]" :key="t[0]"
-          type="button" class="rtab" :class="{ on: rankTab === t[0] }" @click="setTab(t[0] as any)">{{ t[1] }}</button>
-        <span class="rspacer"></span>
-        <button v-if="rankTab !== 'usage'" type="button" class="rtab sm" :class="{ on: rankRange === 'week' }" @click="setRange('week')">本周</button>
-        <button v-if="rankTab !== 'usage'" type="button" class="rtab sm" :class="{ on: rankRange === 'all' }" @click="setRange('all')">总榜</button>
-      </div>
-      <div v-if="rankLoading" class="rank-empty">加载中…</div>
-      <template v-else-if="rankTab === 'honor'">
-        <div class="honor-sec">
-          <h3>救场英雄（池子归零后第一笔复活充值）</h3>
-          <div v-if="!heroes.length" class="rank-empty">暂无救场记录——池子还没熔断过，大家都在续命</div>
-          <div v-for="(h, i) in heroes" :key="i" class="rank-row hero">
-            <span class="rk">{{ i + 1 }}</span>
-            <span class="nm">{{ h.user }}</span>
-            <span class="badge-coin">第 {{ h.saves }} 次救场</span>
-            <span class="amt-c">¥{{ yuan(h.amount_micro) }}</span>
-            <span class="tm">{{ fmtTs(h.ts) }}</span>
+  <div class="wrap" style="max-width: 1080px;">
+    <div class="fade-up">
+      <!-- 页头 -->
+      <div class="page-head">
+        <div>
+          <h1><AqIcon name="coin" :size="24" />众筹公共算力池</h1>
+          <div class="sub">
+            acu/ 前缀众筹模型按<b>官方原价</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。充值翻倍：充 1 元 = 2 元站点额度，额度由大家共同充值扩充，见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
           </div>
         </div>
-        <div class="honor-sec">
-          <h3>开服元老（最早 10 位众筹充值用户）</h3>
-          <div v-if="!elders.length" class="rank-empty">虚位以待——第一位充值者将永久留名</div>
-          <div v-for="e in elders" :key="e.rank" class="rank-row">
-            <span class="rk">{{ e.rank }}</span>
-            <span class="nm">{{ e.user }}</span>
-            <span class="badge-coin elder">元老</span>
-            <span class="amt-c">¥{{ yuan(e.amount_micro) }}</span>
+        <div class="ops">
+          <span v-if="status" class="tag" :class="alive ? 'ok' : 'bad'">
+            <span class="dot" :class="alive ? 'ok' : 'bad'"></span>{{ alive ? '额度可用' : '等待充值复活' }}
+          </span>
+        </div>
+      </div>
+
+      <p v-if="statusMsg" class="msg bad">{{ statusMsg }}</p>
+
+      <!-- 资金池大卡 -->
+      <div class="card accent">
+        <div v-if="loading && !status" style="display: grid; gap: 10px;">
+          <div class="skeleton" style="min-height: 18px; width: 42%;"></div>
+          <div class="skeleton" style="min-height: 50px; width: 56%;"></div>
+        </div>
+        <template v-else-if="status">
+          <div class="row between wrap">
+            <span class="dim"><AqIcon name="droplet" :size="14" /> 当前站点额度 ≈ 可供 {{ tokensOf(status.balance_micro).toLocaleString() }} 万输入 tokens（v4f 官方原价口径）</span>
+          </div>
+          <div class="pool-balance grad-text">¥{{ yuan(status.balance_micro) }}</div>
+        </template>
+        <div v-else class="empty">
+          <div class="big"><AqIcon name="coin" :size="36" /></div>
+          <b>池子状态加载失败</b>
+          <div class="dim">请刷新页面重试</div>
+        </div>
+      </div>
+
+      <!-- 四 KPI -->
+      <div class="kpis mt16">
+        <div class="kpi"><span>累计充值</span><b>{{ status ? '¥' + yuan(status.charged_micro) : '--' }}</b><span class="trend">充 1 元 = 2 元站点额度</span></div>
+        <div class="kpi"><span>累计消耗</span><b>{{ status ? '¥' + yuan(status.used_micro) : '--' }}</b><span class="trend">按官方原价从池扣费</span></div>
+        <div class="kpi"><span>今日消耗</span><b>{{ status ? '¥' + yuan(status.today_used_micro) : '--' }}</b><span class="trend">每天 0 点重置</span></div>
+        <div class="kpi"><span>共同使用人数</span><b>{{ status ? status.consumers : '--' }}</b><span class="trend">无需充值即可调用</span></div>
+      </div>
+
+      <!-- 登录提示卡 / 个人注入记录 -->
+      <div v-if="!sessionToken" class="card mt16 row between wrap">
+        <div>
+          <b><AqIcon name="user" :size="16" /> 登录后查看我的注入记录</b>
+          <div class="dim mt8">登录后可查看个人站点额度余额、累计注入 / 消耗、净贡献与逐笔明细；充值也需要先登录。</div>
+        </div>
+        <router-link to="/login" class="btn primary"><AqIcon name="key" :size="14" /> 去登录 / 注册</router-link>
+      </div>
+      <div v-else class="card mt16">
+        <b><AqIcon name="wallet" :size="16" /> 我的注入记录</b>
+        <p v-if="myPoolMsg" class="msg bad">{{ myPoolMsg }}</p>
+        <template v-else>
+          <div class="kpis mt12">
+            <div class="kpi"><span>站点额度余额</span><b>¥{{ yuan(myPool.balance_micro) }}</b></div>
+            <div class="kpi"><span>我累计注入</span><b>¥{{ yuan(myPool.my_charged_micro) }}</b></div>
+            <div class="kpi"><span>我累计消耗</span><b>¥{{ yuan(myPool.my_used_micro) }}</b></div>
+            <div class="kpi"><span>我的净贡献</span><b :class="netCls">¥{{ yuan(myPool.net_micro) }}</b></div>
+          </div>
+          <div class="tbl-wrap mt12">
+            <table class="table">
+              <thead><tr><th>时间</th><th>类型</th><th class="num">金额（¥）</th></tr></thead>
+              <tbody>
+                <tr v-if="!myPool.items || !myPool.items.length">
+                  <td colspan="3" class="empty">还没有众筹池记录——acu/ 模型免充值即可调用</td>
+                </tr>
+                <tr v-for="(f, i) in myPool.items" :key="i">
+                  <td class="dim">{{ fmtTs(f.ts) }}</td>
+                  <td>
+                    {{ myTypeText(f) }}<span v-if="f.type === 'consume'" class="dim">（入 {{ f.prompt_tokens }} / 出 {{ f.completion_tokens }}）</span>
+                  </td>
+                  <td class="num" :class="f.amount_micro > 0 ? 'pos' : 'dim'">{{ f.amount_micro > 0 ? '+' : '' }}{{ yuan(f.amount_micro) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+
+      <!-- 充值翻倍 -->
+      <div class="card mt16">
+        <b><AqIcon name="plus" :size="16" /> 充值翻倍 · 扩充站点额度</b>
+        <p class="dim mt8" style="max-width: 72ch;">
+          <b style="color: var(--warn);">充值翻倍：充 1 元 = 2 元站点额度</b>（实付 ¥10 → 到账 ¥20），注入公共池由所有人共用消耗，<b style="color: var(--warn);">不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。
+        </p>
+        <div class="chips mt12">
+          <button v-for="a in AMTS" :key="a" type="button" class="chip" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>
+        </div>
+        <div class="form-grid mt12" style="max-width: 560px;">
+          <div class="field">
+            <label>自定义金额（元 · 0.01 ~ 1000）</label>
+            <input v-model.number="topupAmt" class="input" type="number" min="0.01" max="1000" step="0.01" placeholder="如 30" />
+          </div>
+          <div class="field">
+            <label>支付渠道</label>
+            <div class="chips">
+              <button type="button" class="chip" :class="{ on: topupChannel === 'alipay' }" @click="topupChannel = 'alipay'"><AqIcon name="wallet" :size="13" /> 支付宝</button>
+              <button type="button" class="chip" :class="{ on: topupChannel === 'wxpay' }" @click="topupChannel = 'wxpay'"><AqIcon name="chat" :size="13" /> 微信</button>
+            </div>
           </div>
         </div>
-      </template>
-      <template v-else>
-        <div v-if="!rankItems.length" class="rank-empty">虚位以待——{{ rankTab === 'charge' ? '第一笔充值将载入史册' : rankTab === 'usage' ? '本周还没有众筹模型调用' : '充值大于消耗即可上榜' }}</div>
-        <div v-for="e in rankItems" :key="e.rank" class="rank-row">
-          <span class="rk" :class="{ top: e.rank <= 3 }">{{ e.rank }}</span>
-          <span class="nm">{{ e.user }}</span>
-          <span v-if="e.note" class="badge-coin">{{ e.note }}</span>
-          <span v-if="rankTab === 'charge' && e.extra" class="pct">{{ e.extra.toFixed(1) }}%</span>
-          <span v-if="rankTab === 'usage'" class="pct">{{ e.calls }} 次</span>
-          <span class="amt-c">¥{{ yuan(e.amount_micro) }}</span>
+        <div class="row wrap mt12">
+          <button class="btn primary" :disabled="paying || !isLoggedIn()" @click="createTopup">
+            {{ paying ? '下单中…' : isLoggedIn() ? `充 ¥${topupAmt || 0} → 到账 ¥${giftYuan}` : '请先登录后充值' }}
+          </button>
+          <span v-if="isLoggedIn()" class="dim">下单后自动打开收银台，本页每 3 秒自动确认到账</span>
         </div>
-      </template>
-    </div>
+        <p v-if="payMsg && !payOpen" class="msg mt12" :class="payOk ? 'ok' : 'bad'">{{ payMsg }}</p>
+      </div>
 
-    <!-- 透明账本 -->
-    <div class="dash-card pool-ledger">
-      <h2><AqIcon name="list" :size="15" /> 透明账本（最近 80 笔）</h2>
-      <div v-if="!flows.length && !loading" class="rank-empty">暂无流水——池子从第一笔充值开始书写历史</div>
-      <div v-for="f in flows" :key="f.id" class="flow-row" :class="f.type">
-        <span class="ft">{{ typeLabel[f.type] || f.type }}</span>
-        <span v-if="f.revival" class="badge-coin hero-mini">救场</span>
-        <span class="fnm">{{ f.user }}</span>
-        <span class="famt" :class="{ neg: f.amount_micro < 0 }">{{ f.amount_micro > 0 ? '+' : '' }}{{ yuan(f.amount_micro) }}</span>
-        <span class="fbal">池余 ¥{{ yuan(f.balance_after_micro) }}</span>
-        <span class="tm">{{ fmtTs(f.ts) }}</span>
+      <!-- 榜单与荣誉 -->
+      <div class="card mt16">
+        <div class="row between wrap">
+          <b><AqIcon name="trophy" :size="16" /> 榜单与荣誉</b>
+          <div v-if="rankTab === 'charge' || rankTab === 'net'" class="chips">
+            <button type="button" class="chip" :class="{ on: rankRange === 'week' }" @click="setRange('week')">本周</button>
+            <button type="button" class="chip" :class="{ on: rankRange === 'all' }" @click="setRange('all')">总榜</button>
+          </div>
+        </div>
+        <div class="chips mt12">
+          <button v-for="t in RANK_TABS" :key="t.id" type="button" class="chip" :class="{ on: rankTab === t.id }" @click="setTab(t.id)">{{ t.label }}</button>
+        </div>
+
+        <p v-if="rankMsg" class="msg bad mt12">{{ rankMsg }}</p>
+        <div v-else-if="rankLoading" style="display: grid; gap: 8px;" class="mt12">
+          <div class="skeleton" style="min-height: 34px;"></div>
+          <div class="skeleton" style="min-height: 34px;"></div>
+          <div class="skeleton" style="min-height: 34px;"></div>
+        </div>
+
+        <!-- 荣誉墙 -->
+        <template v-else-if="rankTab === 'honor'">
+          <div class="mt12">
+            <b style="font-size: 13.5px;">救场英雄（池子归零后第一笔复活充值）</b>
+            <div class="tbl-wrap mt8">
+              <table class="table">
+                <thead><tr><th style="width: 56px;">#</th><th>用户</th><th>徽记</th><th class="num">充值（¥）</th><th>时间</th></tr></thead>
+                <tbody>
+                  <tr v-if="!heroes.length"><td colspan="5" class="empty">暂无救场记录——池子还没熔断过，大家都在续命</td></tr>
+                  <tr v-for="(h, i) in heroes" :key="i" :class="{ me: isMe(h.user) }">
+                    <td class="dim">{{ i + 1 }}</td>
+                    <td>{{ h.user }}</td>
+                    <td><span class="tag warn">第 {{ h.saves }} 次救场</span></td>
+                    <td class="num">¥{{ yuan(h.amount_micro) }}</td>
+                    <td class="dim">{{ fmtTs(h.ts) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="mt16">
+            <b style="font-size: 13.5px;">开服元老（最早 10 位众筹充值用户）</b>
+            <div class="tbl-wrap mt8">
+              <table class="table">
+                <thead><tr><th style="width: 56px;">#</th><th>用户</th><th>徽记</th><th class="num">累计充值（¥）</th></tr></thead>
+                <tbody>
+                  <tr v-if="!elders.length"><td colspan="4" class="empty">虚位以待——第一位充值者将永久留名</td></tr>
+                  <tr v-for="e in elders" :key="e.rank" :class="{ me: isMe(e.user) }">
+                    <td class="dim">{{ e.rank }}</td>
+                    <td>{{ e.user }}</td>
+                    <td><span class="tag acc">元老</span></td>
+                    <td class="num">¥{{ yuan(e.amount_micro) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+
+        <!-- 常规榜单 -->
+        <div v-else class="tbl-wrap mt12">
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width: 56px;">排名</th>
+                <th>用户</th>
+                <th>徽记</th>
+                <th class="num">{{ rankTab === 'usage' ? '调用' : '占比' }}</th>
+                <th class="num">{{ amtLabel }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!rankItems.length"><td colspan="5" class="empty">虚位以待——{{ emptyHint }}</td></tr>
+              <tr v-for="e in rankItems" :key="e.rank" :class="{ me: isMe(e.user) }">
+                <td><span class="tag" :class="e.rank <= 3 ? 'grad' : ''">{{ e.rank }}</span></td>
+                <td>{{ e.user }}</td>
+                <td><span v-if="e.note" class="tag acc">{{ e.note }}</span><span v-else class="dim">—</span></td>
+                <td class="num">
+                  <template v-if="rankTab === 'charge'">{{ e.extra != null ? e.extra.toFixed(1) + '%' : '—' }}</template>
+                  <template v-else-if="rankTab === 'usage'">{{ e.calls ?? 0 }} 次</template>
+                  <template v-else>—</template>
+                </td>
+                <td class="num">¥{{ yuan(e.amount_micro) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 透明账本 -->
+      <div class="card mt16">
+        <b><AqIcon name="list" :size="16" /> 透明账本（最近 80 笔）</b>
+        <p v-if="flowsMsg" class="msg bad mt12">{{ flowsMsg }}</p>
+        <div v-else class="tbl-wrap mt12">
+          <table class="table">
+            <thead><tr><th>时间</th><th>类型</th><th>用户</th><th class="num">变动（¥）</th><th class="num">池余（¥）</th></tr></thead>
+            <tbody>
+              <tr v-if="loading && !flows.length"><td colspan="5" style="padding: 12px;"><div class="skeleton" style="min-height: 120px;"></div></td></tr>
+              <tr v-else-if="!flows.length"><td colspan="5" class="empty">暂无流水——池子从第一笔充值开始书写历史</td></tr>
+              <tr v-for="f in flows" :key="f.id">
+                <td class="dim">{{ fmtTs(f.ts) }}</td>
+                <td>
+                  <span class="tag" :class="f.type === 'charge' || f.type === 'seed' ? 'acc' : ''">{{ typeLabel[f.type] || f.type }}</span>
+                  <span v-if="f.revival" class="tag warn" style="margin-left: 4px;">救场</span>
+                </td>
+                <td>{{ f.user }}</td>
+                <td class="num" :class="f.amount_micro > 0 ? 'pos' : 'dim'">{{ f.amount_micro > 0 ? '+' : '' }}{{ yuan(f.amount_micro) }}</td>
+                <td class="num dim">¥{{ yuan(f.balance_after_micro) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-  </section>
+
+    <!-- 支付等待弹层（下单后打开，轮询 + 手动检查照旧） -->
+    <Teleport to="body">
+      <div v-if="payOpen && payingOrder" class="mask" @click.self="closePay">
+        <div class="card accent pop">
+          <b><AqIcon name="qr" :size="16" /> 等待支付确认</b>
+          <div class="row wrap">
+            <code class="order-no">{{ payingOrder.out_trade_no }}</code>
+            <CopyBtn :text="payingOrder.out_trade_no" label="复制订单号" size="xs" />
+          </div>
+          <div class="dim">
+            收银台已在新窗口打开（{{ topupChannel === 'alipay' ? '支付宝' : '微信' }} · 实付 ¥{{ topupAmt || 0 }} → 到账 ¥{{ giftYuan }}）。完成支付后本页自动确认；若窗口被拦截，可点下方重新打开。
+          </div>
+          <div class="row wrap">
+            <a class="btn" :href="payingOrder.pay_url" target="_blank" rel="noopener"><AqIcon name="external" :size="14" /> 重新打开支付页</a>
+            <button class="btn primary" @click="manualCheck"><AqIcon name="check" :size="14" /> 我已支付，立即检查</button>
+            <button class="btn ghost" @click="closePay">关闭</button>
+          </div>
+          <p v-if="payMsg" class="msg" style="margin: 0;" :class="payOk ? 'ok' : 'bad'">{{ payMsg }}</p>
+        </div>
+      </div>
+    </Teleport>
+  </div>
 </template>
 
 <style scoped>
-.pool-head h1 { display: flex; align-items: center; gap: 10px; font-size: 24px; margin: 0 0 8px; }
-.pool-head .ic { width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: rgba(56,189,248,.12); color: var(--aqua,#38bdf8); border: 1px solid rgba(56,189,248,.3); flex: none; }
-.pool-head p { color: var(--muted,#8a94a6); font-size: 13.5px; line-height: 1.7; margin: 0; max-width: 860px; }
-.pool-head p b { color: var(--aqua,#38bdf8); }
-.dash-card { background: var(--card,#121a26); border: 1px solid var(--border,rgba(128,140,160,.25)); border-radius: 16px; padding: 18px 20px; margin-top: 16px; }
-.pool-main { position: relative; overflow: hidden; background: linear-gradient(135deg, rgba(56,189,248,.10), rgba(129,140,248,.08) 60%, transparent), var(--card,#121a26); }
-.pool-main.empty { background: linear-gradient(135deg, rgba(248,113,113,.10), transparent 60%), var(--card,#121a26); }
-.pool-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted,#8a94a6); border: 1px solid var(--border,rgba(128,140,160,.25)); border-radius: 999px; padding: 3px 11px; }
-.pool-state .dot { width: 8px; height: 8px; border-radius: 50%; }
-.pool-state .dot.on { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,.8); }
-.pool-state .dot.off { background: #f87171; box-shadow: 0 0 8px rgba(248,113,113,.8); }
-.pool-balance { font-size: 52px; font-weight: 800; margin: 10px 0 2px; background: linear-gradient(135deg,#67e8f9,#38bdf8,#818cf8); -webkit-background-clip: text; background-clip: text; color: transparent; font-variant-numeric: tabular-nums; }
-.pool-balance small { font-size: 26px; margin-right: 2px; }
-.pool-sub { font-size: 12.5px; color: var(--muted,#8a94a6); margin-bottom: 14px; }
-.pool-stats { display: flex; gap: 26px; flex-wrap: wrap; border-top: 1px dashed var(--border,rgba(128,140,160,.25)); padding-top: 12px; }
-.pool-stats b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
-.pool-stats span { font-size: 11px; color: var(--muted,#8a94a6); letter-spacing: .5px; }
-.pool-topup h2, .pool-ranks h2, .pool-ledger h2 { display: flex; align-items: center; gap: 7px; font-size: 15.5px; margin: 0 0 10px; }
-.topup-note { font-size: 12.5px; color: var(--muted,#8a94a6); margin: 0 0 12px; line-height: 1.6; }
-.topup-note b { font-size: inherit; color: #d97706; }
-.amt-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.amt { padding: 9px 18px; border-radius: 10px; border: 1px solid var(--border,rgba(128,140,160,.3)); background: transparent; color: inherit; cursor: pointer; font-weight: 700; font-size: 14px; transition: all .15s; }
-.amt.on { border-color: var(--aqua,#38bdf8); background: rgba(56,189,248,.12); color: var(--aqua,#38bdf8); box-shadow: 0 0 0 1px rgba(56,189,248,.3); }
-.amt-row input { width: 110px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border,rgba(128,140,160,.3)); background: transparent; color: inherit; }
-.ch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ch { padding: 9px 16px; border-radius: 10px; border: 1px solid var(--border,rgba(128,140,160,.3)); background: transparent; color: inherit; cursor: pointer; font-size: 13px; }
-.ch.on { border-color: var(--aqua,#38bdf8); background: rgba(56,189,248,.10); }
-.topup-go { margin-left: auto; }
-.btn.topup-go { background: linear-gradient(135deg,#0ea5e9,#6366f1); border: none; color: #fff; padding: 10px 22px; border-radius: 10px; font-weight: 700; cursor: pointer; }
-.btn.topup-go:disabled { opacity: .5; cursor: not-allowed; }
-.pay-wait, .pay-msg { font-size: 12.5px; margin: 10px 0 0; color: #fbbf24; }
-.pay-msg.ok { color: #34d399; }
-.rank-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-.rtab { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border,rgba(128,140,160,.3)); background: transparent; color: var(--muted,#8a94a6); cursor: pointer; font-size: 12.5px; }
-.rtab.on { border-color: var(--aqua,#38bdf8); color: var(--aqua,#38bdf8); background: rgba(56,189,248,.10); }
-.rtab.sm { padding: 5px 11px; font-size: 11.5px; }
-.rspacer { flex: 1; }
-.rank-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; font-size: 13px; border: 1px solid transparent; }
-.rank-row:hover { background: rgba(56,189,248,.05); border-color: var(--border,rgba(128,140,160,.2)); }
-.rank-row.hero { background: rgba(251,191,36,.06); border-color: rgba(251,191,36,.25); }
-.rk { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; background: rgba(128,140,160,.12); color: var(--muted,#8a94a6); flex: none; }
-.rk.top:nth-child(1) { background: linear-gradient(135deg,#fbbf24,#f59e0b); color: #fff; }
-.nm { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge-coin { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: linear-gradient(135deg,rgba(251,191,36,.2),rgba(245,158,11,.15)); color: #fbbf24; border: 1px solid rgba(251,191,36,.35); white-space: nowrap; }
-.badge-coin.elder { background: rgba(129,140,248,.14); color: #a5b4fc; border-color: rgba(129,140,248,.35); }
-.badge-coin.hero-mini { font-size: 9.5px; padding: 1px 6px; }
-.pct { font-size: 11.5px; color: var(--muted,#8a94a6); }
-.amt-c { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--aqua,#38bdf8); }
-.tm { font-size: 11px; color: var(--muted,#8a94a6); white-space: nowrap; }
-.honor-sec h3 { font-size: 13px; margin: 12px 0 6px; color: var(--muted,#8a94a6); }
-.honor-sec h3:first-child { margin-top: 0; }
-.rank-empty { padding: 18px; text-align: center; color: var(--muted,#8a94a6); font-size: 12.5px; border: 1px dashed var(--border,rgba(128,140,160,.25)); border-radius: 10px; margin: 4px 0; }
-.flow-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; font-size: 12.5px; }
-.flow-row:hover { background: rgba(56,189,248,.05); }
-.ft { width: 62px; flex: none; font-size: 11px; padding: 2px 0; text-align: center; border-radius: 6px; background: rgba(56,189,248,.10); color: var(--aqua,#38bdf8); }
-.flow-row.consume .ft { background: rgba(128,140,160,.12); color: var(--muted,#8a94a6); }
-.fnm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.famt { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; color: #34d399; }
-.famt.neg { color: var(--muted,#8a94a6); }
-.fbal { font-size: 11px; color: var(--muted,#8a94a6); font-variant-numeric: tabular-nums; }
-@media (max-width: 640px) {
-  .pool-balance { font-size: 40px; }
-  .pool-stats { gap: 16px; }
-  .flow-row .fbal, .rank-row .pct { display: none; }
-}
+/* 布局微调：大数字 / 弹层 / 高亮行 / 着色 */
+.pool-balance { font-size: 54px; font-weight: 800; line-height: 1.2; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+@media (max-width: 640px) { .pool-balance { font-size: 40px; } }
+.mask { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg0) 62%, transparent); backdrop-filter: blur(3px); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.pop { width: 400px; max-width: 100%; background: var(--bg2-solid); box-shadow: var(--shadow-2); display: flex; flex-direction: column; gap: 12px; }
+.order-no { font-family: var(--mono); font-size: 12px; color: var(--txt1); background: var(--bg3); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; word-break: break-all; }
+tr.me td { background: var(--acc-soft); }
+.pos { color: var(--ok); }
+.neg { color: var(--bad); }
+.negw { color: var(--warn); }
 </style>

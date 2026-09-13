@@ -2,6 +2,9 @@
 import { ref } from 'vue'
 import { errText } from '@/composables/useApi'
 import { apiChat } from '@/composables/useToolChat'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
+import CopyBtn from '@/components/CopyBtn.vue'
 
 const MODES = ['润色', '极简', '扩写']
 const ASKS: Record<string, string> = {
@@ -36,19 +39,36 @@ async function run() {
 
 <template>
   <p class="tool-intro">不改本意只改表达：润色（更顺更有画面感）、极简（压缩一半）、扩写（更充实具体）。</p>
-  <div class="tool-io">
-    <textarea v-model="text" rows="7" placeholder="粘贴要润色的文字：文案 / 朋友圈 / 产品介绍 / 邮件…"></textarea>
-    <div class="tool-bar">
-      <span>模式</span>
-      <label v-for="m in MODES" :key="m" style="display:inline-flex;align-items:center;gap:4px;">
-        <input v-model="mode" type="radio" name="pl-mode" :value="m">{{ m }}
-      </label>
-      <button class="btn tool-run" @click="run">开始润色</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>原文</label>
+        <textarea v-model="text" class="textarea" rows="9" placeholder="粘贴要润色的文字：文案 / 朋友圈 / 产品介绍 / 邮件…"></textarea>
+      </div>
+      <div class="row wrap">
+        <div class="chips">
+          <button v-for="m in MODES" :key="m" class="chip" :class="{ on: mode === m }" type="button" @click="mode = m">{{ m }}</button>
+        </div>
+        <button class="btn primary" :disabled="loading" @click="run"><AqIcon name="spark" :size="14" />开始润色</button>
+      </div>
     </div>
-    <div class="tool-result">
-      <div v-if="msg" class="tool-empty">{{ msg }}</div>
-      <div v-else-if="loading" class="tool-loading">打磨中…</div>
-      <div v-else-if="out" class="tool-ai-box"><b>{{ mode }}版</b><div class="tool-ai-text">{{ out }}</div></div>
+    <div class="card out-pane">
+      <div v-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+      <div v-else-if="loading" class="out-pane">
+        <div class="skeleton" style="width: 52%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 90%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 74%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 40%; min-height: 13px;"></div>
+      </div>
+      <template v-else-if="out">
+        <div class="row between"><b>{{ mode }}版</b><CopyBtn :text="out" /></div>
+        <div class="tool-prose">{{ out }}</div>
+      </template>
+      <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.polish"></svg><span>结果将显示在这里</span></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

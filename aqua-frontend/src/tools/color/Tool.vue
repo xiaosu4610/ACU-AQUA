@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
 
 interface Rgb { r: number; g: number; b: number }
@@ -86,19 +88,31 @@ function run() {
 
 <template>
   <p class="tool-intro">HEX / RGB / HSL 三格式互转——输入 <code>#3b82f6</code> 或 <code>rgb(59,130,246)</code> 均可。</p>
-  <div class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="input" placeholder="如 #3b82f6 或 rgb(59,130,246)" style="flex:1;min-width:200px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-family:var(--mono);" @keydown.enter="run">
-      <button class="btn tool-run" @click="run">转换</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>颜色值（HEX / RGB / HSL）</label>
+        <input v-model="input" class="input mono" placeholder="如 #3b82f6 或 rgb(59,130,246)" @keydown.enter="run">
+      </div>
+      <button class="btn primary" @click="run"><svg class="bic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.color"></svg>转换</button>
     </div>
-    <div class="tool-result">
-      <div v-if="msg" class="tool-empty">{{ msg }}</div>
+    <div class="card out-pane">
+      <div v-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
       <template v-else-if="result">
-        <div :style="{ width: '100%', height: '64px', borderRadius: '12px', border: '1px solid var(--border)', background: result.hex, marginBottom: '12px' }"></div>
-        <div class="pg-hrow" style="font-family:var(--mono);"><span style="user-select:all;">{{ result.hex }}</span><CopyBtn :text="result.hex" /></div>
-        <div class="pg-hrow" style="font-family:var(--mono);"><span style="user-select:all;">{{ result.rgbStr }}</span><CopyBtn :text="result.rgbStr" /></div>
-        <div class="pg-hrow" style="font-family:var(--mono);"><span style="user-select:all;">{{ result.hslStr }}</span><CopyBtn :text="result.hslStr" /></div>
+        <div class="swatch" :style="{ background: result.hex }"></div>
+        <div class="tool-kv mono">
+          <div><span style="user-select: all; color: var(--txt0);">{{ result.hex }}</span><b><CopyBtn :text="result.hex" size="xs" /></b></div>
+          <div><span style="user-select: all; color: var(--txt0);">{{ result.rgbStr }}</span><b><CopyBtn :text="result.rgbStr" size="xs" /></b></div>
+          <div><span style="user-select: all; color: var(--txt0);">{{ result.hslStr }}</span><b><CopyBtn :text="result.hslStr" size="xs" /></b></div>
+        </div>
       </template>
+      <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.color"></svg><span>结果将显示在这里</span></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.swatch { width: 100%; height: 64px; border-radius: var(--r-md); border: 1px solid var(--line); }
+.ticon { width: 26px; height: 26px; opacity: .55; }
+.bic { width: 14px; height: 14px; }
+</style>

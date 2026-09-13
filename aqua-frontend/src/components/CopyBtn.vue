@@ -1,20 +1,21 @@
 <script setup lang="ts">
+/* 复制按钮：copyText 成功后短暂打勾 */
 import { ref } from 'vue'
 import { copyText } from '@/composables/useApi'
+import AqIcon from './AqIcon.vue'
 
-const props = defineProps<{ text: string; label?: string }>()
-const copied = ref(false)
+const props = withDefaults(defineProps<{ text: string; label?: string; size?: 'sm' | 'xs' }>(), { label: '复制' })
+const ok = ref(false)
 async function doCopy() {
   if (await copyText(props.text)) {
-    copied.value = true
-    setTimeout(() => (copied.value = false), 1400)
+    ok.value = true
+    setTimeout(() => (ok.value = false), 1400)
   }
 }
 </script>
 
 <template>
-  <button class="btn" :class="{ copied }" @click="doCopy">
-    <template v-if="copied"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M20 6 9 17l-5-5"/></svg>已复制</template>
-    <template v-else>{{ label || '复制' }}</template>
+  <button class="btn" :class="[size === 'xs' ? 'xs' : 'sm', { primary: ok }]" type="button" @click="doCopy">
+    <AqIcon :name="ok ? 'check' : 'copy'" :size="13" />{{ ok ? '已复制' : label }}
   </button>
 </template>

@@ -2,6 +2,9 @@
 import { ref } from 'vue'
 import { errText } from '@/composables/useApi'
 import { apiChat } from '@/composables/useToolChat'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
+import CopyBtn from '@/components/CopyBtn.vue'
 
 const MODES = [
   { value: 'points', label: '要点列表' },
@@ -40,19 +43,36 @@ async function run() {
 
 <template>
   <p class="tool-intro">粘贴长文，一键提炼为要点列表、一段话总结或文章大纲。</p>
-  <div class="tool-io">
-    <textarea v-model="text" rows="8" placeholder="粘贴文章、报告、聊天记录等长文本…"></textarea>
-    <div class="tool-bar">
-      <span>模式</span>
-      <label v-for="m in MODES" :key="m.value" style="display:inline-flex;align-items:center;gap:4px;">
-        <input v-model="mode" type="radio" name="sum-mode" :value="m.value">{{ m.label }}
-      </label>
-      <button class="btn tool-run" @click="run">生成摘要</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>原文</label>
+        <textarea v-model="text" class="textarea" rows="10" placeholder="粘贴文章、报告、聊天记录等长文本…"></textarea>
+      </div>
+      <div class="row wrap">
+        <div class="chips">
+          <button v-for="m in MODES" :key="m.value" class="chip" :class="{ on: mode === m.value }" type="button" @click="mode = m.value">{{ m.label }}</button>
+        </div>
+        <button class="btn primary" :disabled="loading" @click="run"><AqIcon name="spark" :size="14" />生成摘要</button>
+      </div>
     </div>
-    <div class="tool-result">
-      <div v-if="msg" class="tool-empty">{{ msg }}</div>
-      <div v-else-if="loading" class="tool-loading">生成中…</div>
-      <div v-else-if="out" class="tool-ai-box"><b>摘要结果</b><div class="tool-ai-text">{{ out }}</div></div>
+    <div class="card out-pane">
+      <div v-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+      <div v-else-if="loading" class="out-pane">
+        <div class="skeleton" style="width: 52%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 90%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 74%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 40%; min-height: 13px;"></div>
+      </div>
+      <template v-else-if="out">
+        <div class="row between"><b>摘要结果</b><CopyBtn :text="out" /></div>
+        <div class="tool-prose">{{ out }}</div>
+      </template>
+      <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.summary"></svg><span>结果将显示在这里</span></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

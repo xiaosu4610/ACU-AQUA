@@ -2,6 +2,8 @@
 import { ref, watch } from 'vue'
 import { errText } from '@/composables/useApi'
 import { apiChat, useChatModels } from '@/composables/useToolChat'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 
 const { chatOpts, llmModel } = useChatModels()
 
@@ -128,34 +130,48 @@ startUser()
   <p class="tool-intro">4 位不重复数字。<b>A</b> = 数字和位置都对，<b>B</b> = 数字对位置不对。「你猜 AI」模式下 AI 出题你猜；「LLM 挑战」模式下你想一个数字，看 AI 需要几步推理出来。</p>
   <div class="tool-bar">
     <span>模式</span>
-    <select v-model="mode">
+    <select v-model="mode" class="select">
       <option value="user">你猜 AI 出题</option>
       <option value="llm">LLM 挑战模式</option>
     </select>
-    <select v-show="mode === 'llm'" v-model="llmModel">
+    <select v-show="mode === 'llm'" v-model="llmModel" class="select">
       <option v-for="m in chatOpts" :key="m" :value="m">{{ m }}</option>
     </select>
-    <button class="btn tool-run" @click="restart">重新开始</button>
+    <button class="btn" @click="restart"><AqIcon name="refresh" :size="14" />重新开始</button>
     <span class="tool-status">{{ status }}</span>
   </div>
-  <!-- 你猜 AI 出题 -->
-  <div v-if="mode === 'user'" class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="input" class="tool-flex1" placeholder="输入 4 位不重复数字" @keydown.enter="userGuess">
-      <button class="btn tool-run" @click="userGuess">猜！</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <!-- 你猜 AI 出题 -->
+      <template v-if="mode === 'user'">
+        <div class="field">
+          <label>你的猜测（4 位不重复数字）</label>
+          <input v-model="input" class="input mono" placeholder="如 0123" @keydown.enter="userGuess">
+        </div>
+        <button class="btn primary" @click="userGuess">猜！</button>
+      </template>
+      <!-- LLM 挑战模式 -->
+      <template v-else>
+        <div class="field">
+          <label>想一个 4 位不重复数字（别告诉 AI）</label>
+          <input v-model="input" class="input mono" placeholder="如 0123" :disabled="inputDisabled">
+        </div>
+        <button class="btn primary" :disabled="beginDisabled" @click="beginChallenge">开始挑战</button>
+      </template>
     </div>
-  </div>
-  <!-- LLM 挑战模式 -->
-  <div v-else class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="input" class="tool-flex1" placeholder="想一个 4 位不重复数字（别告诉 AI）" :disabled="inputDisabled">
-      <button class="btn tool-run" :disabled="beginDisabled" @click="beginChallenge">开始挑战</button>
+    <div class="card out-pane">
+      <template v-if="resultMsg">
+        <div class="row between"><b>{{ resultTitle }}</b></div>
+        <div class="tool-prose">{{ resultMsg }}</div>
+      </template>
+      <div v-if="history.length" class="tool-kv">
+        <div v-for="(h, i) in history" :key="i"><span>第 {{ i + 1 }} 次 · {{ h.g }}</span><b>{{ h.a }}A{{ h.b }}B</b></div>
+      </div>
+      <div v-if="!resultMsg && !history.length" class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.guess"></svg><span>{{ status }}</span></div>
     </div>
-  </div>
-  <div class="tool-kv">
-    <div v-for="(h, i) in history" :key="i" class="pg-hrow"><span>第 {{ i + 1 }} 次 · {{ h.g }}</span><b>{{ h.a }}A{{ h.b }}B</b></div>
-  </div>
-  <div class="tool-result">
-    <div v-if="resultMsg" class="tool-ai-box"><b>{{ resultTitle }}</b><div class="tool-ai-text">{{ resultMsg }}</div></div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

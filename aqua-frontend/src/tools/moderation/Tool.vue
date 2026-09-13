@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
 import { apiChat } from '@/composables/useToolChat'
+import AqIcon from '@/components/AqIcon.vue'
 
 const TOOL_MOD_MODEL = 'security-semantic-filtering'  // 上游实测唯一支持文本审核的模型
 
@@ -57,23 +58,33 @@ async function aiExplain() {
 
 <template>
   <p class="tool-intro">输入任意文本，检测是否包含涉政、色情、辱骂、暴力等风险内容；AI 会进一步解释风险点并给出改写建议。</p>
-  <div class="tool-io">
-    <textarea v-model="text" rows="5" placeholder="粘贴待检测的文本内容…"></textarea>
-    <div class="tool-btns">
-      <button class="btn tool-run" @click="run">开始检测</button>
-      <button v-show="rows.length" class="btn tool-ai" @click="aiExplain">AI 解读</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>待检测文本</label>
+        <textarea v-model="text" class="textarea" rows="5" placeholder="粘贴待检测的文本内容…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" :disabled="loading" @click="run"><AqIcon name="shield" :size="14" />开始检测</button>
+        <button v-show="rows.length" class="btn" @click="aiExplain"><AqIcon name="spark" :size="14" />AI 解读</button>
+      </div>
     </div>
-    <div class="tool-result">
-      <div v-if="explain" class="tool-ai-box">
-        <b>AI 解读</b>
-        <div class="tool-ai-text">{{ explain.loading ? '正在生成解读…' : explain.text }}</div>
+    <div class="card out-pane">
+      <div v-if="explain" class="out-pane">
+        <div class="row between"><b>AI 解读</b></div>
+        <div class="tool-prose">{{ explain.loading ? '正在生成解读…' : explain.text }}</div>
       </div>
       <template v-else>
-        <div v-if="loading" class="tool-loading">检测中…</div>
-        <div v-else-if="msg" class="tool-empty">{{ msg }}</div>
-        <div v-else-if="rows.length" class="tool-kv">
-          <div v-for="(p, i) in rows" :key="i" class="pg-hrow"><span>{{ p[0] }}</span><b>{{ p[1] }}</b></div>
+        <div v-if="loading" class="out-pane">
+          <div class="skeleton" style="width: 46%; min-height: 13px;"></div>
+          <div class="skeleton" style="width: 88%; min-height: 13px;"></div>
+          <div class="skeleton" style="width: 70%; min-height: 13px;"></div>
         </div>
+        <div v-else-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+        <div v-else-if="rows.length" class="tool-kv">
+          <div v-for="(p, i) in rows" :key="i"><span>{{ p[0] }}</span><b>{{ p[1] }}</b></div>
+        </div>
+        <div v-else class="out-empty"><AqIcon name="shield" :size="26" /><span>结果将显示在这里</span></div>
       </template>
     </div>
   </div>

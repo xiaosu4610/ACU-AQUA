@@ -11,7 +11,7 @@ function read(): Theme {
     const t = localStorage.getItem('aqua-theme')
     if (t === 'light' || t === 'dark') return t
   } catch { /* 隐私模式 */ }
-  return 'light'
+  return 'dark' // 暗黑科技流为主主题
 }
 function apply(t: Theme) {
   document.documentElement.setAttribute('data-theme', t)

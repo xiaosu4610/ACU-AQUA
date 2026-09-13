@@ -16,6 +16,14 @@ path = "data/aqua.db"
 [server]
 listen = "0.0.0.0:8787"
 
+# 充值渠道（易支付协议，MD5 签名）；支持环境变量覆盖：AQUA_EPAY_GATEWAY/PID/KEY/NOTIFY_BASE/RETURN_BASE
+[epay]
+gateway = "https://your-epay-host"   # 易支付网关地址
+pid = "1000"                         # 商户 ID
+key = "your-merchant-key"            # 商户密钥
+notify_base = "https://api.example.com"   # 回调域名（网关收 /v1/pay/notify）
+return_base = "https://www.example.com"   # 支付完成跳转域名
+
 # ===== 上游线：新增一条线 = 追加一个 [[lines]] 块 =====
 # 每条线是一套独立的转发 + 计费体系，可混合任意 OpenAI 兼容上游。
 [[lines]]

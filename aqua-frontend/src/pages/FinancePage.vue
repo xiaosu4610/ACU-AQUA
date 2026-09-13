@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /* 财务管理中心：余额 + 消费统计（今日/7日/累计）+ 按模型消费 Top + 消费流水 + 充值记录 */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import AqIcon from '@/components/AqIcon.vue'
 import { errText } from '@/composables/useApi'
 import { fetchFinance, isLoggedIn, loadMe, me, type FinanceData } from '@/composables/useAuth'
-import AqIcon from '@/components/AqIcon.vue'
 
 const router = useRouter()
 const data = ref<FinanceData | null>(null)
@@ -13,7 +13,7 @@ const errMsg = ref('')
 
 onMounted(async () => {
   if (!isLoggedIn()) {
-    router.push('/login?next=/finance')
+    router.push('/login?redirect=/finance')
     return
   }
   if (!me.value) await loadMe().catch(() => {})
@@ -29,10 +29,10 @@ async function load() {
   loading.value = false
 }
 
-/** 微元 → 元字符串（去尾零） */
+/** 微元 → 元字符串 */
 function yuan(micro?: number): string {
   if (micro == null) return '--'
-  return '¥' + (micro / 1e6).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+  return (micro / 1e6).toFixed(2)
 }
 function fmtTime(ts?: number): string {
   if (!ts) return '--'
@@ -44,124 +44,147 @@ function topupStatus(s: string): string {
   if (s === 'expired' || s === 'closed') return '已关闭'
   return s
 }
+
+/* 按模型消费条形：宽度 = 占比 */
+const modelMax = computed(() => data.value?.by_model.reduce((m, x) => Math.max(m, x.amount_micro), 0) || 0)
+function barW(amount: number): number {
+  if (!modelMax.value) return 0
+  return Math.max(3, Math.round((amount / modelMax.value) * 100))
+}
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="fin-head">
-      <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg></span>财务管理中心</h1>
-      <p>余额、消费统计、按模型账单与充值记录的统一入口。先付后用、失败全额退回。</p>
-    </div>
-
-    <div v-if="loading" class="fin-empty">加载中…</div>
-    <div v-else-if="errMsg" class="fin-empty">
-      {{ errMsg }}
-      <button class="mini-btn" style="margin-left:10px" @click="load">重试</button>
-    </div>
-
-    <template v-else-if="data">
-      <!-- 余额 + 汇总卡 -->
-      <div class="fin-cards">
-        <div class="fin-card balance">
-          <span class="fc-label">当前余额</span>
-          <b class="fc-balance">{{ yuan(data.balance_micro) }}</b>
-          <router-link class="btn tool-run fc-topup" to="/console?view=topup"><AqIcon name="spark" :size="14" /> 立即充值</router-link>
+  <div class="wrap" style="max-width: 1080px;">
+    <div class="fade-up">
+      <!-- 页头 -->
+      <div class="page-head">
+        <div>
+          <h1><AqIcon name="coin" :size="24" />财务管理中心</h1>
+          <div class="sub">余额、消费统计、按模型账单与充值记录的统一入口。先付后用、失败全额退回。</div>
         </div>
-        <div class="fin-card"><span class="fc-label">今日消费</span><b class="fc-num">{{ yuan(data.spend_today) }}</b><span class="fc-sub">按服务器自然日</span></div>
-        <div class="fin-card"><span class="fc-label">近 7 日消费</span><b class="fc-num">{{ yuan(data.spend_week) }}</b><span class="fc-sub">成功扣费合计</span></div>
-        <div class="fin-card"><span class="fc-label">累计消费</span><b class="fc-num">{{ yuan(data.spend_total) }}</b><span class="fc-sub">全部历史合计</span></div>
+        <div class="ops">
+          <router-link class="btn primary" to="/console?view=topup"><AqIcon name="spark" :size="14" /> 去充值</router-link>
+        </div>
       </div>
 
-      <div class="fin-grid">
+      <!-- 加载态 -->
+      <template v-if="loading">
+        <div class="kpis">
+          <div v-for="i in 4" :key="i" class="kpi"><span><span class="skeleton" style="min-width: 72px; display: inline-block;"></span></span><div class="skeleton mt8" style="min-height: 26px; width: 60%;"></div></div>
+        </div>
+        <div class="card mt16"><div class="skeleton" style="min-height: 200px;"></div></div>
+      </template>
+
+      <!-- 错误态 -->
+      <div v-else-if="errMsg" class="empty">
+        <div class="big"><AqIcon name="alert" :size="36" /></div>
+        <b>加载失败</b>
+        <div class="dim">{{ errMsg }}</div>
+        <button class="btn sm mt12" @click="load"><AqIcon name="refresh" :size="13" /> 重试</button>
+      </div>
+
+      <!-- 数据态 -->
+      <template v-else-if="data">
+        <!-- 余额 + 汇总 KPI -->
+        <div class="kpis">
+          <div class="kpi">
+            <span>当前余额</span>
+            <b class="grad-text">¥{{ yuan(data.balance_micro) }}</b>
+            <span class="trend">收费模型预充值 · 先付后用</span>
+          </div>
+          <div class="kpi">
+            <span>今日消费</span>
+            <b>¥{{ yuan(data.spend_today) }}</b>
+            <span class="trend">按服务器自然日</span>
+          </div>
+          <div class="kpi">
+            <span>近 7 日消费</span>
+            <b>¥{{ yuan(data.spend_week) }}</b>
+            <span class="trend">成功扣费合计</span>
+          </div>
+          <div class="kpi">
+            <span>累计消费</span>
+            <b>¥{{ yuan(data.spend_total) }}</b>
+            <span class="trend">全部历史合计</span>
+          </div>
+        </div>
+
         <!-- 按模型消费 Top -->
-        <div class="fin-sec">
-          <h3>近 30 天按模型消费 <i>Top 10</i></h3>
-          <div v-if="!data.by_model.length" class="fin-empty small">暂无消费记录</div>
-          <table v-else class="fin-table">
-            <thead><tr><th>模型</th><th>消费金额</th><th>调用次数</th></tr></thead>
-            <tbody>
-              <tr v-for="m in data.by_model" :key="m.model">
-                <td><code>{{ m.model }}</code></td>
-                <td class="num">{{ yuan(m.amount_micro) }}</td>
-                <td class="num">{{ m.calls }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card mt16">
+          <b><AqIcon name="chart" :size="16" /> 近 30 天按模型消费 <span class="dim">Top 10</span></b>
+          <div v-if="!data.by_model.length" class="empty" style="padding: 24px 0;">
+            <b>暂无消费记录</b>
+            <div class="dim">使用收费模型（aqua/ 前缀，按量计费）后这里会出现统计</div>
+          </div>
+          <div v-else class="bar-list mt12">
+            <div v-for="m in data.by_model" :key="m.model" class="bar-row">
+              <span class="bar-name" :title="m.model">{{ m.model }}</span>
+              <span class="bar-track"><span class="bar-fill" :style="{ width: barW(m.amount_micro) + '%' }"></span></span>
+              <span class="bar-val num">¥{{ yuan(m.amount_micro) }}<i class="dim"> · {{ m.calls }} 次</i></span>
+            </div>
+          </div>
         </div>
 
         <!-- 最近消费流水 -->
-        <div class="fin-sec">
-          <h3>最近消费流水 <i>20 条</i></h3>
-          <div v-if="!data.recent.length" class="fin-empty small">暂无消费记录</div>
-          <table v-else class="fin-table">
-            <thead><tr><th>模型</th><th>金额</th><th>结果</th><th>时间</th></tr></thead>
-            <tbody>
-              <tr v-for="(f, i) in data.recent" :key="i">
-                <td><code>{{ f.model }}</code></td>
-                <td class="num">{{ yuan(f.amount_micro) }}</td>
-                <td><span class="st-mini" :class="f.ok ? 'ok' : 'bad'">{{ f.ok ? '成功' : '已退回' }}</span></td>
-                <td class="dim">{{ fmtTime(f.ts) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card mt16">
+          <b><AqIcon name="bolt" :size="16" /> 最近消费流水 <span class="dim">20 条</span></b>
+          <div v-if="!data.recent.length" class="empty" style="padding: 24px 0;">
+            <b>暂无消费记录</b>
+            <div class="dim">失败请求会自动全额退回，不产生流水</div>
+          </div>
+          <div v-else class="tbl-wrap mt12">
+            <table class="table">
+              <thead><tr><th>模型</th><th class="num">金额</th><th>结果</th><th>时间</th></tr></thead>
+              <tbody>
+                <tr v-for="(f, i) in data.recent" :key="i">
+                  <td><code>{{ f.model }}</code></td>
+                  <td class="num">¥{{ yuan(f.amount_micro) }}</td>
+                  <td><span class="tag" :class="f.ok ? 'ok' : 'bad'">{{ f.ok ? '成功' : '已退回' }}</span></td>
+                  <td class="dim">{{ fmtTime(f.ts) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <!-- 最近充值记录 -->
-        <div class="fin-sec wide">
-          <h3>最近充值记录 <i>10 条</i></h3>
-          <div v-if="!data.topups.length" class="fin-empty small">暂无充值记录，<router-link to="/console?view=topup">去充值</router-link></div>
-          <table v-else class="fin-table">
-            <thead><tr><th>金额</th><th>状态</th><th>渠道</th><th>创建时间</th><th>到账时间</th></tr></thead>
-            <tbody>
-              <tr v-for="(t, i) in data.topups" :key="i">
-                <td class="num strong">{{ yuan(t.amount_micro) }}</td>
-                <td><span class="st-mini" :class="t.status === 'paid' ? 'ok' : 'idle'">{{ topupStatus(t.status) }}</span></td>
-                <td>{{ t.channel || '--' }}</td>
-                <td class="dim">{{ fmtTime(t.created_ts) }}</td>
-                <td class="dim">{{ t.paid_ts ? fmtTime(t.paid_ts) : '--' }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card mt16">
+          <b><AqIcon name="wallet" :size="16" /> 最近充值记录 <span class="dim">10 条</span></b>
+          <div v-if="!data.topups.length" class="empty" style="padding: 24px 0;">
+            <b>暂无充值记录</b>
+            <div class="dim">去 <router-link to="/console?view=topup">控制台充值</router-link>，支付金额 100% 全额到账</div>
+          </div>
+          <div v-else class="tbl-wrap mt12">
+            <table class="table">
+              <thead><tr><th class="num">金额</th><th>状态</th><th>渠道</th><th>创建时间</th><th>到账时间</th></tr></thead>
+              <tbody>
+                <tr v-for="(t, i) in data.topups" :key="i">
+                  <td class="num">¥{{ yuan(t.amount_micro) }}</td>
+                  <td><span class="tag" :class="t.status === 'paid' ? 'ok' : ''">{{ topupStatus(t.status) }}</span></td>
+                  <td>{{ t.channel || '--' }}</td>
+                  <td class="dim">{{ fmtTime(t.created_ts) }}</td>
+                  <td class="dim">{{ t.paid_ts ? fmtTime(t.paid_ts) : '--' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-    </template>
-  </section>
+      </template>
+    </div>
+  </div>
 </template>
 
 <style scoped>
-.fin-head { margin-bottom: 18px; }
-.fin-head h1 { display: flex; align-items: center; gap: 10px; font-size: 24px; margin: 0 0 6px; }
-.fin-head .ic svg { width: 26px; height: 26px; color: var(--aqua, #38bdf8); }
-.fin-head p { color: var(--muted, #8a94a6); font-size: 13.5px; margin: 0; }
-.fin-cards { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-.fin-card { background: linear-gradient(160deg, var(--card), var(--card2, var(--card))); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
-.fin-card.balance { border-color: rgba(56,189,248,.4); }
-.fc-label { font-size: 12px; color: var(--muted, #8a94a6); font-weight: 600; }
-.fc-balance { font-size: 30px; font-weight: 800; color: var(--aqua, #38bdf8); font-variant-numeric: tabular-nums; }
-.fc-num { font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.fc-sub { font-size: 11px; color: var(--muted, #8a94a6); }
-.fc-topup { margin-top: 8px; align-self: flex-start; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 7px 14px; }
-.fin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.fin-sec { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; min-width: 0; }
-.fin-sec.wide { grid-column: 1 / -1; }
-.fin-sec h3 { margin: 0 0 12px; font-size: 15px; }
-.fin-sec h3 i { font-style: normal; font-size: 12px; color: var(--muted, #8a94a6); font-weight: 400; margin-left: 6px; }
-.fin-sec code { font-size: 12px; color: var(--accent, #38bdf8); word-break: break-all; }
-.fin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.fin-table th, .fin-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(148,163,184,.14); }
-.fin-table th { font-size: 11.5px; color: var(--muted, #8a94a6); font-weight: 700; }
-.fin-table tbody tr:last-child td { border-bottom: 0; }
-.fin-table .num { font-variant-numeric: tabular-nums; }
-.fin-table .strong { font-weight: 700; }
-.fin-table .dim { color: var(--muted, #8a94a6); font-size: 12px; }
-.st-mini { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; }
-.st-mini.ok { color: #16a34a; background: rgba(34,197,94,.13); }
-.st-mini.bad { color: #dc2626; background: rgba(239,68,68,.12); }
-.st-mini.idle { color: var(--muted, #8a94a6); background: rgba(148,163,184,.14); }
-.fin-empty { text-align: center; color: var(--muted, #8a94a6); padding: 40px 0; font-size: 14px; }
-.fin-empty.small { padding: 18px 0; font-size: 13px; }
-@media (max-width: 900px) {
-  .fin-cards { grid-template-columns: 1fr 1fr; }
-  .fin-grid { grid-template-columns: 1fr; }
+/* 布局微调：条形图行（高度 / 间距 / 截断） */
+.bar-list { display: flex; flex-direction: column; gap: 10px; }
+.bar-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr auto; align-items: center; gap: 12px; }
+.bar-name { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { height: 12px; border-radius: 99px; background: var(--bg3); overflow: hidden; }
+.bar-fill { display: block; height: 100%; border-radius: 99px; background: var(--acc-grad); transition: width var(--t-med); }
+.bar-val { font-size: 13px; white-space: nowrap; }
+.bar-val i { font-style: normal; }
+@media (max-width: 640px) {
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-track { order: 3; grid-column: 1 / -1; }
 }
 </style>

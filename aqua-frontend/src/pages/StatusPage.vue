@@ -1,96 +1,58 @@
 <script setup lang="ts">
-/* 状态大屏（流量大屏）：/v1/stats（今日卡片 + 24h 趋势 + 全模型流量表 + TOP10）+ /status（1h 健康度），30s 自动刷新 */
-import { onMounted, onUnmounted, ref } from 'vue'
-import { apiJson } from '@/composables/useApi'
-import { fmt } from '@/composables/useApi'
+/* 状态大屏：顶部 KPI 行 + 线路健康表（/v1/models/status）+ 模型健康热区（/v1/models health.score）
+ * 网关信息与近 1h 聚合来自 /v1/status；30 秒轮询（interval 在 onUnmounted 清理，请求可中断） */
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { apiJson, fmt } from '@/composables/useApi'
+import { useModels } from '@/composables/useModels'
+import { dsMaintenance } from '@/composables/modelMeta'
 import AqIcon from '@/components/AqIcon.vue'
 
-interface StatRow { model: string; cls?: string; width: number; delay?: string; val: string }
-interface FlowRow { model: string; calls: string; rate: string; lat: string; tokens: string; cls: string }
-interface HourBar { hour: number; label: string; calls: number; rate: number | null; height: number }
+interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number }
+interface LiveRow { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; last_ts: number }
+
+const { models, loading: modelsLoading, load: loadModels } = useModels()
 
 const meta = ref<{ version: string; uptime: string; window: string } | null>(null)
-const cards = ref({ calls: '--', rate: '--', lat: '--', users: '--' })
-const topRows = ref<StatRow[]>([])
-const topMsg = ref('加载中…')
-const healthRows = ref<StatRow[]>([])
-const healthMsg = ref('加载中…')
-const flowRows = ref<FlowRow[]>([])
-const flowMsg = ref('')
-const hours = ref<HourBar[]>([])
-const trendMsg = ref('')
+const kpi = ref({ calls: '--', rate: '--', lat: '--' })
+const firstLoading = ref(true)
+const lineRows = ref<LiveRow[]>([])
+const lineMsg = ref('加载中…')
 const updatedAt = ref('')
 
-let timer: ReturnType<typeof setInterval> | null = null
-let aborter: AbortController | null = null
+const DEAD_STATUS = ['exhausted', 'unavailable', 'maintenance']
 
-/* /v1/stats：今日卡片 + 24h 趋势 + 全模型流量表 + TOP10 */
-async function loadStats(ac: AbortController) {
-  try {
-    const j = await apiJson<any>('/stats', { signal: ac.signal })
-    if (ac.signal.aborted) return
-    cards.value = {
-      calls: j.today ? fmt(j.today.total_calls) : '--',
-      rate: j.today ? j.today.ok_rate + '%' : '--',
-      lat: j.today ? (j.today.avg_latency_ms / 1000).toFixed(2) + 's' : '--',
-      users: j.today ? fmt(j.today.active_keys) : '--',
-    }
-    /* 24h 趋势柱状图 */
-    const hourly: any[] = j.hourly || []
-    if (!hourly.length) {
-      hours.value = []
-      trendMsg.value = '暂无趋势数据'
-    } else {
-      const maxc = Math.max(...hourly.map((h) => h.calls || 0), 1)
-      hours.value = hourly.map((h) => {
-        const d = new Date((h.hour || 0) * 1000)
-        const hh = String(d.getHours()).padStart(2, '0')
-        return {
-          hour: h.hour,
-          label: hh + ':00',
-          calls: h.calls || 0,
-          rate: h.ok_rate,
-          height: Math.max(2, Math.round(((h.calls || 0) * 100) / maxc)),
-        }
-      })
-      trendMsg.value = ''
-    }
-    /* 全模型 24h 流量表 */
-    const ms: any[] = j.model_stats || []
-    if (!ms.length) {
-      flowRows.value = []
-      flowMsg.value = '近 24 小时还没有调用记录'
-    } else {
-      flowRows.value = ms.map((m) => ({
-        model: m.model,
-        calls: fmt(m.calls_24h),
-        rate: m.success_rate + '%',
-        lat: (m.avg_latency_ms / 1000).toFixed(2) + 's',
-        tokens: fmt(m.total_tokens || 0),
-        cls: m.success_rate >= 90 ? '' : m.success_rate >= 50 ? 'warn' : 'bad',
-      }))
-      flowMsg.value = ''
-    }
-    const top = j.top_models || []
-    if (!top.length) {
-      topRows.value = []
-      topMsg.value = '今天还没有调用记录'
-    } else {
-      const maxc = top[0].calls || 1
-      topRows.value = top.map((m: any) => ({
-        model: m.model,
-        width: Math.max(4, Math.round((m.calls * 100) / maxc)),
-        val: fmt(m.calls) + ' 次',
-      }))
-    }
-    updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  } catch (e) {
-    if (ac.signal.aborted) return
-    cards.value = { calls: '--', rate: '--', lat: '--', users: '--' }
-  }
+/* 在线模型数：/v1/models 中排除 auto、维护中与不可用状态 */
+const onlineCount = computed(() =>
+  models.value.filter(m => m.id !== 'auto' && !dsMaintenance(m.id) && !(m.status && DEAD_STATUS.includes(m.status))).length)
+const onlineShow = computed(() => (modelsLoading.value && !models.value.length ? '--' : String(onlineCount.value)))
+
+/* 模型健康热区：health.score 着色（后端近 100 次调用评分，0-100） */
+const heat = computed(() => models.value
+  .filter(m => m.id !== 'auto' && m.health && m.health.total)
+  .map(m => {
+    const h = m.health!
+    const score = h.score != null ? h.score | 0 : 0
+    const rate = Math.round(((h.ok || 0) / (h.total || 1)) * 100)
+    const lat = h.avg_latency_ms != null ? (h.avg_latency_ms / 1000).toFixed(1) + 's' : '-'
+    return { id: m.id, score, rate, lat, color: scoreColor(score), tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
+  })
+  .sort((a, b) => b.score - a.score))
+function scoreColor(s: number): string {
+  if (s >= 90) return 'var(--ok)'
+  if (s >= 70) return 'var(--acc)'
+  if (s >= 50) return 'var(--warn)'
+  return 'var(--bad)'
 }
 
-/* /status：网关信息 + 1h 健康度 */
+/* 线路状态 → 状态点/文案（great 极佳 / ok 正常 / degraded 部分异常 / down 故障） */
+function lineStatus(s: string): { dot: string; text: string } {
+  if (s === 'great' || s === 'ok') return { dot: 'ok', text: s === 'great' ? '状态极佳' : '运行正常' }
+  if (s === 'degraded') return { dot: 'warn', text: '部分异常' }
+  return { dot: 'bad', text: '故障' }
+}
+const lineRowsView = computed(() => lineRows.value.slice().sort((a, b) => b.samples - a.samples))
+
+/* /v1/status：网关信息 + 近 1h 健康度 → 聚合出 KPI（总调用/加权成功率/加权平均延迟） */
 async function loadStatus(ac: AbortController) {
   try {
     const j = await apiJson<any>('/status', { signal: ac.signal })
@@ -100,36 +62,60 @@ async function loadStatus(ac: AbortController) {
     const h = Math.floor((up % 86400) / 3600)
     const mnt = Math.floor((up % 3600) / 60)
     meta.value = { version: j.version || '--', uptime: d + ' 天 ' + h + ' 时 ' + mnt + ' 分', window: j.window || '1h' }
-    const list = j.models || []
+    const list: StatusModel[] = j.models || []
     if (!list.length) {
-      healthRows.value = []
-      healthMsg.value = '近 1 小时还没有调用数据——去 Playground 或竞技场产生第一条记录'
+      kpi.value = { calls: '--', rate: '--', lat: '--' }
     } else {
-      healthRows.value = list.map((m: any) => ({
-        model: m.model,
-        cls: m.success_rate >= 90 ? '' : m.success_rate >= 50 ? 'warn' : 'bad',
-        width: Math.max(3, Math.round(m.success_rate)),
-        delay: (m.avg_latency_ms / 1000).toFixed(2),
-        val: m.success_rate + '% · ' + m.calls_1h + '次 · ' + (m.avg_latency_ms / 1000).toFixed(1) + 's',
-      }))
+      let tc = 0, wRate = 0, wLat = 0
+      list.forEach(m => {
+        const c = m.calls_1h || 0
+        tc += c
+        wRate += (m.success_rate || 0) * c
+        wLat += (m.avg_latency_ms || 0) * c
+      })
+      kpi.value = {
+        calls: tc ? fmt(tc) : '0',
+        rate: tc ? (wRate / tc).toFixed(1) + '%' : '--',
+        lat: tc ? (wLat / tc / 1000).toFixed(2) + 's' : '--',
+      }
     }
   } catch {
     if (ac.signal.aborted) return
-    healthRows.value = []
-    healthMsg.value = '健康数据加载失败，稍后自动重试'
+    meta.value = null
+    kpi.value = { calls: '--', rate: '--', lat: '--' }
   }
 }
 
-async function loadDashboard() {
+/* /v1/models/status：最近 200 次请求推断的线路级实时状态（20-30s 自动刷新） */
+async function loadLive(ac: AbortController) {
+  try {
+    const j = await apiJson<{ data: LiveRow[]; generated_ts: number }>('/models/status', { signal: ac.signal })
+    if (ac.signal.aborted) return
+    lineRows.value = j.data || []
+    lineMsg.value = lineRows.value.length ? '' : '暂无实时采样数据——去 Playground 或竞技场产生第一条记录'
+  } catch {
+    if (ac.signal.aborted) return
+    lineRows.value = []
+    lineMsg.value = '实时数据加载失败，稍后自动重试'
+  }
+}
+
+async function refresh() {
   if (aborter) aborter.abort()
   const ac = new AbortController()
   aborter = ac
-  await Promise.all([loadStats(ac), loadStatus(ac)])
+  updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  await Promise.all([loadStatus(ac), loadLive(ac)])
+  firstLoading.value = false
 }
 
+let timer: ReturnType<typeof setInterval> | null = null
+let aborter: AbortController | null = null
+
 onMounted(() => {
-  loadDashboard()
-  timer = setInterval(loadDashboard, 30000)
+  loadModels()
+  refresh()
+  timer = setInterval(() => { loadModels(true); refresh() }, 30000)
 })
 
 onUnmounted(() => {
@@ -139,81 +125,93 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="dash-wrap">
-      <div class="dash-head">
-        <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>状态大屏</h1>
-        <p>全站运行数据实时透明化——所有数字直接来自网关数据库，不修饰、不筛选。数据每 30 秒自动刷新。</p>
+  <div class="wrap">
+    <div class="page-head fade-up">
+      <div>
+        <h1><AqIcon name="activity" />状态大屏</h1>
+        <div class="sub">全站运行数据实时透明化——所有数字直接来自网关数据库，不修饰、不筛选。数据每 30 秒自动刷新。</div>
       </div>
-      <div class="dash-sub" id="st-meta">
-        <template v-if="meta">网关版本 <b>{{ meta.version }}</b> · 已连续运行 <b>{{ meta.uptime }}</b> · 健康窗口 {{ meta.window }}</template>
-        <template v-else>网关版本 <b>--</b> · 已运行 <b>--</b></template>
-        <template v-if="updatedAt"> · 更新于 <b>{{ updatedAt }}</b></template>
-      </div>
-      <div class="dash-cards">
-        <div class="dash-card"><b id="st2-calls">{{ cards.calls }}</b><span>今日全站调用</span></div>
-        <div class="dash-card"><b id="st2-rate">{{ cards.rate }}</b><span>今日成功率</span></div>
-        <div class="dash-card"><b id="st2-lat">{{ cards.lat }}</b><span>今日平均延迟</span></div>
-        <div class="dash-card"><b id="st2-users">{{ cards.users }}</b><span>今日活跃密钥</span></div>
-      </div>
-
-      <div class="dash-sec">
-        <b><AqIcon name="trend" :size="16" /> 近 24 小时调用趋势 <span style="font-size:11.5px;color:var(--muted);font-weight:400;">（每小时调用量 · 悬停看成功率）</span></b>
-        <div v-if="trendMsg" class="dash-empty">{{ trendMsg }}</div>
-        <div v-else id="st2-trend" class="flow-chart" role="img" aria-label="近 24 小时每小时调用量柱状图">
-          <div v-for="h in hours" :key="h.hour" class="flow-col" :title="h.label + ' · ' + h.calls + ' 次' + (h.rate != null ? ' · 成功率 ' + h.rate + '%' : '')">
-            <span class="flow-num" v-if="h.calls > 0">{{ h.calls >= 10000 ? (h.calls / 1000).toFixed(1) + 'k' : h.calls }}</span>
-            <span v-else class="flow-num">&nbsp;</span>
-            <span class="flow-barbox"><span class="flow-bar" :style="{ height: h.height + '%' }"></span></span>
-            <span class="flow-hour">{{ h.label }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="dash-sec">
-        <b><AqIcon name="activity" :size="16" /> 全模型流量表 <span style="font-size:11.5px;color:var(--muted);font-weight:400;">（近 24 小时 · 按调用量排序）</span></b>
-        <div id="st2-flow" class="tbl-scroll">
-          <div v-if="!flowRows.length" class="dash-empty">{{ flowMsg }}</div>
-          <table v-else class="flow-table">
-            <thead>
-              <tr><th>模型</th><th class="num">调用量</th><th class="num">成功率</th><th class="num">平均延迟</th><th class="num">Tokens</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(m, i) in flowRows" :key="i">
-                <td class="mono" :title="m.model">{{ m.model }}</td>
-                <td class="num">{{ m.calls }}</td>
-                <td class="num" :class="m.cls">{{ m.rate }}</td>
-                <td class="num">{{ m.lat }}</td>
-                <td class="num">{{ m.tokens }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="dash-sec">
-        <b><AqIcon name="trend" :size="16" /> 今日热门模型 TOP 10 <span style="font-size:11.5px;color:var(--muted);font-weight:400;">（按调用量）</span></b>
-        <div id="st2-top">
-          <div v-if="!topRows.length" class="dash-empty">{{ topMsg }}</div>
-          <div v-for="(m, i) in topRows" :key="i" class="stat-row">
-            <span class="nm" :title="m.model">{{ m.model }}</span>
-            <span class="trk"><span class="fil" :style="{ width: m.width + '%' }"></span></span>
-            <span class="val">{{ m.val }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="dash-sec">
-        <b><AqIcon name="activity" :size="16" /> 全模型近 1 小时健康度 <span style="font-size:11.5px;color:var(--muted);font-weight:400;">（成功率条 · 悬停看延迟）</span></b>
-        <div id="st2-health">
-          <div v-if="!healthRows.length" class="dash-empty">{{ healthMsg }}</div>
-          <div v-for="(m, i) in healthRows" :key="i" class="stat-row">
-            <span class="nm" :title="m.model">{{ m.model }}</span>
-            <span class="trk"><span class="fil" :class="m.cls" :style="{ width: m.width + '%' }"></span></span>
-            <span class="val" :title="'平均延迟 ' + m.delay + 's'">{{ m.val }}</span>
-          </div>
-        </div>
+      <div class="ops">
+        <button class="btn sm" :disabled="firstLoading" @click="refresh"><AqIcon name="refresh" :size="14" />立即刷新</button>
       </div>
     </div>
-  </section>
+
+    <!-- 网关信息条 -->
+    <div class="dim mb12" style="font-size: 13px;">
+      <template v-if="meta">网关版本 <b>{{ meta.version }}</b> · 已连续运行 <b>{{ meta.uptime }}</b> · 健康窗口 {{ meta.window }}</template>
+      <template v-else>网关版本 <b>--</b> · 已运行 <b>--</b></template>
+      <template v-if="updatedAt"> · 更新于 <b>{{ updatedAt }}</b></template>
+    </div>
+
+    <!-- 顶部 KPI 行 -->
+    <div v-if="firstLoading" class="kpis kpis-xl">
+      <div v-for="i in 4" :key="i" class="kpi">
+        <span class="skeleton" style="width: 72px; display: inline-block;"></span>
+        <div class="skeleton" style="width: 110px; height: 28px; margin-top: 8px;"></div>
+      </div>
+    </div>
+    <div v-else class="kpis kpis-xl">
+      <div class="kpi"><span>近 1h 总调用</span><b>{{ kpi.calls }}</b></div>
+      <div class="kpi"><span>近 1h 成功率</span><b>{{ kpi.rate }}</b></div>
+      <div class="kpi"><span>近 1h 平均延迟</span><b>{{ kpi.lat }}</b></div>
+      <div class="kpi"><span>在线模型数</span><b>{{ onlineShow }}</b></div>
+    </div>
+
+    <!-- 线路健康表 -->
+    <div class="grp-head mt24">
+      <AqIcon name="server" :size="15" />线路健康
+      <span class="grp-n">最近 200 次请求采样 · 实时推断</span>
+    </div>
+    <div v-if="lineRowsView.length" class="tbl-wrap">
+      <table class="table">
+        <thead>
+          <tr><th>线路</th><th>状态</th><th class="num">调用数</th><th class="num">近 1h 成功率</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in lineRowsView" :key="r.model">
+            <td class="mono" :title="r.model">{{ r.model }}</td>
+            <td>
+              <span class="row" style="gap: 7px; white-space: nowrap;">
+                <span class="dot" :class="lineStatus(r.status).dot"></span>{{ lineStatus(r.status).text }}
+              </span>
+            </td>
+            <td class="num">{{ fmt(r.samples) }}</td>
+            <td class="num" :style="{ color: scoreColor(Math.round(r.ok_rate * 100)) }">{{ (r.ok_rate * 100).toFixed(1) }}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-else class="empty">
+      <div class="big"><AqIcon name="activity" :size="32" /></div>
+      <b>{{ lineMsg }}</b>
+    </div>
+
+    <!-- 模型健康热区 -->
+    <div class="grp-head mt24">
+      <AqIcon name="gauge" :size="15" />模型健康热区
+      <span class="grp-n">后端近 100 次调用评分（0-100）</span>
+    </div>
+    <div v-if="heat.length" class="grid3">
+      <div v-for="h in heat" :key="h.id" class="card heat-card" :title="h.tip">
+        <div class="row between">
+          <span class="mono model-id" :title="h.id">{{ h.id }}</span>
+          <b class="score" :style="{ color: h.color }">{{ h.score }}</b>
+        </div>
+        <div class="dim mt8" style="font-size: 12px;">成功率 {{ h.rate }}% · 延迟 {{ h.lat }}</div>
+      </div>
+    </div>
+    <div v-else class="empty">
+      <div class="big"><AqIcon name="gauge" :size="32" /></div>
+      <b>{{ modelsLoading ? '模型健康数据加载中…' : '暂无模型健康评分' }}</b>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+.kpis-xl .kpi b { font-size: 32px; }
+.grp-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--txt0); }
+.grp-head .grp-n { font-size: 12px; font-weight: 600; color: var(--txt3); }
+.heat-card { padding: 14px 16px; }
+.heat-card .score { font-size: 26px; font-variant-numeric: tabular-nums; }
+.model-id { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

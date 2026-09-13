@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { apiJson } from '@/composables/useApi'
 import { useModels } from '@/composables/useModels'
 import { dsMaintenance } from '@/composables/modelMeta'
+import AqIcon from '@/components/AqIcon.vue'
 
 const { models, load: loadModels } = useModels()
 onMounted(() => { loadModels() })
@@ -202,24 +203,44 @@ reset()
   <p class="tool-intro">9×9 棋盘，五连即胜。你是黑棋先手。「算法」对手基于活/冲棋型评分即时应对；「LLM 落子」模式把棋盘交给大模型解析（解析失败自动回退算法）。</p>
   <div class="tool-bar">
     <span>对手</span>
-    <select id="gk-mode" v-model="mode">
+    <select v-model="mode" class="select">
       <option value="algo">评分算法</option>
       <option value="llm">LLM 落子</option>
     </select>
-    <select id="gk-llm-model" v-show="mode === 'llm'" v-model="llmModel">
+    <select v-show="mode === 'llm'" v-model="llmModel" class="select">
       <option v-for="m in chatOpts" :key="m" :value="m">{{ m }}</option>
     </select>
-    <button class="btn tool-run" id="gk-restart" @click="restart">重新开始</button>
-    <span class="tool-status" id="gk-status">{{ status }}</span>
+    <button class="btn" @click="restart"><AqIcon name="refresh" :size="14" />重新开始</button>
+    <span class="tool-status">{{ status }}</span>
   </div>
-  <div class="tt-layout">
-    <div class="gk-board" id="gk-board" :class="{ busy: busy && !over }">
-      <div v-for="(v, i) in board" :key="i" class="gk-cell" :class="{ taken: !!v }" @click="onCell(i)">
-        <span v-if="v === 1" class="gk-black"></span><span v-else-if="v === 2" class="gk-white"></span>
+  <div class="grid2">
+    <div class="card">
+      <div class="gk-board" :class="{ busy: busy && !over }">
+        <div v-for="(v, i) in board" :key="i" class="gk-cell" :class="{ taken: !!v }" @click="onCell(i)">
+          <span v-if="v === 1" class="gk-black"></span><span v-else-if="v === 2" class="gk-white"></span>
+        </div>
       </div>
     </div>
-    <div class="tt-side" id="gk-result">
-      <div v-if="resultMsg" class="tool-ai-box"><b>对局结束</b><div class="tool-ai-text">{{ resultMsg }}</div></div>
+    <div class="card out-pane">
+      <template v-if="resultMsg">
+        <div class="row between"><b>对局结束</b></div>
+        <div class="tool-prose">{{ resultMsg }}</div>
+      </template>
+      <div v-else class="out-empty">
+        <AqIcon name="gamepad" :size="26" />
+        <span>{{ status }}</span>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.gk-board { display: grid; grid-template-columns: repeat(9, 1fr); gap: 3px; }
+.gk-cell { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 4px; background: var(--bg1); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color var(--t-fast); }
+.gk-cell:hover { border-color: var(--acc); }
+.gk-cell.taken { cursor: default; }
+.gk-board.busy .gk-cell { pointer-events: none; opacity: .8; }
+.gk-black, .gk-white { width: 72%; height: 72%; border-radius: 99px; display: inline-block; }
+.gk-black { background: var(--acc-grad); }
+.gk-white { background: var(--txt2); }
+</style>

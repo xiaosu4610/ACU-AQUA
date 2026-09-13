@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { errText } from '@/composables/useApi'
 import { apiChat, useChatModels } from '@/composables/useToolChat'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 
 const { chatOpts, llmModel } = useChatModels()
 
@@ -73,22 +75,33 @@ function restart() {
   <p class="tool-intro">与 AI 轮流接龙：你出一个四字成语，AI 必须用它的最后一个字开头接一个新成语，如此往复。首尾字自动校验，AI 接不上或接错就判你赢！</p>
   <div class="tool-bar">
     <span>模型</span>
-    <select v-model="llmModel">
+    <select v-model="llmModel" class="select">
       <option v-for="m in chatOpts" :key="m" :value="m">{{ m }}</option>
     </select>
-    <button class="btn tool-run" @click="restart">重新开始</button>
+    <button class="btn" @click="restart"><AqIcon name="refresh" :size="14" />重新开始</button>
     <span class="tool-status">{{ status }}</span>
   </div>
-  <div class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="input" class="tool-flex1" placeholder="输入一个四字成语开始，如：一帆风顺" @keydown.enter="userGo">
-      <button class="btn tool-run" @click="userGo">接龙</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>四字成语（需以提示字开头）</label>
+        <input v-model="input" class="input" placeholder="输入一个四字成语开始，如：一帆风顺" @keydown.enter="userGo">
+      </div>
+      <button class="btn primary" @click="userGo">接龙</button>
+    </div>
+    <div class="card out-pane">
+      <template v-if="resultMsg">
+        <div class="row between"><b>对局结束</b></div>
+        <div class="tool-prose">{{ resultMsg }}</div>
+      </template>
+      <div v-if="chain.length" class="tool-kv">
+        <div v-for="(c, i) in chain" :key="i"><span>第 {{ i + 1 }} 手 · {{ c.who === 'user' ? '你' : 'AI' }}</span><b>{{ c.word }}</b></div>
+      </div>
+      <div v-if="!resultMsg && !chain.length" class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.idiom"></svg><span>{{ status }}</span></div>
     </div>
   </div>
-  <div class="tool-kv">
-    <div v-for="(c, i) in chain" :key="i" class="pg-hrow"><span>第 {{ i + 1 }} 手 · {{ c.who === 'user' ? '你' : 'AI' }}</span><b>{{ c.word }}</b></div>
-  </div>
-  <div class="tool-result">
-    <div v-if="resultMsg" class="tool-ai-box"><b>对局结束</b><div class="tool-ai-text">{{ resultMsg }}</div></div>
-  </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
 import { apiChat } from '@/composables/useToolChat'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 
 /* 查询结果字段 → 中文标签（未知字段原样展示，新增字段零维护成本） */
 const IP_FIELD_LABELS: Record<string, string> = {
@@ -62,24 +64,38 @@ async function aiExplain() {
 
 <template>
   <p class="tool-intro">输入任意公网 IP 查询其地理位置与运营商；留空则查询<b>你当前访问本站所用的出口 IP</b>（由网关边缘节点识别）。查询结果可一键生成 AI 解读。</p>
-  <div class="tool-io">
-    <textarea v-model="input" rows="2" placeholder="例如 8.8.8.8 或 114.114.114.114，留空查询你的出口 IP"></textarea>
-    <div class="tool-btns">
-      <button class="btn tool-run" @click="run">查询</button>
-      <button v-show="rows.length" class="btn tool-ai" @click="aiExplain">AI 解读</button>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>IP 地址（留空查询你的出口 IP）</label>
+        <textarea v-model="input" class="textarea" rows="2" placeholder="例如 8.8.8.8 或 114.114.114.114" style="min-height: 0;"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" :disabled="loading" @click="run"><AqIcon name="grid" :size="14" />查询</button>
+        <button v-show="rows.length" class="btn" @click="aiExplain"><AqIcon name="spark" :size="14" />AI 解读</button>
+      </div>
     </div>
-    <div class="tool-result">
-      <div v-if="explain" class="tool-ai-box">
-        <b>AI 解读</b>
-        <div class="tool-ai-text">{{ explain.loading ? '正在生成解读…' : explain.text }}</div>
+    <div class="card out-pane">
+      <div v-if="explain" class="out-pane">
+        <div class="row between"><b>AI 解读</b></div>
+        <div class="tool-prose">{{ explain.loading ? '正在生成解读…' : explain.text }}</div>
       </div>
       <template v-else>
-        <div v-if="loading" class="tool-loading">查询中…</div>
-        <div v-else-if="msg" class="tool-empty">{{ msg }}</div>
-        <div v-else-if="rows.length" class="tool-kv">
-          <div v-for="(p, i) in rows" :key="i" class="pg-hrow"><span>{{ p[0] }}</span><b>{{ p[1] }}</b></div>
+        <div v-if="loading" class="out-pane">
+          <div class="skeleton" style="width: 46%; min-height: 13px;"></div>
+          <div class="skeleton" style="width: 88%; min-height: 13px;"></div>
+          <div class="skeleton" style="width: 70%; min-height: 13px;"></div>
         </div>
+        <div v-else-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+        <div v-else-if="rows.length" class="tool-kv">
+          <div v-for="(p, i) in rows" :key="i"><span>{{ p[0] }}</span><b>{{ p[1] }}</b></div>
+        </div>
+        <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.ip"></svg><span>结果将显示在这里</span></div>
       </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

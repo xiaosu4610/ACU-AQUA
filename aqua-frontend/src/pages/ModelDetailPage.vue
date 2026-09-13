@@ -1,33 +1,39 @@
 <script setup lang="ts">
-/* 模型中心 · 模型详情（自旧版 page-model 平移）
- * 旧版对应逻辑：renderModelDetail / modelProfile / PARAM_TEMPLATES / MODEL_SPECS / MODEL_NOTES / modelSpec / modelExample / healthTag */
-import { computed, onMounted, onUnmounted } from 'vue'
+/* 模型详情 · 左信息栏 + 右调用示例 双栏
+ * 接口对接（与旧版 1:1）：
+ * - route params id（vue-router 解码一次，再兜底解码）
+ * - /v1/models（useModels.load，session:true，60 秒轮询 + classify 离线兜底渲染）
+ * - /v1/models/status（apiJson('/models/status')，20 秒轮询：实时状态 + 会话内健康趋势采样，静默失败）
+ * 档案数据（PARAM_TEMPLATES / MODEL_SPECS / MODEL_NOTES / ACU_PROFILES）与旧版逐条平移 */
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
+import { apiJson } from '@/composables/useApi'
 import { useModels } from '@/composables/useModels'
 import { classifyModel, dsMaintenance, platformLabel, typeLabel } from '@/composables/modelMeta'
-import AqIcon from '@/components/AqIcon.vue'
 
-/* ---- 路由参数：#/model/{encodeURIComponent(id)}（vue-router 已解码一次，这里再兜底解码） ---- */
+/* ---- 路由参数：/model/{encodeURIComponent(id)} ---- */
 const route = useRoute()
 const id = computed(() => {
   const raw = String(route.params.id || '')
   try { return decodeURIComponent(raw) } catch { return raw }
 })
 
-/* ---- 数据源：useModels 单例（找不到时旧版 fallback：modelMeta[id] || classify(id)，照常渲染） ---- */
-const { models, load } = useModels()
+/* ---- 数据源：useModels 单例（找不到时 fallback classify，照常渲染） ---- */
+const { models, loading, load } = useModels()
+let refreshTimer = 0
 onMounted(() => {
   load()
-  // 旧版每 60 秒自动刷新（模型状态与健康分自动更新）
   refreshTimer = window.setInterval(() => load(true), 60000)
+  liveTimer = window.setInterval(loadLive, 20000)
+  loadLive()
 })
-let refreshTimer = 0
 onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer) })
 
 const row = computed(() => models.value.find(m => m.id === id.value))
 const meta = computed(() => row.value ? { platform: row.value.platform, type: row.value.type } : classifyModel(id.value))
-/** 按量计费模型（按价目 mode 判断；统一 aqua/ 前缀后按量线模型 ID 也是 aqua/）：无保底、先付后用、缓存价引导 */
+/* 按量计费模型（mode=per_token）：无保底、先付后用、缓存价引导 */
 const isTide = computed(() => row.value?.mode === 'per_token')
 const isTideImage = computed(() => isTide.value && meta.value.type === 'image')
 /** 微元 → 元字符串（去尾零：2000→"0.002"） */
@@ -35,27 +41,27 @@ const microYuan = (v?: number) => (v == null ? '--' : (v / 1e6).toFixed(6).repla
 /** 元/百万tokens 价显示（0.05 → "0.05"） */
 const perMYuan = (v?: number) => (v == null ? '--' : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
 
-/* ---- 状态徽标（旧 renderModelDetail 的 statusTag 平移） ---- */
+/* ---- 状态徽标（旧 statusTag 平移） ---- */
 const statusTag = computed(() => {
-  if (dsMaintenance(id.value)) return { cls: 'm-status-exhausted', text: '服务暂停 · 维护中' }
+  if (dsMaintenance(id.value)) return { cls: 'bad', text: '服务暂停 · 维护中' }
   const st = row.value?.status
-  if (st === 'exhausted') return { cls: 'm-status-exhausted', text: '额度已耗尽' }
-  if (st === 'unavailable') return { cls: 'm-status-unavailable', text: '暂时不可用' }
+  if (st === 'exhausted') return { cls: 'bad', text: '额度已耗尽' }
+  if (st === 'unavailable') return { cls: 'warn', text: '暂时不可用' }
   return null
 })
 
-/* ---- 健康评分徽标（旧 healthTag 平移）：根据近100次调用自动评分（后端计算，0-100） ---- */
+/* ---- 健康评分（旧 healthTag 平移）：后端按近 100 次调用计算，0-100 ---- */
 const health = computed(() => {
   const h = row.value?.health
   if (!h || !h.total) return null
   const score = h.score != null ? h.score | 0 : 0
-  let cls = 'h-bad'
-  if (score >= 90) cls = 'h-excellent'
-  else if (score >= 70) cls = 'h-good'
-  else if (score >= 50) cls = 'h-warn'
+  let dot: 'ok' | 'warn' | 'bad' = 'bad'
+  if (score >= 90) dot = 'ok'
+  else if (score >= 70) dot = 'ok'
+  else if (score >= 50) dot = 'warn'
   const rate = Math.round(((h.ok || 0) / h.total) * 100)
   const lat = h.avg_latency_ms != null ? (h.avg_latency_ms / 1000).toFixed(1) + 's' : '-'
-  return { score, cls, tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
+  return { score, dot, tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
 })
 
 /* ---- 按能力类型定义「支持的请求体参数」模板（旧 PARAM_TEMPLATES 平移） ---- */
@@ -176,16 +182,13 @@ const PARAM_TEMPLATES: Record<string, ParamTpl> = {
 }
 
 /* ---- 模型精确规格（按 ID 关键词匹配）（旧 MODEL_SPECS 平移） ---- */
-/* ctx = 上下文 token 上限；size = 参数量；dims = 向量维度；released = 发布日期 */
 interface ModelSpec { re: RegExp; ctx?: string; size?: string; dims?: number; released?: string }
 const MODEL_SPECS: ModelSpec[] = [
-  // ── 官方自营专线（aqua/，官方原版满血，按 ID 精确匹配置顶优先） ──
   { re: /aqua\/deepseek-v4-flash$/, ctx: "1M", size: "284B (13B active)", released: "2026-07" },
   { re: /aqua\/deepseek-v4-pro$/, ctx: "1M", size: "1.6T (49B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.3-flash$/, ctx: "1M", size: "320B (18B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.3$/, ctx: "1M", size: "744B (40B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.2$/, ctx: "1M", size: "744B (40B active)", released: "2026-06" },
-  // ── Nvidia / Meta Llama ──
   { re: /llama-3\.1-405b/, ctx: "128K", size: "405B", released: "2024-12" },
   { re: /llama-3\.1-70b-instruct/, ctx: "128K", size: "70B", released: "2024-07" },
   { re: /llama-3\.1-8b-instruct/, ctx: "128K", size: "8B", released: "2024-07" },
@@ -200,7 +203,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /codellama-70b/, ctx: "16K", size: "70B", released: "2023-08" },
   { re: /llama-guard-4/, ctx: "8K", size: "12B", released: "2024-12" },
   { re: /muse-glimmer/, ctx: "256K", size: "30B", released: "2024-06" },
-  // ── Nvidia Nemotron ──
   { re: /nemotron-ultra-253b/, ctx: "128K", size: "253B", released: "2025-01" },
   { re: /nemotron-4-340b-instruct/, ctx: "4K", size: "340B", released: "2024-05" },
   { re: /nemotron-3-super-120b/, ctx: "1M", size: "120B (12B active)", released: "2026-06" },
@@ -224,7 +226,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /ising-calibration/, ctx: "4K", size: "31B", released: "2024-11" },
   { re: /ai-synthetic-video-detector/, ctx: "—", size: "—", released: "2024-08" },
   { re: /cosmos-reason2-8b/, ctx: "16K", size: "8B", released: "2025-01" },
-  // ── Nvidia 嵌入 / 检索 ──
   { re: /nv-embed-v1|nv-embedcode/, ctx: "0.5K", size: "7B", dims: 2048, released: "2024" },
   { re: /embed-qa-4/, ctx: "0.5K", size: "4B", dims: 1024, released: "2024" },
   { re: /nv-embedqa-mistral-7b/, ctx: "0.5K", size: "7B", dims: 1024, released: "2024" },
@@ -232,13 +233,10 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /nemoretriever-1b/, ctx: "0.5K", size: "1B", dims: 1024, released: "2024-10" },
   { re: /nemotron-embed-vl-1b/, ctx: "0.5K", size: "1B", dims: 1024, released: "2024-11" },
   { re: /arctic-embed-l/, ctx: "0.5K", size: "335M", dims: 1024, released: "2024-04" },
-  // ── Nvidia 视觉 ──
   { re: /neva-22b/, ctx: "4K", size: "22B", released: "2023-11" },
   { re: /vila/, ctx: "4K", size: "8B", released: "2024-02" },
   { re: /nvclip/, ctx: "0.5K", size: "1.3B", released: "2024-06" },
-  // ── Nvidia 翻译 ──
   { re: /riva-translate/, ctx: "0.5K", size: "4B", released: "2024-03" },
-  // ── DeepSeek ──
   { re: /deepseek-r1\/|deepseek-r1-distill-qwen-32b/, ctx: "128K", size: "671B (MoE)", released: "2025-01" },
   { re: /deepseek-r1-distill-qwen-14b/, ctx: "128K", size: "14B", released: "2025-01" },
   { re: /deepseek-r1-distill-qwen-7b/, ctx: "128K", size: "7B", released: "2025-01" },
@@ -246,13 +244,11 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /deepseek-coder/, ctx: "16K", size: "6.7B", released: "2023-11" },
   { re: /deepseek-ai\/deepseek-v4-flash/, ctx: "1M", size: "284B (13B active)", released: "2026-04" },
   { re: /deepseek-v4-pro/, ctx: "1M", size: "1.6T (49B active)", released: "2026-04" },
-  // ── Qwen ──
   { re: /qwq-32b/, ctx: "32K", size: "32B", released: "2024-11" },
   { re: /qwen2\.5-coder-32b/, ctx: "32K", size: "32B", released: "2024-11" },
   { re: /qwen2\.5-coder-7b/, ctx: "128K", size: "7B", released: "2024-11" },
   { re: /qwen2\.5-7b/, ctx: "32K", size: "7B", released: "2024-09" },
   { re: /qwen2-7b/, ctx: "32K", size: "7B", released: "2024-09" },
-  // ── Google Gemma ──
   { re: /gemma-4-31b/, ctx: "128K", size: "31B", released: "2025-06" },
   { re: /gemma-3-27b/, ctx: "128K", size: "27B", released: "2025-02" },
   { re: /gemma-3-12b/, ctx: "128K", size: "12B", released: "2025-02" },
@@ -266,7 +262,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /deplot/, ctx: "2K", size: "1.3B", released: "2023-10" },
   { re: /diffusiongemma/, ctx: "—", size: "26B", released: "2025-05" },
   { re: /recurrentgemma/, ctx: "8K", size: "2B", released: "2024-02" },
-  // ── Microsoft Phi ──
   { re: /phi-4-mini/, ctx: "16K", size: "3.8B", released: "2024-12" },
   { re: /phi-3\.5-mini/, ctx: "128K", size: "3.8B", released: "2024-08" },
   { re: /phi-3\.5-moe/, ctx: "128K", size: "42B (MoE)", released: "2024-08" },
@@ -276,7 +271,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /phi-3-vision/, ctx: "128K", size: "4.2B", released: "2024-05" },
   { re: /phi-4-multimodal/, ctx: "16K", size: "5.6B", released: "2024-12" },
   { re: /kosmos-2/, ctx: "4K", size: "1.6B", released: "2023-06" },
-  // ── Mistral ──
   { re: /mistral-large/, ctx: "128K", size: "123B", released: "2024-07" },
   { re: /mistral-small-3\.1/, ctx: "96K", size: "24B", released: "2025-03" },
   { re: /mistral-small-24b/, ctx: "96K", size: "24B", released: "2025-03" },
@@ -287,13 +281,11 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /mamba-codestral/, ctx: "256K", size: "7B", released: "2024-07" },
   { re: /mathstral/, ctx: "32K", size: "7B", released: "2024-07" },
   { re: /mistral-nemo-12b/, ctx: "128K", size: "12B", released: "2024-07" },
-  // ── IBM Granite ──
   { re: /granite-34b-code/, ctx: "8K", size: "34B", released: "2024-05" },
   { re: /granite-3\.0-8b/, ctx: "8K", size: "8B", released: "2024-10" },
   { re: /granite-3\.0-3b/, ctx: "4K", size: "3B", released: "2024-10" },
   { re: /granite-8b-code/, ctx: "8K", size: "8B", released: "2024-05" },
   { re: /granite-guardian/, ctx: "8K", size: "8B", released: "2024-10" },
-  // ── 其他国际模型 ──
   { re: /yi-large/, ctx: "32K", size: "34B", released: "2024-05" },
   { re: /fuyu-8b/, ctx: "16K", size: "8B", released: "2023-10" },
   { re: /jamba-1\.5-large/, ctx: "256K", size: "398B (MoE)", released: "2024-08" },
@@ -319,7 +311,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /llama-3-taiwan/, ctx: "8K", size: "70B", released: "2024-04" },
   { re: /zamba2-7b/, ctx: "4K", size: "7B", released: "2024-10" },
   { re: /usdcode/, ctx: "128K", size: "70B", released: "2024-08" },
-  // ── 开源大模型（新接入） ──
   { re: /gpt-oss-120b/, ctx: "128K", size: "120B", released: "2025-08" },
   { re: /gpt-oss-20b/, ctx: "128K", size: "20B", released: "2025-08" },
   { re: /kimi-k2\.6/, ctx: "128K", size: "~200B (MoE)", released: "2025-07" },
@@ -327,7 +318,6 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /minimax-m3/, ctx: "1M", size: "428B (~22B active)", released: "2025-08" },
   { re: /laguna-xs/, ctx: "8K", size: "—", released: "2025-06" },
   { re: /step-3\.7-flash/, ctx: "128K", size: "~30B", released: "2025-07" },
-  // ── BGE 检索模型 ──
   { re: /bge-m3|baai\/bge-m3/, ctx: "8K", size: "568M", dims: 1024, released: "2024-01" },
   { re: /bge-large-zh/, ctx: "0.5K", size: "326M", dims: 1024, released: "2023-06" },
   { re: /bge-large-en/, ctx: "0.5K", size: "326M", dims: 1024, released: "2023-06" },
@@ -335,16 +325,13 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /bce-reranker/, ctx: "0.5K", size: "278M", dims: 0, released: "2023-09" },
 ]
 function modelSpec(id: string): ModelSpec | null {
-  for (const s of MODEL_SPECS) {
-    if (s.re.test(id)) return s
-  }
+  for (const s of MODEL_SPECS) if (s.re.test(id)) return s
   return null
 }
 
-/* ---- 热门模型定制描述（按模型名关键词匹配，先匹配先生效）（旧 MODEL_NOTES 平移） ---- */
+/* ---- 热门模型定制描述（旧 MODEL_NOTES 平移） ---- */
 interface ModelNote { match: RegExp; name: string; desc: string }
 const MODEL_NOTES: ModelNote[] = [
-  // ── 官方自营专线（aqua/，官方原版满血，顺序匹配置顶优先） ──
   { match: /aqua\/deepseek-v4-flash$/, name: "DeepSeek V4 Flash", desc: "官方原版满血 DeepSeek-V4-Flash-0731。MoE 架构总参 284B / 激活 13B（MIT 开源），1M 上下文、单次最大输出 384K，支持思考 / 非思考双模式（含 Think Max 深度档）。0731 版重点强化 Agent 与编程：Terminal-Bench 2.1 达 82.7、DeepSWE 54.4，高频调用与长任务的性价比之选。" },
   { match: /aqua\/deepseek-v4-pro$/, name: "DeepSeek V4 Pro", desc: "官方原版满血 DeepSeek-V4-Pro-0813 正式版。旗舰 MoE 总参 1.6T / 激活 49B（MIT 开源），1M 上下文、单次最大输出 384K，思考三档（Non-Think / High / Max）。Agentic Coding 开源最佳：SWE-bench Verified 79.4%、Codeforces 2919、GPQA-Diamond 89.1%，复杂推理与竞赛级代码旗舰。" },
   { match: /aqua\/glm-5\.3-flash$/, name: "GLM-5.3-Flash", desc: "官方原版满血 GLM-5.3-Flash（320B-A18B MoE，MIT 开源），GLM-5 系列首个原生多模态基座（文本 / 图片 / 视频输入）。稀疏 + 线性混合注意力让注意力计算量降约 3 倍、KV 缓存降约 4.4 倍。1M 上下文、最大输出 128K，DeepSWE v1.1 63.4 全面超越上代 GLM-5.2，AA 智能指数 57 持平 Claude Opus 4.8 而成本仅约其十分之一。" },
@@ -367,7 +354,7 @@ const MODEL_NOTES: ModelNote[] = [
   { match: /guard|nsfw|nonescape|security.*filter/, name: "安全风控", desc: "内容安全检测模型，用于识别违规、有害、敏感内容。" }
 ]
 
-/* ---- 官方自营专线（aqua/）官方参数与限制：网关对请求体原样透传，官方能力即本站能力 ---- */
+/* ---- 官方自营专线（aqua/）官方参数与限制：请求体原样透传（旧 ACU_PROFILES 平移） ---- */
 interface AcuProfile { limits: string[]; extraParams?: [string, string, string, string][]; unsupported: string[] }
 const ACU_UNSUPPORTED = ["function_call", "functions", "logprobs", "top_logprobs", "n", "logit_bias", "user", "audio"]
 const ACU_PROFILES: Record<string, AcuProfile> = {
@@ -436,22 +423,18 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
   }
 }
 
-/* ---- 档案合成（旧 modelProfile 平移）：合并专属描述 + 平台说明 ---- */
+/* ---- 档案合成（旧 modelProfile 平移） ---- */
 const profile = computed(() => {
   const mid = id.value
   const m = meta.value
   const t = m.type || 'chat'
   const base = PARAM_TEMPLATES[t] || PARAM_TEMPLATES.chat
   let note: ModelNote | null = null
-  for (const n of MODEL_NOTES) {
-    if (n.match.test(mid)) { note = n; break }
-  }
+  for (const n of MODEL_NOTES) if (n.match.test(mid)) { note = n; break }
   const acu = m.platform === 'acu' ? ACU_PROFILES[mid] : undefined
   const desc = (note ? note.name + "。" + note.desc + " " : "") + base.desc
   const limits = base.limits.slice()
-  // 平台特定限制
   if (acu) {
-    // 官方自营专线：完全按官方参数与限制展示（覆盖通用 chat 模板）
     limits.length = 0
     limits.push(...acu.limits)
   } else if (m.platform === 'nvidia') {
@@ -468,108 +451,390 @@ const profile = computed(() => {
   }
 })
 
-/* ---- 调用示例（旧 modelExample 平移） ---- */
-const example = computed(() => {
+/* ---- 调用示例（旧 modelExample 平移为 cURL；另生成 Python / JS 版本） ---- */
+const EX_BASE = 'https://api.ltzy.top/v1'
+function exBody(): string {
   const mid = id.value
   const t = meta.value.type
-  let body = ''
-  if (t === 'chat' || t === 'vision') {
-    body = '{"model":"' + mid + '","messages":[{"role":"user","content":"你好"}],"stream":true}'
-  } else if (t === 'embedding') {
-    body = '{"model":"' + mid + '","input":"你好"}'
-  } else if (t === 'rerank') {
-    body = '{"model":"' + mid + '","query":"你好","documents":["文档A","文档B"]}'
-  } else if (t === 'asr') {
+  if (t === 'embedding') return '{"model":"' + mid + '","input":"你好"}'
+  if (t === 'rerank') return '{"model":"' + mid + '","query":"你好","documents":["文档A","文档B"]}'
+  if (t === 'tts') return '{"model":"' + mid + '","input":"你好，欢迎使用 AQUA","voice":"default"}'
+  if (t === 'moderation') return '{"model":"' + mid + '","input":"待检测文本"}'
+  if (t === 'image') return '{"model":"' + mid + '","prompt":"一只可爱的橘猫","size":"1024x1024"}'
+  if (t === 'video') return '{"model":"' + mid + '","prompt":"一只小狗在草地上奔跑"}'
+  return '{"model":"' + mid + '","messages":[{"role":"user","content":"你好"}],"stream":true}'
+}
+const exCurl = computed(() => {
+  const mid = id.value
+  const t = meta.value.type
+  if (t === 'asr') {
     return '# 使用 multipart 上传音频文件\ncurl https://api.ltzy.top/v1/audio/transcriptions \\\n  -F "file=@audio.wav" \\\n  -F "model=' + mid + '"'
-  } else if (t === 'tts') {
-    body = '{"model":"' + mid + '","input":"你好，欢迎使用 AQUA","voice":"default"}'
-  } else if (t === 'moderation') {
-    body = '{"model":"' + mid + '","input":"待检测文本"}'
-  } else if (t === 'image') {
-    body = '{"model":"' + mid + '","prompt":"一只可爱的橘猫","size":"1024x1024"}'
-  } else if (t === 'video') {
-    body = '{"model":"' + mid + '","prompt":"一只小狗在草地上奔跑"}'
-  } else if (t === 'ip') {
+  }
+  if (t === 'ip') {
     return 'curl https://api.ltzy.top/v1/ip_location\n  -H "Content-Type: application/json"\n  -d \'{"ip":""}\''
   }
-  return 'curl https://api.ltzy.top/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer sk-****" \\\n  -d \'' + body + '\''
+  return 'curl https://api.ltzy.top/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer sk-****" \\\n  -d \'' + exBody() + '\''
+})
+const exPy = computed(() => {
+  const mid = id.value
+  const t = meta.value.type
+  const head = 'from openai import OpenAI\n\nclient = OpenAI(\n    api_key="sk-你的密钥",\n    base_url="' + EX_BASE + '",\n)\n'
+  if (t === 'embedding') {
+    return head + 'r = client.embeddings.create(\n    model="' + mid + '",\n    input="你好",\n)\nprint(r.data[0].embedding[:8], "...")'
+  }
+  if (t === 'image') {
+    return head + 'r = client.images.generate(\n    model="' + mid + '",\n    prompt="一只可爱的橘猫",\n    size="1024x1024",\n)\nprint(r.data[0].url)'
+  }
+  if (t === 'asr') {
+    return head + 'r = client.audio.transcriptions.create(\n    model="' + mid + '",\n    file=open("audio.wav", "rb"),\n)\nprint(r.text)'
+  }
+  if (t === 'tts') {
+    return head + 'r = client.audio.speech.create(\n    model="' + mid + '",\n    voice="default",\n    input="你好，欢迎使用 AQUA",\n)\nr.stream_to_file("speech.mp3")'
+  }
+  if (t === 'moderation') {
+    return head + 'r = client.moderations.create(\n    model="' + mid + '",\n    input="待检测文本",\n)\nprint(r.results[0])'
+  }
+  if (t === 'vision') {
+    return head + 'r = client.chat.completions.create(\n    model="' + mid + '",\n    messages=[{"role": "user", "content": [\n        {"type": "text", "text": "描述这张图"},\n        {"type": "image_url", "image_url": {"url": "https://example.com/cat.jpg"}},\n    ]}],\n)\nprint(r.choices[0].message.content)'
+  }
+  if (t === 'rerank' || t === 'ip' || t === 'video') {
+    const path = t === 'ip' ? '/ip_location' : '/chat/completions'
+    const dict = t === 'ip'
+      ? '{"ip": ""}'
+      : t === 'video'
+        ? '{"model": "' + mid + '", "prompt": "一只小狗在草地上奔跑"}'
+        : '{"model": "' + mid + '", "query": "你好", "documents": ["文档A", "文档B"]}'
+    return '# 非 OpenAI 标准端点：通用 HTTP 调用\nimport requests\n\nr = requests.post(\n    "' + EX_BASE + path + '",\n    headers={"Authorization": "Bearer sk-你的密钥"},\n    json=' + dict + ',\n)\nprint(r.json())'
+  }
+  return head + 'r = client.chat.completions.create(\n    model="' + mid + '",\n    messages=[{"role": "user", "content": "你好"}],\n)\nprint(r.choices[0].message.content)'
+})
+const exJs = computed(() => {
+  const mid = id.value
+  const t = meta.value.type
+  const head = 'import OpenAI from "openai";\n\nconst client = new OpenAI({\n  apiKey: "sk-你的密钥",\n  baseURL: "' + EX_BASE + '",\n});\n'
+  if (t === 'embedding') {
+    return head + 'const r = await client.embeddings.create({\n  model: "' + mid + '",\n  input: "你好",\n});\nconsole.log(r.data[0].embedding.slice(0, 8));'
+  }
+  if (t === 'image') {
+    return head + 'const r = await client.images.generate({\n  model: "' + mid + '",\n  prompt: "一只可爱的橘猫",\n  size: "1024x1024",\n});\nconsole.log(r.data[0].url);'
+  }
+  if (t === 'asr') {
+    return head + 'const r = await client.audio.transcriptions.create({\n  model: "' + mid + '",\n  file: fs.createReadStream("audio.wav"),\n});\nconsole.log(r.text);'
+  }
+  if (t === 'tts') {
+    return head + 'const r = await client.audio.speech.create({\n  model: "' + mid + '",\n  voice: "default",\n  input: "你好，欢迎使用 AQUA",\n});\nawait r.writeFile("speech.mp3");'
+  }
+  if (t === 'moderation') {
+    return head + 'const r = await client.moderations.create({\n  model: "' + mid + '",\n  input: "待检测文本",\n});\nconsole.log(r.results[0]);'
+  }
+  if (t === 'vision') {
+    return head + 'const r = await client.chat.completions.create({\n  model: "' + mid + '",\n  messages: [{ role: "user", content: [\n    { type: "text", text: "描述这张图" },\n    { type: "image_url", image_url: { url: "https://example.com/cat.jpg" } },\n  ] }],\n});\nconsole.log(r.choices[0].message.content);'
+  }
+  if (t === 'rerank' || t === 'ip' || t === 'video') {
+    const path = t === 'ip' ? '/ip_location' : '/chat/completions'
+    return '// 非 OpenAI 标准端点：通用 HTTP 调用\nconst r = await fetch("' + EX_BASE + path + '", {\n  method: "POST",\n  headers: {\n    "Content-Type": "application/json",\n    Authorization: "Bearer sk-你的密钥",\n  },\n  body: JSON.stringify(' + exBody() + '),\n});\nconsole.log(await r.json());'
+  }
+  return head + 'const r = await client.chat.completions.create({\n  model: "' + mid + '",\n  messages: [{ role: "user", content: "你好" }],\n});\nconsole.log(r.choices[0].message.content);'
+})
+const exLang = ref<'curl' | 'python' | 'js'>('curl')
+const exCode = computed(() => (exLang.value === 'python' ? exPy.value : exLang.value === 'js' ? exJs.value : exCurl.value))
+
+/* ---- 实时状态 + 会话内健康趋势（/v1/models/status，20 秒采样，静默失败） ---- */
+type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
+const live = ref<LiveRow | null>(null)
+const trendPts = ref<{ t: number; rate: number; lat: number }[]>([])
+let liveTimer = 0
+async function loadLive() {
+  try {
+    const j = await apiJson<{ data: LiveRow[]; generated_ts: number }>('/models/status')
+    const r = (j.data || []).find((x: LiveRow) => x.model === id.value)
+    if (r) {
+      live.value = r
+      const last = trendPts.value[trendPts.value.length - 1]
+      if (!last || last.t !== (r.last_ts || j.generated_ts)) {
+        trendPts.value.push({ t: r.last_ts || j.generated_ts, rate: Math.round(r.ok_rate * 100), lat: r.avg_latency_ms || 0 })
+        if (trendPts.value.length > 12) trendPts.value.shift()
+      }
+    }
+  } catch { /* 静默：下一轮自动重试 */ }
+}
+function fmtLat(ms?: number): string {
+  if (!ms) return '--'
+  return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
+}
+function liveDot(): 'ok' | 'warn' | 'bad' | '' {
+  if (!live.value) return ''
+  if (live.value.status === 'great' || live.value.status === 'ok') return 'ok'
+  if (live.value.status === 'degraded') return 'warn'
+  return 'bad'
+}
+function liveText(): string {
+  if (!live.value) return '待命中'
+  if (live.value.status === 'great') return '状态极佳'
+  if (live.value.status === 'ok') return '运行正常'
+  if (live.value.status === 'degraded') return '部分异常'
+  return '故障'
+}
+
+/* ---- 头部价格标签（付费模型三态文案，与旧版 1:1） ---- */
+const priceTag = computed(() => {
+  const r = row.value
+  if (!r?.paid) return null
+  if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
+    return {
+      text: '收费 · 按量 ¥' + perMYuan(r.in_price) + '/百万tokens 起' + (isTide.value ? '' : (r.subsidized ? ' · 限时补贴' : '')),
+      title: isTide.value
+        ? '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明'
+        : '按量计费：输入/缓存命中/输出分段计价，单次设最低消费，详见下方计费说明',
+    }
+  }
+  if (r.price_micro || r.per_image != null) {
+    const v = ((r.price_micro ?? r.per_image) / 1_000_000).toFixed(3)
+    return {
+      text: '收费 · ¥' + v + '/' + (isTideImage.value ? '张' : '次') + ' · 按' + (isTideImage.value ? '张' : '次') + '计费',
+      title: isTideImage.value ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明',
+    }
+  }
+  return null
+})
+
+/* ---- 价格表行（付费模型） ---- */
+const priceRows = computed<[string, string][] | null>(() => {
+  const r = row.value
+  if (!r?.paid) return null
+  if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
+    return [
+      ['计费方式', isTide.value ? '按量三段价 · 无保底，用多少付多少' : '按量三段价 · 单次最低消费 ¥' + microYuan(r.floor_micro)],
+      ['输入', '¥' + perMYuan(r.in_price) + ' / 百万 tokens'],
+      ['缓存命中', '¥' + perMYuan(r.cache_price) + ' / 百万 tokens'],
+      ['输出', '¥' + perMYuan(r.out_price) + ' / 百万 tokens'],
+    ]
+  }
+  if (isTideImage.value) {
+    return [['计费方式', '按张计费 · n 参数控制张数（1~10 张）'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 张']]
+  }
+  return [['计费方式', '按次计费 · 每次成功请求扣一次，与生成长度无关'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 次']]
 })
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="model-detail">
-      <router-link to="/capabilities" class="back-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回模型能力</router-link>
-      <div class="md-head">
-        <h1><code>{{ id }}</code></h1>
-        <div class="md-tags">
-          <span class="mtag" :class="'m-' + meta.platform">{{ platformLabel(meta.platform) }}</span>
-          <span class="mtag" :class="'m-' + meta.platform">{{ profile.typeText }}</span>
-          <span v-if="row?.paid && row?.mode === 'per_token' && row?.in_price != null && row?.per_image == null" class="mtag m-paid" :title="isTide ? '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明' : '按量计费：输入/缓存命中/输出分段计价，单次设最低消费，详见下方计费说明'">
-            收费模型 · 按量 ¥{{ perMYuan(row.in_price) }}/百万tokens 起{{ isTide ? '' : (row.subsidized ? ' · 限时补贴' : '') }}
-          </span>
-          <span v-else-if="row?.paid && (row?.price_micro || row?.per_image != null)" class="mtag m-paid" :title="isTideImage ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明'">
-            收费模型 · ¥{{ ((row.price_micro ?? row.per_image) / 1_000_000).toFixed(3) }}/{{ isTideImage ? '张' : '次' }} · 按{{ isTideImage ? '张' : '次' }}计费
-          </span>
-          <span v-else-if="meta.platform" class="mtag m-free" title="本站免费模型，不收一分钱">免费模型</span>
-          <span v-if="statusTag" class="mtag" :class="statusTag.cls">{{ statusTag.text }}</span>
-          <span v-if="health" class="mtag m-health" :class="health.cls" :title="health.tip">健康 {{ health.score }}</span>
+  <div class="wrap">
+    <!-- 加载骨架 -->
+    <template v-if="loading && !models.length">
+      <div class="skeleton" style="min-height: 30px; width: 40%; margin-top: 26px;"></div>
+      <div class="detail-grid mt16">
+        <div class="card"><div class="skeleton" style="min-height: 16px; width: 55%;"></div><div class="skeleton mt12" style="min-height: 12px; width: 92%;"></div><div class="skeleton mt8" style="min-height: 12px; width: 80%;"></div><div class="skeleton mt8" style="min-height: 12px; width: 86%;"></div></div>
+        <div class="card"><div class="skeleton" style="min-height: 200px;"></div></div>
+      </div>
+    </template>
+
+    <template v-else>
+      <div class="page-head">
+        <div style="min-width: 0;">
+          <router-link to="/models" class="dim back-link"><AqIcon name="arrow-right" :size="13" style="transform: rotate(180deg);" />返回模型中心</router-link>
+          <h1 class="mid-clip"><code class="mid-id">{{ id }}</code></h1>
+          <div class="sub row wrap" style="gap: 6px; margin-top: 8px;">
+            <span class="tag acc">{{ platformLabel(meta.platform) }}</span>
+            <span class="tag">{{ profile.typeText }}</span>
+            <span v-if="priceTag" class="tag grad" :title="priceTag.title">{{ priceTag.text }}</span>
+            <span v-else-if="meta.platform" class="tag ok">免费模型</span>
+            <span v-if="statusTag" class="tag" :class="statusTag.cls">{{ statusTag.text }}</span>
+            <span v-if="health" class="tag" :title="health.tip"><span class="dot" :class="health.dot"></span>健康 {{ health.score }}</span>
+            <span v-if="live" class="tag"><span class="dot" :class="liveDot()"></span>{{ liveText() }}</span>
+          </div>
         </div>
-        <CopyBtn :text="id" label="复制 ID" />
-      </div>
-      <!-- 模型上下文知识库区块 -->
-      <div v-if="profile.spec" class="md-block md-spec-grid">
-        <div v-if="profile.spec.ctx" class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></div><div class="spec-label">上下文窗口</div><div class="spec-val">{{ profile.spec.ctx }}</div></div>
-        <div v-if="profile.spec.size" class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></div><div class="spec-label">参数量</div><div class="spec-val">{{ profile.spec.size }}</div></div>
-        <div v-if="profile.spec.dims" class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a16 16 0 0 1 0 18M12 3a16 16 0 0 0 0 18"/></svg></div><div class="spec-label">向量维度</div><div class="spec-val">{{ profile.spec.dims }}</div></div>
-        <div v-if="profile.spec.released" class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div><div class="spec-label">发布日期</div><div class="spec-val">{{ profile.spec.released }}</div></div>
-        <div class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div class="spec-label">上游平台</div><div class="spec-val">{{ platformLabel(meta.platform) }}</div></div>
-        <div class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/></svg></div><div class="spec-label">能力类型</div><div class="spec-val">{{ profile.typeText }}</div></div>
-        <div v-if="profile.noteName" class="spec-item"><div class="spec-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></div><div class="spec-label">模型系列</div><div class="spec-val">{{ profile.noteName }}</div></div>
-      </div>
-      <div class="md-block"><h3>模型能力简介</h3><p class="md-desc">{{ profile.desc }}</p></div>
-      <!-- 收费模型计费说明（仅付费模型显示） -->
-      <div v-if="row?.paid && (row?.mode === 'per_token' || row?.price_micro)" class="md-block md-billing">
-        <h3>计费说明</h3>
-        <div class="bill-price">
-          <template v-if="row?.mode === 'per_token' && row?.per_image == null">
-            <b>¥{{ perMYuan(row.in_price) }}<span>/百万tokens（输入）</span></b>
-            <span class="bill-promo">缓存命中 ¥{{ perMYuan(row.cache_price) }} · 输出 ¥{{ perMYuan(row.out_price) }}（元/百万tokens）{{ isTide ? ' · 无保底，用多少付多少' : ' · 单次最低消费 ¥' + microYuan(row.floor_micro) }}{{ row.subsidized ? ' · 官方限时补贴价' : '' }}</span>
-          </template>
-          <template v-else-if="isTideImage">
-            <b>¥{{ (row.price_micro / 1_000_000).toFixed(3) }}<span>/张</span></b>
-            <span class="bill-promo">按张计费 · n 参数控制张数（1~10 张）</span>
-          </template>
-          <template v-else>
-            <b>¥{{ (row.price_micro / 1_000_000).toFixed(3) }}<span>/次</span></b>
-            <span class="bill-promo">正式价 · 每次成功请求扣一次，与生成长度无关</span>
-          </template>
-        </div>
-        <ul class="md-limits">
-          <li v-if="row?.mode === 'per_token' && row?.per_image == null">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>{{ isTide ? '；重复对话前缀命中缓存价，输入成本大幅更低' : '' }}</li>
-          <li v-else-if="isTideImage">按张计费：每次成功请求按 <code>n</code>（张数）扣费，失败自动全额退回</li>
-          <li v-else>按次计费（正式价）：每次<b>成功</b>请求扣一次，与生成长度无关（写一句话和写一千字同价）</li>
-          <li v-if="isTide">先付后用：发起请求按预估预扣（输入 + <code>max_tokens</code> 输出上限），完成后<b>多退少补</b>；可在请求中调小 <code>max_tokens</code> 降低单次预扣</li>
-          <li>预充值制：余额用完自动返回 402 停止服务，<b>绝不透支</b>；<router-link to="/console?view=topup" style="color:var(--accent);">在线充值即时到账</router-link>（支付金额 100% 全额到账）</li>
-          <li>失败不扣费：上游失败 / 网络中断 / 服务异常，预扣金额<b>自动全额退回</b></li>
-          <li>账目透明：每次扣费、余额、请求明细在<router-link to="/console" style="color:var(--accent);">个人控制台</router-link>实时可查，流水永久留存</li>
-          <li>调用方式与免费模型完全一致：同一接口、同一密钥，<code>model</code> 填本模型 ID 即可；需注册登录并使用个人密钥</li>
-        </ul>
-        <p class="md-desc" style="margin-top:8px;">除本模型外的<b>免费模型注册即用、不收一分钱</b>（完整清单见模型中心），免费与收费互不影响，放心使用。</p>
-      </div>
-      <div class="md-block"><h3>支持的请求参数</h3>
-        <div class="md-table-wrap"><table class="md-table"><thead><tr><th>参数名</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead><tbody>
-          <tr v-for="p in profile.params" :key="p[0]"><td class="pname"><code>{{ p[0] }}</code></td><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td></tr>
-        </tbody></table></div>
-      </div>
-      <div v-if="profile.unsupported && profile.unsupported.length" class="md-block"><h3>不支持的参数</h3>
-        <p class="md-desc" style="margin-bottom:10px;">以下 OpenAI 标准参数在该模型类型下不可用或无意义：</p>
-        <div class="md-unsupported-grid">
-          <span v-for="p in profile.unsupported" :key="p" class="unsupp-pill"><span class="unsupp-x"><AqIcon name="cross" :size="11" /></span><code>{{ p }}</code></span>
+        <div class="ops">
+          <CopyBtn :text="id" label="复制 ID" />
+          <router-link to="/models?view=cap" class="btn sm">能力总览</router-link>
         </div>
       </div>
-      <div class="md-block"><h3>限制 / 不支持的功能</h3><ul class="md-limits"><li v-for="l in profile.limits" :key="l">{{ l }}</li></ul></div>
-      <div class="md-block"><h3>调用示例</h3><pre><CopyBtn :text="example" label="复制" /><code>{{ example }}</code></pre></div>
-    </div>
-  </section>
+
+      <div class="detail-grid fade-up">
+        <!-- ================= 左：信息栏 ================= -->
+        <div class="col-main">
+          <div class="card">
+            <b><AqIcon name="bulb" :size="16" />模型能力简介<template v-if="profile.noteName">&nbsp;· {{ profile.noteName }}</template></b>
+            <p class="mt12">{{ profile.desc }}</p>
+          </div>
+
+          <!-- 规格网格 -->
+          <div class="card mt16" v-if="profile.spec">
+            <b><AqIcon name="gauge" :size="16" />规格参数</b>
+            <div class="spec-grid mt12">
+              <div v-if="profile.spec.ctx" class="spec"><span>上下文窗口</span><b>{{ profile.spec.ctx }}</b></div>
+              <div v-if="profile.spec.size" class="spec"><span>参数量</span><b>{{ profile.spec.size }}</b></div>
+              <div v-if="profile.spec.dims" class="spec"><span>向量维度</span><b>{{ profile.spec.dims }}</b></div>
+              <div v-if="profile.spec.released" class="spec"><span>发布日期</span><b>{{ profile.spec.released }}</b></div>
+              <div class="spec"><span>上游平台</span><b>{{ platformLabel(meta.platform) }}</b></div>
+              <div class="spec"><span>能力类型</span><b>{{ profile.typeText }}</b></div>
+            </div>
+          </div>
+
+          <!-- 价格表（付费模型） -->
+          <div class="card mt16" v-if="priceRows">
+            <b><AqIcon name="coin" :size="16" />价格表</b>
+            <div class="tbl-wrap mt12">
+              <table class="table">
+                <tbody>
+                  <tr v-for="(p, i) in priceRows" :key="p[0]">
+                    <td style="width: 130px; color: var(--txt2);">{{ p[0] }}</td>
+                    <td class="num" v-if="i > 0"><b>{{ p[1] }}</b></td>
+                    <td v-else>{{ p[1] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ul class="mt12 bill-notes">
+              <li v-if="row?.mode === 'per_token' && row?.per_image == null">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>{{ isTide ? '；重复对话前缀命中缓存价，输入成本大幅更低' : '' }}</li>
+              <li v-else-if="isTideImage">按张计费：每次成功请求按 <code>n</code>（张数）扣费，失败自动全额退回</li>
+              <li v-else>按次计费：每次<b>成功</b>请求扣一次，与生成长度无关（写一句话和写一千字同价）</li>
+              <li v-if="isTide">先付后用：发起请求按预估预扣（输入 + <code>max_tokens</code> 输出上限），完成后<b>多退少补</b>；调小 <code>max_tokens</code> 可降低单次预扣</li>
+              <li>预充值制：余额用完自动返回 402 停止服务，<b>绝不透支</b>；<router-link to="/console?view=topup">在线充值即时到账</router-link></li>
+              <li>失败不扣费：上游失败 / 网络中断 / 服务异常，预扣金额<b>自动全额退回</b></li>
+              <li>调用方式与免费模型完全一致：同一接口、同一密钥，<code>model</code> 填本模型 ID 即可；需注册登录并使用个人密钥</li>
+            </ul>
+          </div>
+
+          <!-- 支持的请求参数 -->
+          <div class="card mt16">
+            <b><AqIcon name="list" :size="16" />支持的请求参数</b>
+            <div class="tbl-wrap mt12">
+              <table class="table">
+                <thead><tr><th>参数名</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr v-for="p in profile.params" :key="p[0]">
+                    <td><code>{{ p[0] }}</code></td>
+                    <td>{{ p[1] }}</td>
+                    <td>{{ p[2] }}</td>
+                    <td>{{ p[3] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 不支持的参数 -->
+          <div class="card mt16" v-if="profile.unsupported.length">
+            <b><AqIcon name="cross" :size="16" />不支持的参数</b>
+            <p class="dim mt8" style="font-size: 12.5px;">以下 OpenAI 标准参数在该模型类型下不可用或无意义：</p>
+            <div class="row wrap mt8" style="gap: 6px;">
+              <span v-for="p in profile.unsupported" :key="p" class="tag bad"><AqIcon name="cross" :size="11" /><code>{{ p }}</code></span>
+            </div>
+          </div>
+
+          <!-- 限制 / 不支持的功能 -->
+          <div class="card mt16">
+            <b><AqIcon name="alert" :size="16" />限制 / 注意事项</b>
+            <ul class="mt12 bill-notes">
+              <li v-for="l in profile.limits" :key="l">{{ l }}</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- ================= 右：调用示例 + 健康趋势 ================= -->
+        <div class="col-side">
+          <div class="card">
+            <div class="row between">
+              <b><AqIcon name="send" :size="16" />调用示例</b>
+              <CopyBtn :text="exCode" />
+            </div>
+            <div class="chips mt12">
+              <button class="chip" :class="{ on: exLang === 'curl' }" @click="exLang = 'curl'">cURL</button>
+              <button class="chip" :class="{ on: exLang === 'python' }" @click="exLang = 'python'">Python</button>
+              <button class="chip" :class="{ on: exLang === 'js' }" @click="exLang = 'js'">JavaScript</button>
+            </div>
+            <pre class="code mt8 ex-code">{{ exCode }}</pre>
+          </div>
+
+          <div class="card mt16">
+            <b><AqIcon name="activity" :size="16" />健康状态</b>
+            <div class="row mt12" style="gap: 14px;">
+              <div class="health-score">
+                <b class="num" v-if="health">{{ health.score }}</b>
+                <b v-else>--</b>
+                <span class="dim">健康分</span>
+              </div>
+              <div style="min-width: 0; flex: 1;">
+                <div class="row" style="gap: 7px; font-size: 12.5px;">
+                  <span class="dot" :class="liveDot() || 'warn'"></span>{{ liveText() }}
+                  <span v-if="live" class="dim" style="margin-left: auto; font-size: 11px;">近 {{ live.samples }} 次 · 最近活动 {{ live.last_ts ? new Date(live.last_ts * 1000).toLocaleTimeString() : '--' }}</span>
+                </div>
+                <div class="row wrap mt8" style="gap: 6px;">
+                  <span class="tag">时延 {{ live?.avg_latency_ms ? fmtLat(live.avg_latency_ms) : '--' }}</span>
+                  <span class="tag">速度 {{ live?.avg_tps ? live.avg_tps.toFixed(1) + ' tok/s' : '--' }}</span>
+                  <span class="tag">成功率 {{ live ? (live.ok_rate * 100).toFixed(1) + '%' : '--' }}</span>
+                </div>
+              </div>
+            </div>
+            <!-- 会话内趋势采样（每 20 秒一点，成功率%） -->
+            <div class="mt12" style="border-top: 1px dashed var(--line); padding-top: 10px;">
+              <div class="row between" style="font-size: 11.5px; color: var(--txt2);">
+                <span>健康趋势（本页停留期间 · 每 20 秒采样成功率）</span><span class="num">0–100%</span>
+              </div>
+              <div v-if="trendPts.length" class="trend-bars">
+                <span v-for="p in trendPts" :key="p.t" :title="new Date(p.t * 1000).toLocaleTimeString() + ' · ' + p.rate + '%'">
+                  <i :style="{ height: Math.max(8, p.rate) + '%' }" :class="p.rate >= 90 ? 'ok' : p.rate >= 50 ? 'warn' : 'bad'"></i>
+                </span>
+              </div>
+              <div v-else class="empty" style="padding: 14px 0;"><b>等待采样</b><div class="dim" style="font-size: 12px;">每 20 秒自动拉取一次该模型实时状态</div></div>
+            </div>
+            <div v-if="health" class="dim mt8" style="font-size: 11.5px;">{{ health.tip }}</div>
+          </div>
+
+          <div class="card">
+            <b><AqIcon name="book" :size="16" />相关页面</b>
+            <div class="mt12" style="display: grid; gap: 8px;">
+              <router-link to="/models" class="btn sm block">模型中心 · 全部模型</router-link>
+              <router-link to="/playground" class="btn sm block">在线体验 · 流式对话</router-link>
+              <router-link to="/api" class="btn sm block">API 文档 · 端点与错误码</router-link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
 </template>
+
+<style scoped>
+/* ---- 双栏布局：桌面 左信息 + 右示例；窄屏单列 ---- */
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 16px;
+  align-items: start;
+}
+.col-side {
+  position: sticky;
+  top: 68px;
+  display: grid;
+  gap: 0;
+}
+@media (max-width: 1020px) {
+  .detail-grid { grid-template-columns: 1fr; }
+  .col-side { position: static; }
+}
+.back-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
+.mid-id { font-size: 22px; font-weight: 700; color: var(--txt0); word-break: break-all; }
+.page-head { align-items: flex-start; }
+.page-head .sub { max-width: none; }
+
+/* ---- 规格网格 ---- */
+.spec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.spec { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 13px; background: var(--bg1); }
+.spec span { display: block; font-size: 11px; color: var(--txt2); }
+.spec b { font-size: 14.5px; color: var(--txt0); word-break: break-all; }
+
+/* ---- 列表 ---- */
+.bill-notes { padding-left: 18px; display: grid; gap: 5px; font-size: 13px; color: var(--txt2); }
+.bill-notes b { color: var(--txt0); }
+
+/* ---- 调用示例 / 健康趋势 ---- */
+.ex-code { min-height: 250px; max-height: 380px; white-space: pre; margin-top: 0; }
+.health-score { text-align: center; flex: none; }
+.health-score b { display: block; font-size: 34px; font-weight: 800; color: var(--txt0); line-height: 1.1; }
+.trend-bars { display: flex; align-items: flex-end; gap: 4px; height: 52px; margin-top: 8px; }
+.trend-bars span { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.trend-bars i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--acc-grad); }
+.trend-bars i.warn { background: var(--warn); }
+.trend-bars i.bad { background: var(--bad); }
+</style>

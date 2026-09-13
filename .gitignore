@@ -24,6 +24,7 @@
 *.priv
 *.pem
 gpt_email_account.txt
+/build/epay-switch.sh
 
 # 本地临时与备份
 /.tmp/

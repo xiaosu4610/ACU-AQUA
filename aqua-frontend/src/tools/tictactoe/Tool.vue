@@ -170,22 +170,44 @@ function restart() {
   <p class="tool-intro">你是 <b><AqIcon name="x-mark" :size="13" />（X）</b>，对手是 <b><AqIcon name="circle-mark" :size="13" />（O）</b>。「算法」对手使用 minimax 全量搜索，理论上不可战胜（最好结果逼平）；「LLM 模型」对手由你选择的 AI 模型实时思考落子——试试能不能抓住大模型的逻辑漏洞。</p>
   <div class="tool-bar">
     <span>对手</span>
-    <select id="tt-mode" v-model="mode">
+    <select v-model="mode" class="select">
       <option value="algo">minimax 算法</option>
       <option value="llm">LLM 模型</option>
     </select>
-    <select id="tt-llm-model" v-show="mode === 'llm'" v-model="llmModel">
+    <select v-show="mode === 'llm'" v-model="llmModel" class="select">
       <option v-for="m in chatOpts" :key="m" :value="m">{{ m }}</option>
     </select>
-    <button class="btn tool-run" id="tt-restart" @click="restart">重新开始</button>
-    <span class="tool-status" id="tt-status">{{ status }}</span>
+    <button class="btn" @click="restart"><AqIcon name="refresh" :size="14" />重新开始</button>
+    <span class="tool-status">{{ status }}</span>
   </div>
-  <div class="tt-layout">
-    <div class="tt-board" id="tt-board" :class="{ busy: busy && !over }">
-      <div v-for="(c, i) in board" :key="i" class="tt-cell" :class="{ taken: !!c }" @click="onCell(i)"><AqIcon v-if="c === 'X'" name="x-mark" :size="26" /><AqIcon v-else-if="c === 'O'" name="circle-mark" :size="26" /></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="tt-board" :class="{ busy: busy && !over }">
+        <div v-for="(c, i) in board" :key="i" class="tt-cell" :class="[c === 'X' ? 'x' : c === 'O' ? 'o' : '', { taken: !!c }]" @click="onCell(i)">
+          <AqIcon v-if="c === 'X'" name="x-mark" :size="26" />
+          <AqIcon v-else-if="c === 'O'" name="circle-mark" :size="26" />
+        </div>
+      </div>
     </div>
-    <div class="tt-side" id="tt-result">
-      <div v-if="resultMsg" class="tool-ai-box"><b>对局结束</b><div class="tool-ai-text">{{ resultMsg }}</div></div>
+    <div class="card out-pane">
+      <template v-if="resultMsg">
+        <div class="row between"><b>对局结束</b></div>
+        <div class="tool-prose">{{ resultMsg }}</div>
+      </template>
+      <div v-else class="out-empty">
+        <AqIcon name="gamepad" :size="26" />
+        <span>{{ status }}</span>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.tt-board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.tt-cell { aspect-ratio: 1; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg1); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast); }
+.tt-cell:hover { border-color: var(--acc); }
+.tt-cell.taken { cursor: default; }
+.tt-cell.x { color: var(--acc); }
+.tt-cell.o { color: var(--acc-2); }
+.tt-board.busy .tt-cell { pointer-events: none; opacity: .65; }
+</style>

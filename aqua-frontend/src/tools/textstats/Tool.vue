@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { TOOL_ICONS } from '@/tools/meta'
 
 const input = ref('')
 
@@ -22,24 +23,33 @@ const stats = computed(() => {
 
 <template>
   <p class="tool-intro">纯算法实时统计：边输入边出结果，不经任何 AI，零额度消耗。同样能力可通过 <code>POST /v1/tools/text-stats</code> 调用。</p>
-  <div class="tool-io">
-    <textarea v-model="input" rows="8" placeholder="粘贴或输入任意文本，实时统计…"></textarea>
-    <div class="tool-result">
-      <div v-if="!stats" class="tool-empty">等待输入…</div>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>文本（实时统计）</label>
+        <textarea v-model="input" class="textarea" rows="12" placeholder="粘贴或输入任意文本，实时统计…"></textarea>
+      </div>
+    </div>
+    <div class="card out-pane">
+      <div v-if="!stats" class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.textstats"></svg><span>等待输入…</span></div>
       <template v-else>
         <div class="tool-kv">
-          <div class="pg-hrow"><span>总字符（含空格换行）</span><b>{{ stats.chars }}</b></div>
-          <div class="pg-hrow"><span>净字符（去空白）</span><b>{{ stats.noSpace }}</b></div>
-          <div class="pg-hrow"><span>中文字数</span><b>{{ stats.cjk }}</b></div>
-          <div class="pg-hrow"><span>英文单词数</span><b>{{ stats.words }}</b></div>
-          <div class="pg-hrow"><span>行数 / 句数</span><b>{{ stats.lines }} / {{ stats.sentences }}</b></div>
-          <div class="pg-hrow"><span>预计阅读时长</span><b>约 {{ stats.readMin }} 分钟</b></div>
+          <div><span>总字符（含空格换行）</span><b>{{ stats.chars }}</b></div>
+          <div><span>净字符（去空白）</span><b>{{ stats.noSpace }}</b></div>
+          <div><span>中文字数</span><b>{{ stats.cjk }}</b></div>
+          <div><span>英文单词数</span><b>{{ stats.words }}</b></div>
+          <div><span>行数 / 句数</span><b>{{ stats.lines }} / {{ stats.sentences }}</b></div>
+          <div><span>预计阅读时长</span><b>约 {{ stats.readMin }} 分钟</b></div>
         </div>
         <div v-if="stats.top.length" class="tool-kv">
-          <div class="pg-hrow"><span>英文词频 Top10</span><b>次数</b></div>
-          <div v-for="t in stats.top" :key="t.w" class="pg-hrow"><span>{{ t.w }}</span><b>{{ t.n }}</b></div>
+          <div><span>英文词频 Top10</span><b>次数</b></div>
+          <div v-for="t in stats.top" :key="t.w"><span>{{ t.w }}</span><b>{{ t.n }}</b></div>
         </div>
       </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

@@ -2,12 +2,14 @@
 /* 登录 / 注册 / 忘记密码一体页：邮箱验证码注册 + 邮箱密码登录 + 邮箱验证码找回密码 */
 import { computed, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { forgotPassword, loadMe, login, register, resetPassword, sendCode } from '@/composables/useAuth'
+import AqIcon from '@/components/AqIcon.vue'
 import { errText } from '@/composables/useApi'
+import { forgotPassword, login, register, resetPassword, sendCode } from '@/composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const mode = ref<'login' | 'register' | 'forgot'>('login')
+type Mode = 'login' | 'register' | 'forgot'
+const mode = ref<Mode>('login')
 
 /* ===== 表单状态 ===== */
 const email = ref('')
@@ -19,6 +21,7 @@ const msg = ref('')
 const msgOk = ref(false)
 
 function show(text: string, ok = false) { msg.value = text; msgOk.value = ok }
+function setMode(m: Mode) { mode.value = m; msg.value = '' }
 
 /* ===== 验证码倒计时 ===== */
 const countdown = ref(0)
@@ -96,7 +99,7 @@ async function doResetPassword() {
   try {
     const m = await resetPassword(email.value.trim().toLowerCase(), resetCode.value.trim(), newPassword.value)
     show(m + '，请用新密码登录', true)
-    // 重置成功后全端会话已注销 → 回到登录表单并预填邮箱
+    // 重置成功后全端会话已注销 → 回到登录表单并清空密码
     setTimeout(() => {
       mode.value = 'login'
       password.value = ''
@@ -113,119 +116,121 @@ function goConsole() {
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="auth-wrap">
-      <div class="auth-card">
-        <h1 class="auth-title">AQUA 账号</h1>
-        <p class="auth-sub">注册登录后即可创建 API 密钥、查看用量与调用日志</p>
-        <div class="auth-tabs">
-          <button type="button" :class="{ active: mode === 'login' }" @click="mode = 'login'; msg = ''">登录</button>
-          <button type="button" :class="{ active: mode === 'register' }" @click="mode = 'register'; msg = ''">注册</button>
+  <div class="wrap">
+    <div class="fade-up">
+      <div class="login-shell">
+        <div class="card accent login-card">
+          <div class="row">
+            <span class="brand-ic"><AqIcon name="wave" :size="22" /></span>
+            <div>
+              <h1 class="login-title">AQUA 账号</h1>
+              <p class="sub">注册登录后即可创建 API 密钥、查看用量与调用日志</p>
+            </div>
+          </div>
+
+          <!-- 登录 / 注册 tab -->
+          <div class="chips mt16">
+            <button type="button" class="chip" :class="{ on: mode === 'login' }" @click="setMode('login')"><AqIcon name="user" :size="13" /> 登录</button>
+            <button type="button" class="chip" :class="{ on: mode === 'register' }" @click="setMode('register')"><AqIcon name="plus" :size="13" /> 注册</button>
+          </div>
+
+          <!-- 登录 -->
+          <form v-if="mode === 'login'" class="form mt16" @submit.prevent="doLogin">
+            <div class="field">
+              <label>邮箱或用户名</label>
+              <input v-model="email" class="input" type="text" autocomplete="username" placeholder="邮箱或用户名" required />
+            </div>
+            <div class="field">
+              <label>密码</label>
+              <input v-model="password" class="input" type="password" autocomplete="current-password" placeholder="密码" required />
+            </div>
+            <button class="btn primary block" type="submit" :disabled="busy || !email || !password">
+              <AqIcon name="key" :size="14" /> {{ busy ? '登录中…' : '登录' }}
+            </button>
+            <button type="button" class="btn ghost block" @click="goForgot">忘记密码？</button>
+          </form>
+
+          <!-- 忘记密码：发重置码 → 验证码 + 新密码 -->
+          <form v-else-if="mode === 'forgot'" class="form mt16" @submit.prevent="doResetPassword">
+            <div class="banner"><AqIcon name="shield" :size="14" /> 找回密码：验证码将发送到注册邮箱</div>
+            <div class="field">
+              <label>注册邮箱</label>
+              <div class="row">
+                <input v-model="email" class="input grow" type="email" autocomplete="email" placeholder="you@example.com" required />
+                <button class="btn code-btn" type="button" :disabled="busy || !emailOk || countdown > 0" @click="doSendResetCode">
+                  {{ countdown > 0 ? countdown + 's' : '发送验证码' }}
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label>验证码</label>
+              <input v-model="resetCode" class="input" inputmode="numeric" maxlength="6" placeholder="6 位数字验证码" required />
+            </div>
+            <div class="field">
+              <label>新密码</label>
+              <input v-model="newPassword" class="input" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="8~72 位，需包含字母和数字" required />
+            </div>
+            <button class="btn primary block" type="submit" :disabled="busy || !email || !resetCode || !newPassword">
+              {{ busy ? '重置中…' : '重置密码' }}
+            </button>
+            <button type="button" class="btn ghost block" @click="setMode('login')">返回登录</button>
+          </form>
+
+          <!-- 注册 -->
+          <form v-else class="form mt16" @submit.prevent="doRegister">
+            <div class="field">
+              <label>邮箱</label>
+              <div class="row">
+                <input v-model="email" class="input grow" type="email" autocomplete="email" placeholder="you@example.com" required />
+                <button class="btn code-btn" type="button" :disabled="busy || !emailOk || countdown > 0" @click="doSendCode">
+                  {{ countdown > 0 ? countdown + 's' : '发送验证码' }}
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label>验证码</label>
+              <input v-model="code" class="input" inputmode="numeric" maxlength="6" placeholder="6 位数字验证码" required />
+            </div>
+            <div class="field">
+              <label>用户名</label>
+              <input v-model="username" class="input" maxlength="20" placeholder="2~20 位，支持中文 / 字母 / 数字 / 下划线" required />
+            </div>
+            <div class="field">
+              <label>密码</label>
+              <input v-model="password" class="input" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="8~72 位，需包含字母和数字" required />
+            </div>
+            <button class="btn primary block" type="submit" :disabled="busy || !email || !code || !username || !password">
+              {{ busy ? '注册中…' : '注册并登录' }}
+            </button>
+          </form>
+
+          <p v-if="msg" class="msg mt12" :class="msgOk ? 'ok' : 'bad'">{{ msg }}</p>
+          <p v-if="msg && !msgOk" class="dim center mt8">
+            解决不了？<a href="https://qm.qq.com/q/qoe6XbsVge" target="_blank" rel="noopener">QQ 一群 1103667832</a>
+            / <a href="https://qm.qq.com/q/o8QDbza2Ge" target="_blank" rel="noopener">二群 1006740220</a>
+            或 <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">QQ 频道</a> 联系我们
+          </p>
+          <p class="dim center foot">注册即表示同意：仅用于技术学习与交流，勿用于违法违规用途</p>
         </div>
-
-        <!-- 登录 -->
-        <form v-if="mode === 'login'" class="auth-form" @submit.prevent="doLogin">
-          <label>邮箱或用户名</label>
-          <input v-model="email" type="text" autocomplete="username" placeholder="邮箱或用户名" required />
-          <label>密码</label>
-          <input v-model="password" type="password" autocomplete="current-password" placeholder="密码" required />
-          <button class="btn tool-run auth-btn" type="submit" :disabled="busy || !email || !password">
-            {{ busy ? '登录中…' : '登录' }}
-          </button>
-          <button type="button" class="forgot-link" @click="goForgot">忘记密码？</button>
-        </form>
-
-        <!-- 忘记密码：发重置码 → 验证码 + 新密码 -->
-        <form v-else-if="mode === 'forgot'" class="auth-form" @submit.prevent="doResetPassword">
-          <label>注册邮箱</label>
-          <div class="code-row">
-            <input v-model="email" type="email" autocomplete="email" placeholder="you@example.com" required />
-            <button class="btn tool-run code-btn" type="button" :disabled="busy || !emailOk || countdown > 0" @click="doSendResetCode">
-              {{ countdown > 0 ? countdown + 's' : '发送验证码' }}
-            </button>
-          </div>
-          <label>验证码</label>
-          <input v-model="resetCode" inputmode="numeric" maxlength="6" placeholder="6 位数字验证码" required />
-          <label>新密码</label>
-          <input v-model="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="8~72 位，需包含字母和数字" required />
-          <button class="btn tool-run auth-btn" type="submit" :disabled="busy || !email || !resetCode || !newPassword">
-            {{ busy ? '重置中…' : '重置密码' }}
-          </button>
-          <button type="button" class="forgot-link" @click="mode = 'login'; msg = ''">返回登录</button>
-        </form>
-
-        <!-- 注册 -->
-        <form v-else class="auth-form" @submit.prevent="doRegister">
-          <label>邮箱</label>
-          <div class="code-row">
-            <input v-model="email" type="email" autocomplete="email" placeholder="you@example.com" required />
-            <button class="btn tool-run code-btn" type="button" :disabled="busy || !emailOk || countdown > 0" @click="doSendCode">
-              {{ countdown > 0 ? countdown + 's' : '发送验证码' }}
-            </button>
-          </div>
-          <label>验证码</label>
-          <input v-model="code" inputmode="numeric" maxlength="6" placeholder="6 位数字验证码" required />
-          <label>用户名</label>
-          <input v-model="username" maxlength="20" placeholder="2~20 位，支持中文 / 字母 / 数字 / 下划线" required />
-          <label>密码</label>
-          <input v-model="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="8~72 位，需包含字母和数字" required />
-          <button class="btn tool-run auth-btn" type="submit" :disabled="busy || !email || !code || !username || !password">
-            {{ busy ? '注册中…' : '注册并登录' }}
-          </button>
-        </form>
-
-        <p v-if="msg" class="auth-msg" :class="{ ok: msgOk }">{{ msg }}</p>
-        <p v-if="msg && !msgOk" class="auth-help">
-          解决不了？<a href="https://qm.qq.com/q/qoe6XbsVge" target="_blank" rel="noopener">QQ 一群 1103667832</a>
-          / <a href="https://qm.qq.com/q/o8QDbza2Ge" target="_blank" rel="noopener">二群 1006740220</a>
-          或 <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">QQ 频道</a> 联系我们
-        </p>
-        <p class="auth-foot">注册即表示同意：仅用于技术学习与交流，勿用于违法违规用途</p>
       </div>
     </div>
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.auth-wrap { display: flex; justify-content: center; padding: 48px 0 64px; }
-.auth-card {
-  width: 100%; max-width: 420px;
-  background: var(--card-bg, rgba(255,255,255,.04));
-  border: 1px solid var(--border, rgba(128,140,160,.2));
-  border-radius: 16px; padding: 32px 28px;
+/* 布局微调：居中玻璃卡 + 验证码行 + 文案居中 */
+.login-shell { display: flex; justify-content: center; padding: 40px 0 72px; }
+.login-card { width: 100%; max-width: 420px; padding: 28px; }
+.brand-ic {
+  width: 44px; height: 44px; flex: none; border-radius: 12px;
+  background: var(--acc-soft); color: var(--acc);
+  display: flex; align-items: center; justify-content: center;
 }
-.auth-title { font-size: 22px; font-weight: 800; margin: 0 0 4px; }
-.auth-sub { font-size: 13px; color: var(--muted, #8a94a6); margin: 0 0 20px; }
-.auth-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-.auth-tabs button {
-  flex: 1; padding: 10px 0; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.25));
-  background: transparent; color: inherit; font-weight: 600; cursor: pointer; transition: all .15s;
-}
-.auth-tabs button.active {
-  background: var(--btn-grad, linear-gradient(135deg, #0891b2, #0284c7));
-  color: #fff; border-color: transparent;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 2px 10px rgba(8, 145, 178, .35);
-}
-.auth-form { display: flex; flex-direction: column; gap: 6px; }
-.auth-form label { font-size: 12.5px; color: var(--muted, #8a94a6); margin-top: 8px; }
-.auth-form input {
-  padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border, rgba(128,140,160,.3));
-  background: transparent; color: inherit; font-size: 14px; outline: none; font-family: inherit;
-}
-.auth-form input:focus { border-color: var(--accent, #0b6cff); }
-.code-row { display: flex; gap: 8px; }
-.code-row input { flex: 1; min-width: 0; }
+.login-title { font-size: 22px; }
+.login-card .sub { color: var(--txt2); font-size: 13px; margin-top: 2px; }
+.form { display: flex; flex-direction: column; gap: 14px; }
+.grow { flex: 1; min-width: 0; }
 .code-btn { white-space: nowrap; padding: 0 14px; font-size: 13px; }
-.auth-btn { margin-top: 16px; width: 100%; padding: 12px 0; font-size: 15px; }
-.forgot-link {
-  margin-top: 12px; background: none; border: none; cursor: pointer;
-  font-size: 12.5px; color: var(--accent, #5eead4); padding: 0; align-self: center;
-}
-.forgot-link:hover { text-decoration: underline; }
-.auth-msg { margin: 14px 0 0; font-size: 13px; color: #f87171; text-align: center; }
-.auth-msg.ok { color: #34d399; }
-.auth-help { margin: 8px 0 0; font-size: 12px; color: var(--muted, #8a94a6); text-align: center; }
-.auth-help a { color: var(--accent, #5eead4); text-decoration: none; }
-.auth-help a:hover { text-decoration: underline; }
-.auth-foot { margin: 18px 0 0; font-size: 11.5px; color: var(--muted, #8a94a6); text-align: center; }
+.center { text-align: center; }
+.foot { margin-top: 16px; font-size: 11.5px; color: var(--txt3); }
 </style>

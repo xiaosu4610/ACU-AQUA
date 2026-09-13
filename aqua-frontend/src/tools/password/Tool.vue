@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
 
 const len = ref(16)
@@ -38,26 +40,49 @@ async function run() {
 
 <template>
   <p class="tool-intro">批量生成高强度随机密码——由网关服务端熵源生成，保证每类选中字符至少出现一次。</p>
-  <div class="tool-bar">
-    <span>长度</span>
-    <input v-model.number="len" type="number" min="8" max="64" value="16" style="width:70px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:var(--mono);">
-    <span>数量</span>
-    <input v-model.number="cnt" type="number" min="1" max="20" value="5" style="width:70px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-family:var(--mono);">
-  </div>
-  <div class="tool-bar">
-    <span>字符类型</span>
-    <label style="display:inline-flex;align-items:center;gap:4px;"><input v-model="upper" type="checkbox">大写</label>
-    <label style="display:inline-flex;align-items:center;gap:4px;"><input v-model="lower" type="checkbox">小写</label>
-    <label style="display:inline-flex;align-items:center;gap:4px;"><input v-model="digits" type="checkbox">数字</label>
-    <label style="display:inline-flex;align-items:center;gap:4px;"><input v-model="symbols" type="checkbox">符号</label>
-    <button class="btn tool-run" @click="run">生成</button>
-  </div>
-  <div class="tool-result">
-    <div v-if="msg" class="tool-empty">{{ msg }}</div>
-    <div v-else-if="loading" class="tool-loading">生成中…</div>
-    <div v-for="p in list" :key="p" class="pg-hrow" style="font-family:var(--mono);">
-      <span style="user-select:all;">{{ p }}</span>
-      <CopyBtn :text="p" />
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="form-grid">
+        <div class="field">
+          <label>长度（8-64）</label>
+          <input v-model.number="len" class="input mono" type="number" min="8" max="64">
+        </div>
+        <div class="field">
+          <label>数量（1-20）</label>
+          <input v-model.number="cnt" class="input mono" type="number" min="1" max="20">
+        </div>
+      </div>
+      <div class="row wrap">
+        <span class="dim" style="font-size: 12.5px; font-weight: 600;">字符类型</span>
+        <label class="opt"><input v-model="upper" type="checkbox">大写</label>
+        <label class="opt"><input v-model="lower" type="checkbox">小写</label>
+        <label class="opt"><input v-model="digits" type="checkbox">数字</label>
+        <label class="opt"><input v-model="symbols" type="checkbox">符号</label>
+      </div>
+      <button class="btn primary" :disabled="loading" @click="run"><svg class="bic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.password"></svg>生成</button>
+    </div>
+    <div class="card out-pane">
+      <div v-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+      <div v-else-if="loading" class="out-pane">
+        <div class="skeleton" style="width: 78%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 70%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 84%; min-height: 13px;"></div>
+      </div>
+      <template v-else-if="list.length">
+        <div class="tool-kv mono">
+          <div v-for="p in list" :key="p">
+            <span style="user-select: all; color: var(--txt0);">{{ p }}</span>
+            <b><CopyBtn :text="p" size="xs" /></b>
+          </div>
+        </div>
+      </template>
+      <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.password"></svg><span>点击「生成」批量产出强密码</span></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.opt { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--txt2); cursor: pointer; user-select: none; }
+.ticon { width: 26px; height: 26px; opacity: .55; }
+.bic { width: 14px; height: 14px; }
+</style>

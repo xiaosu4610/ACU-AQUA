@@ -324,8 +324,9 @@ func InitTables(d *sql.DB) error {
 			rows.Close()
 		}
 		if !has {
-		if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.def)); err != nil {
-			return fmt.Errorf("补列失败 %s.%s: %w", a.table, a.col, err)
+			if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.def)); err != nil {
+				return fmt.Errorf("补列失败 %s.%s: %w", a.table, a.col, err)
+			}
 		}
 	}
 	// admin_audit 列名统一：旧迁移库列名是 target_user，代码统一用 target（SQLite 3.25+ RENAME）

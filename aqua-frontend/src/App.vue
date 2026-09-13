@@ -1,332 +1,228 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+/* App 双壳：门户（顶栏+页脚） / 工作台（侧栏）——视觉与骨架，页面零壳样式依赖 */
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useTheme } from '@/composables/useTheme'
-import { avatarUrl, isLoggedIn, me } from '@/composables/useAuth'
-import AqIcon from '@/components/AqIcon.vue'
+import { useTheme } from './composables/useTheme'
+import { useMeta } from './composables/useMeta'
+import { sessionToken, me, loadMe, avatarUrl, logout } from './composables/useAuth'
+import AqIcon from './components/AqIcon.vue'
 
 const route = useRoute()
-const { theme, set } = useTheme()
+const { theme, set: setTheme } = useTheme()
+const { meta, loadMeta } = useMeta()
 
-/** 工作台外壳：这些路径下用侧栏工作台替代门户顶栏（New API 式集中操作） */
-const BENCH_PATHS = ['/console', '/finance', '/usage', '/pool', '/admin']
-const isBench = computed(() => BENCH_PATHS.some(p => route.path === p || route.path.startsWith(p + '/')))
+onMounted(() => { loadMeta(); if (sessionToken.value) loadMe() })
 
-/** 工作台侧栏导航 */
-const benchNav = [
-  { grp: '工作台', items: [
-    { to: '/console', label: '总览 · 密钥', d: 'M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5M9 21v-6h6v6' },
-    { to: '/finance', label: '账单中心', d: 'M2 6h20v14H2zM2 10h20M6 15h4' },
-    { to: '/usage', label: '我的用量', d: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z' },
-    { to: '/pool', label: '众筹池', d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
-  ] },
-  { grp: '快捷入口', items: [
-    { to: '/models', label: '模型中心', d: 'M12 2 2 7l10 5 10-5-10-5zm-10 15 10 5 10-5m-20-5 10 5 10-5' },
-    { to: '/playground', label: 'AI 对话', d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
-    { to: '/api', label: 'API 文档', d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' },
-  ] },
-  { grp: '站长', items: [
-    { to: '/admin', label: '站点管理', d: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' },
-  ] },
+/* 工作台壳路径 */
+const BENCH = ['/console', '/finance', '/usage', '/pool', '/admin']
+const isBench = computed(() => BENCH.includes(route.path))
+
+/* ---- 门户导航 ---- */
+interface NavLeaf { label: string; to: string }
+const PORTAL_NAV: { label: string; to: string; match: string[]; children?: NavLeaf[] }[] = [
+  { label: '首页', to: '/home', match: ['/home'] },
+  {
+    label: '体验中心', to: '/playground', match: ['/playground', '/treehole', '/tools', '/prompts', '/arena'],
+    children: [
+      { label: 'AI 对话', to: '/playground' },
+      { label: '树洞', to: '/treehole' },
+      { label: '工具箱', to: '/tools' },
+      { label: '提示词工坊', to: '/prompts' },
+      { label: '模型竞技场', to: '/arena' },
+    ],
+  },
+  {
+    label: '模型中心', to: '/models', match: ['/models', '/model'],
+    children: [
+      { label: '模型列表', to: '/models' },
+      { label: '能力总览', to: '/models?view=cap' },
+    ],
+  },
+  { label: 'API 文档', to: '/api', match: ['/api'] },
+  {
+    label: '数据中心', to: '/status', match: ['/status', '/pool', '/community'],
+    children: [
+      { label: '状态大屏', to: '/status' },
+      { label: '众筹算力池', to: '/pool' },
+      { label: '社区', to: '/community' },
+    ],
+  },
+  { label: '赞助', to: '/sponsor', match: ['/sponsor'] },
 ]
-function benchActive(to: string): boolean {
-  const p = route.path
-  if (to === '/console') return p === '/console'
-  return p === to || p.startsWith(to + '/')
+const mobileOpen = ref(false)
+watch(() => route.path, () => { mobileOpen.value = false })
+
+function navOn(n: { match: string[] }): boolean {
+  if (n.match.includes(route.path)) return true
+  return n.match.some(m => route.path.startsWith(m) && m !== '/home')
 }
 
-/** 打开的下拉菜单（同一时间最多一个；点击外部/切路由自动收起） */
-const openMenu = ref('')
-function toggleMenu(name: string) {
-  openMenu.value = openMenu.value === name ? '' : name
-}
-document.addEventListener('click', e => {
-  if (!(e.target as HTMLElement).closest('.nav-drop')) openMenu.value = ''
-})
-watch(() => route.fullPath, () => { openMenu.value = ''; sheet.value = false })
-
-function isActive(tab: string): boolean {
-  const p = route.path.split('?')[0]
-  if (tab === 'home') return p === '/' || p === '/home'
-  if (tab === 'models') return p === '/models' || p.startsWith('/model/')
-  return p.startsWith('/' + tab)
-}
-
-/* ===== 移动端底部标签栏 ===== */
-const sheet = ref(false)
-/** 抽屉里除四个底部 Tab 外的全部入口 */
-const sheetLinks = [
-  { to: '/api', label: 'API 文档', icon: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' },
-  { to: '/treehole', label: '树洞', icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' },
-  { to: '/prompts', label: '提示词', icon: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' },
-  { to: '/arena', label: '竞技场', icon: '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6L8 2z"/><path d="M4 6h16"/><path d="M18 2l3 4v14a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6l3-4z"/>' },
-  { to: '/status', label: '状态大屏', icon: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>' },
-  { to: '/usage', label: '我的用量', icon: '<path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>' },
-  { to: '/sponsor', label: '赞助支持', icon: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>' },
+/* ---- 工作台导航 ---- */
+const BENCH_NAV = [
+  {
+    grp: '工作台',
+    items: [
+      { label: '总览 · 密钥', to: '/console', icon: 'layout', match: ['/console'] },
+      { label: '账单中心', to: '/finance', icon: 'wallet', match: ['/finance'] },
+      { label: '我的用量', to: '/usage', icon: 'chart', match: ['/usage'] },
+      { label: '众筹池', to: '/pool', icon: 'coin', match: ['/pool'] },
+    ],
+  },
+  {
+    grp: '快捷入口',
+    items: [
+      { label: '模型中心', to: '/models', icon: 'box', match: [] },
+      { label: 'AI 对话', to: '/playground', icon: 'chat', match: [] },
+      { label: 'API 文档', to: '/api', icon: 'book', match: [] },
+    ],
+  },
+  {
+    grp: '站长',
+    items: [
+      { label: '站点管理', to: '/admin', icon: 'settings', match: ['/admin'] },
+    ],
+  },
 ]
-const openSheet = () => { openMenu.value = ''; sheet.value = true }
+function benchOn(it: { match: string[] }): boolean { return it.match.includes(route.path) }
+
+const initial = computed(() => (me.value?.username || 'A').charAt(0).toUpperCase())
+const siteName = computed(() => meta.value?.name || 'AQUA')
+
+async function doLogout() {
+  await logout()
+  if (isBench.value && route.path !== '/admin') location.href = '/home'
+}
 </script>
 
 <template>
-  <!-- ===== 工作台外壳（/console /finance /usage /pool /admin）：侧栏集中操作 ===== -->
-  <div v-if="isBench" class="bench-wrap">
-    <nav class="topnav">
-      <div class="wrap nav-inner">
-        <router-link class="nav-brand" to="/home">
-          <img src="/favicon.ico" alt="AQUA" width="34" height="34" style="border-radius:8px; display:block;" class="nav-logo">
-          <span>AQUA</span>
+  <!-- ============ 工作台壳 ============ -->
+  <div v-if="isBench" class="bench">
+    <aside class="bside">
+      <router-link to="/home" class="brand" style="padding: 2px 11px 10px;">
+        <AqIcon name="droplet" :size="22" />
+        <em>{{ siteName }}</em>
+      </router-link>
+      <template v-for="g in BENCH_NAV" :key="g.grp">
+        <div class="grp">{{ g.grp }}</div>
+        <router-link
+          v-for="it in g.items" :key="it.to" :to="it.to"
+          class="blink" :class="{ on: benchOn(it) }"
+        >
+          <AqIcon :name="it.icon" :size="16" />{{ it.label }}
         </router-link>
-        <div class="nav-right">
-          <div class="theme-switch">
-            <button class="theme-btn" :class="{ active: theme === 'light' }" data-theme="light" title="白天亮色" @click="set('light')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            </button>
-            <button class="theme-btn" :class="{ active: theme === 'dark' }" data-theme="dark" title="深蓝模式" @click="set('dark')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-            </button>
-          </div>
-          <router-link v-if="isLoggedIn()" to="/console" class="nav-avatar" :title="me?.username || '个人控制台'">
-            <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + me?.created_ts" alt="" />
-            <span v-else class="nav-avatar-txt">{{ (me?.username || '我').slice(0, 1) }}</span>
-          </router-link>
-          <router-link v-else to="/login" class="nav-login-btn">登录 / 注册</router-link>
+      </template>
+      <div class="spacer" />
+      <div v-if="me" class="buser">
+        <div class="avatar"><img v-if="avatarUrl()" :src="avatarUrl()" alt="" /><template v-else>{{ initial }}</template></div>
+        <div>
+          <div class="nm">{{ me.username }}</div>
+          <div class="st">UID #{{ me.id }}</div>
         </div>
       </div>
-    </nav>
-    <div class="wrap bench">
-      <aside class="bench-side">
-        <template v-for="g in benchNav" :key="g.grp">
-          <div class="bench-side-title">{{ g.grp }}</div>
-          <router-link v-for="it in g.items" :key="it.to" :to="it.to" class="bench-link" :class="{ active: benchActive(it.to) }">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="it.d"/></svg>
-            <span>{{ it.label }}</span>
-          </router-link>
-        </template>
-        <div class="bench-user" v-if="isLoggedIn()">
-          <span class="bu-avatar">
-            <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + me?.created_ts" alt="" />
-            <template v-else>{{ (me?.username || '我').slice(0, 1) }}</template>
-          </span>
-          <span style="min-width:0;">
-            <div class="bu-name">{{ me?.username || '我' }}</div>
-            <div class="bu-sub">已登录 · 工作台</div>
-          </span>
+      <button v-if="me" class="btn ghost sm bhide-m" @click="doLogout"><AqIcon name="arrow-right" :size="14" />退出登录</button>
+      <router-link v-if="me" to="/home" class="blink bhide-m"><AqIcon name="home" :size="16" />返回门户</router-link>
+      <router-link v-else to="/login" class="blink"><AqIcon name="key" :size="16" />登录 / 注册</router-link>
+    </aside>
+
+    <div class="bmain">
+      <header class="btop">
+        <div class="crumb">
+          <router-link to="/home" style="color: var(--txt2);">{{ siteName }}</router-link>
+          <span style="margin: 0 6px; opacity: .5;">/</span>
+          <b>{{ $route.meta.title || '工作台' }}</b>
         </div>
-        <router-link to="/home" class="bench-back">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
-          返回门户首页
+        <div class="sp" />
+        <button class="theme-btn" :title="theme === 'dark' ? '切换亮色' : '切换暗色'" @click="setTheme(theme === 'dark' ? 'light' : 'dark')">
+          <AqIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="16" />
+        </button>
+        <router-link v-if="me" to="/console" class="avatar-btn" :title="me.username">
+          <img v-if="avatarUrl()" :src="avatarUrl()" alt="" /><template v-else>{{ initial }}</template>
         </router-link>
-      </aside>
-      <main class="bench-main route-page">
-        <router-view />
+      </header>
+      <main class="bcontent">
+        <router-view v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <component :is="Component" :key="route.path" />
+          </transition>
+        </router-view>
       </main>
     </div>
   </div>
 
-  <!-- ===== 门户外壳（首页 / 模型 / 体验 / 文档） ===== -->
+  <!-- ============ 门户壳 ============ -->
   <template v-else>
-  <!-- ===== 顶部切换栏 ===== -->
-  <nav class="topnav">
-    <div class="wrap nav-inner">
-      <router-link class="nav-brand" to="/home">
-        <img src="/favicon.ico" alt="AQUA" width="34" height="34" style="border-radius:8px; display:block;" class="nav-logo">
-        <span>AQUA</span>
-      </router-link>
-      <div class="nav-right">
-        <div class="nav-tabs">
-          <router-link to="/home">
-            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9 21v-6h6v6"/></svg></span>
-            <span class="nt nt-long">首页</span><span class="nt nt-short">首页</span>
-          </router-link>
+    <header class="ptop">
+      <div class="ptop-in">
+        <router-link to="/home" class="brand">
+          <AqIcon name="droplet" :size="24" />
+          <em>{{ siteName }}</em>
+        </router-link>
 
-          <div class="nav-drop" :class="{ open: openMenu === 'exp', active: isActive('playground') || isActive('tools') || isActive('treehole') || isActive('prompts') }">
-            <button type="button" class="drop-toggle" @click.stop="toggleMenu('exp')">
-              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>
-              <span class="dt-label">体验中心</span>
-              <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            <div class="drop-panel" v-show="openMenu === 'exp'">
-              <router-link to="/playground">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>AI 对话</span>
-                <span class="ddesc">在线对话 · 流式体验 · 模型即点即用</span>
-              </router-link>
-              <router-link to="/tools">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>工具箱</span>
-                <span class="ddesc">25+ 款实用小工具 · 翻译 / 哈希 / 短链等</span>
-              </router-link>
-              <router-link to="/treehole">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>树洞</span>
-                <span class="ddesc">匿名倾诉 · 推理模型深度陪伴</span>
-              </router-link>
-              <router-link to="/prompts">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span>提示词工坊</span>
-                <span class="ddesc">精选提示词模板 · 一键填入对话</span>
+        <nav class="pnav" aria-label="主导航">
+          <div v-for="n in PORTAL_NAV" :key="n.label" class="item">
+            <router-link :to="n.to" class="nl" :class="{ on: navOn(n) }">
+              {{ n.label }}<AqIcon v-if="n.children" name="chevron-down" :size="13" />
+            </router-link>
+            <div v-if="n.children" class="drop">
+              <div class="dt">{{ n.label }}</div>
+              <router-link v-for="c in n.children" :key="c.to" :to="c.to">
+                <AqIcon name="arrow-right" :size="13" />{{ c.label }}
               </router-link>
             </div>
           </div>
+        </nav>
 
-          <router-link to="/models">
-            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
-            <span class="nt nt-long">模型中心</span><span class="nt nt-short">模型</span>
-          </router-link>
-          <router-link to="/api">
-            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
-            <span class="nt nt-long">API 文档</span><span class="nt nt-short">API</span>
-          </router-link>
-          <router-link to="/sponsor" class="nav-sponsor" title="赞助 AQUA · 请作者喝杯咖啡">
-            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span>
-            <span class="nt nt-long">赞助</span><span class="nt nt-short">赞助</span>
-          </router-link>
-
-          <div class="nav-drop" :class="{ open: openMenu === 'data', active: isActive('arena') || isActive('status') || isActive('usage') }">
-            <button type="button" class="drop-toggle" @click.stop="toggleMenu('data')">
-              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
-              <span class="dt-label">数据中心</span>
-              <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            <div class="drop-panel" v-show="openMenu === 'data'">
-              <router-link to="/arena">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6L8 2z"/><path d="M4 6h16"/><path d="M18 2l3 4v14a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6l3-4z"/></svg></span>模型竞技场</span>
-                <span class="ddesc">双模型盲测对比 · 投票看胜率榜</span>
-              </router-link>
-              <router-link to="/status">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>状态大屏</span>
-                <span class="ddesc">全站调用量 · 成功率 · 实时监控</span>
-              </router-link>
-              <router-link to="/usage">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span>我的用量</span>
-                <span class="ddesc">按密钥查统计 · 匿名指纹不存明文</span>
-              </router-link>
-              <router-link to="/finance">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg></span>财务管理中心</span>
-                <span class="ddesc">余额 · 消费统计 · 流水 · 充值记录</span>
-              </router-link>
-              <router-link to="/community">
-                <span class="drow"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>加入 Q 群</span>
-                <span class="ddesc">一群 / 二群 / 频道 · 交流与活动通知</span>
-              </router-link>
-            </div>
-          </div>
-        </div>
-        <div class="theme-switch">
-          <button class="theme-btn" :class="{ active: theme === 'light' }" data-theme="light" title="白天亮色" @click="set('light')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <div class="ptop-sp" />
+        <div class="ptop-acts">
+          <button class="theme-btn" :title="theme === 'dark' ? '切换亮色' : '切换暗色'" @click="setTheme(theme === 'dark' ? 'light' : 'dark')">
+            <AqIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="16" />
           </button>
-          <button class="theme-btn" :class="{ active: theme === 'dark' }" data-theme="dark" title="深蓝模式" @click="set('dark')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+          <router-link v-if="me" to="/console" class="avatar-btn" :title="me.username">
+            <img v-if="avatarUrl()" :src="avatarUrl()" alt="" /><template v-else>{{ initial }}</template>
+          </router-link>
+          <router-link v-else-if="route.path !== '/login'" to="/login" class="btn primary sm">登录 / 注册</router-link>
+          <button class="burger" aria-label="菜单" @click="mobileOpen = !mobileOpen">
+            <AqIcon :name="mobileOpen ? 'cross' : 'menu'" :size="17" />
           </button>
         </div>
-        <!-- 用户区：登录 → 头像入口；未登录 → 登录按钮 -->
-        <router-link v-if="isLoggedIn()" to="/console" class="nav-avatar" :title="me?.username || '个人控制台'">
-          <img v-if="me?.avatar_ext" :src="avatarUrl() + '?t=' + me?.created_ts" alt="" />
-          <span v-else class="nav-avatar-txt">{{ (me?.username || '我').slice(0, 1) }}</span>
-        </router-link>
-        <router-link v-else to="/login" class="nav-login-btn">登录 / 注册</router-link>
       </div>
-    </div>
-  </nav>
 
-  <div class="wrap">
-    <router-view />
-  </div>
-  </template><!-- /门户外壳 -->
+      <!-- 移动端菜单 -->
+      <nav v-if="mobileOpen" class="mnav">
+        <template v-for="n in PORTAL_NAV" :key="n.label">
+          <div class="dt">{{ n.label }}</div>
+          <router-link v-if="!n.children" :to="n.to" :class="{ on: navOn(n) }">{{ n.label }}</router-link>
+          <router-link v-for="c in n.children" :key="c.to" :to="c.to">{{ c.label }}</router-link>
+        </template>
+      </nav>
+    </header>
 
-  <footer>
-    <p>AQUA · <b>ACU 工程系列</b>开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</p>
-    <p style="margin-top:8px;">
-      <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">Gitee <AqIcon name="star" :size="13" /></a> ·
-      <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener" style="color:var(--accent);">GitHub <AqIcon name="star" :size="13" /></a> ·
-      <router-link to="/finance" style="color:var(--accent);">财务管理中心</router-link> ·
-      <router-link to="/community" style="color:var(--accent);">加入 Q 群（一群 / 二群 / 频道）</router-link> ·
-      <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener" style="color:var(--accent);">QQ 频道（pd57362562）</a> ·
-      <router-link to="/sponsor" style="color:var(--accent);">赞助支持</router-link>
-      · <span style="color:var(--muted);">v5.2.0 沧溟</span>
-    </p>
-  </footer>
+    <router-view v-slot="{ Component }">
+      <transition name="page" mode="out-in">
+        <component :is="Component" :key="route.path" />
+      </transition>
+    </router-view>
 
-  <!-- 全局悬浮 Q 群入口（门户页面可见） -->
-  <router-link v-if="!isBench" to="/community" class="qq-fab" title="加入官方 Q 群（一群 / 二群 / 频道）" aria-label="加入官方 Q 群">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-    <span>Q群</span>
-  </router-link>
-
-  <!-- ===== 移动端底部标签栏（≤860px，样式见 theme.css，仅门户）===== -->
-  <nav v-if="!isBench" class="tabbar">
-    <router-link to="/home" :class="{ active: isActive('home') }">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9 21v-6h6v6"/></svg>
-      <span>首页</span>
-    </router-link>
-    <router-link to="/models" :class="{ active: isActive('models') }">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-      <span>模型</span>
-    </router-link>
-    <router-link to="/playground" :class="{ active: isActive('playground') }">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      <span>对话</span>
-    </router-link>
-    <router-link to="/tools" :class="{ active: isActive('tools') }">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-      <span>工具</span>
-    </router-link>
-    <button type="button" :class="{ active: sheet }" @click="openSheet">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
-      <span>更多</span>
-    </button>
-  </nav>
-
-  <!-- 「更多」抽屉：底部 Tab 未收录的全部入口（仅门户） -->
-  <div class="sheet-mask" v-if="!isBench && sheet" @click="sheet = false">
-    <div class="sheet" @click.stop>
-      <div class="sheet-grid">
-        <router-link v-for="link in sheetLinks" :key="link.to" :to="link.to" @click="sheet = false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="link.icon"></svg>
-          <span>{{ link.label }}</span>
-        </router-link>
+    <footer class="foot">
+      <div class="foot-in">
+        <div>{{ siteName }} · ACU 工程系列开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</div>
+        <div class="row" style="justify-content: center; flex-wrap: wrap;">
+          <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> ·
+          <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a> ·
+          <router-link to="/finance">财务管理中心</router-link> ·
+          <router-link to="/sponsor">赞助支持</router-link>
+          <template v-if="meta?.qq_group_url"> ·
+            <a :href="meta.qq_group_url" target="_blank" rel="noopener">Q 群 {{ meta.qq_group }}</a>
+          </template>
+          <template v-if="meta?.qq_group_url2"> ·
+            <a :href="meta.qq_group_url2" target="_blank" rel="noopener">Q 群 {{ meta.qq_group2 }}</a>
+          </template>
+        </div>
       </div>
-      <button class="sheet-close" @click="sheet = false">关闭</button>
-    </div>
-  </div>
+    </footer>
+
+    <a v-if="meta?.qq_group_url" class="qq-fab" :href="meta.qq_group_url" target="_blank" rel="noopener">
+      <AqIcon name="message" :size="15" />Q 群
+    </a>
+  </template>
 </template>
-
-<style>
-/* 路由切换入场动画（对应旧版 .page.active 的 fadein） */
-.route-page { animation: fadein .25s ease; }
-
-/* ===== 导航栏用户区 ===== */
-.nav-avatar {
-  width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex-shrink: 0;
-  background: var(--accent); display: flex; align-items: center; justify-content: center;
-  border: 2px solid rgba(128,140,160,.35); transition: all .2s ease;
-}
-.nav-avatar:hover {
-  border-color: var(--aqua);
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, .25);
-}
-.nav-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.nav-avatar-txt { color: #fff; font-size: 15px; font-weight: 800; }
-.nav-login-btn {
-  font-size: 13px; font-weight: 650; padding: 8px 14px; border-radius: 10px;
-  background: var(--btn-grad); color: #fff; white-space: nowrap;
-  text-shadow: 0 1px 1px rgba(2, 32, 71, .25);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .28),
-    inset 0 -1px 0 rgba(2, 32, 71, .22),
-    0 2px 10px rgba(8, 145, 178, .32);
-  transition: all .16s ease;
-}
-.nav-login-btn:hover {
-  background: var(--btn-grad-hover, var(--btn-grad));
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .32),
-    inset 0 -1px 0 rgba(2, 32, 71, .22),
-    0 4px 14px rgba(8, 145, 178, .42);
-}
-.nav-login-btn:active {
-  transform: translateY(0);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 1px 4px rgba(8, 145, 178, .28);
-}
-@media (max-width: 860px) {
-  .nav-login-btn { padding: 6px 10px; font-size: 12px; }
-}
-</style>

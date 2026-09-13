@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 
 const text = ref('')
 const loading = ref(false)
@@ -29,20 +31,35 @@ async function run() {
 
 <template>
   <p class="tool-intro">估算一段文本会消耗多少 token（中文约 0.6 字/token，英文约 4 字符/token）——发送前心里有数，避免超长报错。为近似估算值，不同模型分词器有差异。</p>
-  <div class="tool-io">
-    <textarea v-model="text" rows="8" placeholder="粘贴要估算的文本…"></textarea>
-    <div class="tool-bar">
-      <button class="btn tool-run" @click="run">估算</button>
-      <span class="tool-status">{{ note }}</span>
+  <div class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>要估算的文本</label>
+        <textarea v-model="text" class="textarea" rows="10" placeholder="粘贴要估算的文本…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" :disabled="loading" @click="run"><svg class="bic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS['token-count']"></svg>估算</button>
+        <span v-if="note" class="tool-status">{{ note }}</span>
+      </div>
     </div>
-    <div class="tool-result">
-      <div v-if="msg" class="tool-empty">{{ msg }}</div>
-      <div v-else-if="loading" class="tool-loading">估算中…</div>
-      <template v-else-if="result">
-        <div class="pg-hrow"><span>估算 Tokens</span><b style="color:var(--accent);font-family:var(--mono);">{{ result.tokens }}</b></div>
-        <div class="pg-hrow"><span>总字符数</span><b>{{ result.chars }}</b></div>
-        <div class="pg-hrow"><span>其中中文字符</span><b>{{ result.cjk_chars }}</b></div>
-      </template>
+    <div class="card out-pane">
+      <div v-if="msg" class="out-empty"><AqIcon name="alert" :size="24" /><span>{{ msg }}</span></div>
+      <div v-else-if="loading" class="out-pane">
+        <div class="skeleton" style="width: 55%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 80%; min-height: 13px;"></div>
+        <div class="skeleton" style="width: 66%; min-height: 13px;"></div>
+      </div>
+      <div v-else-if="result" class="tool-kv">
+        <div><span>估算 Tokens</span><b style="color: var(--acc);">{{ result.tokens }}</b></div>
+        <div><span>总字符数</span><b>{{ result.chars }}</b></div>
+        <div><span>其中中文字符</span><b>{{ result.cjk_chars }}</b></div>
+      </div>
+      <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS['token-count']"></svg><span>结果将显示在这里</span></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+.bic { width: 14px; height: 14px; }
+</style>

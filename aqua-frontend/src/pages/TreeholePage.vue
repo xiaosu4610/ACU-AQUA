@@ -1,10 +1,11 @@
 <script setup lang="ts">
-/* 树洞（情绪陪伴）：自旧版 th* 系列函数平移（服务端官方提示词 + 非 Nvidia 模型链，流式） */
+/* 树洞（情绪陪伴）：接口对接 1:1 平移自旧版
+ * （GET /tools/treehole/prompt 官方提示词 + POST /tools/treehole 专用端点流式 + stripThink 剥离思维链）
+ * UI 全新：双角色选择卡（accent 选中边）+ 柔和气泡对话流（淡入）+ 右侧心理热线安全卡 */
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { apiJson, errText, GATEWAY } from '@/composables/useApi'
 import { stripThink } from '@/composables/useSSE'
 import CopyBtn from '@/components/CopyBtn.vue'
-import AuthBanner from '@/components/AuthBanner.vue'
 import AqIcon from '@/components/AqIcon.vue'
 
 interface ThMsg { role: 'user' | 'assistant'; text: string; streaming?: boolean; err?: string }
@@ -31,7 +32,7 @@ const TH_MODES = {
 function thPromptOf(m: string): string {
   let cache = promptData.value
   if (!cache) {
-    try { cache = JSON.parse(sessionStorage.getItem('aqua_th_prompts') || 'null') } catch { /* 忽略 */ }
+    try { cache = JSON.parse(sessionStorage.getItem('aqua_th_prompts') || 'null') as ThPromptResp | null } catch { /* 忽略 */ }
   }
   if (cache && cache.modes) {
     for (const x of cache.modes) if (x.id === m) return x.prompt
@@ -42,7 +43,7 @@ const currentPrompt = computed(() => thPromptOf(mode.value))
 const promptShow = computed(() => currentPrompt.value
   || '提示词加载失败，请稍后刷新重试（服务端会强制注入官方提示词，即使此处未展示也不影响对话质量）。')
 
-async function thLoadPrompt() {
+async function loadPrompt() {
   try {
     const j = await apiJson<ThPromptResp>('/tools/treehole/prompt')
     promptData.value = j
@@ -68,22 +69,22 @@ function aquaErr(e: { code?: string; message?: string }, status: number): string
   return (code && !/^\d+$/.test(code) ? '【' + code + '】' : '') + msg
 }
 
-function thSwitchMode(m: 'gentle' | 'anime') {
+function switchMode(m: 'gentle' | 'anime') {
   if (mode.value === m || busy.value) return
   mode.value = m
   chatHistory = []
   msgs.value = []
 }
 
-function thClear() {
+function clearChat() {
   if (busy.value && abort) { try { abort.abort() } catch { /* 忽略 */ } }
   chatHistory = []
   msgs.value = []
 }
 
-/* thSend 平移：POST /tools/treehole 流式（服务端注入官方提示词与模型），思维链用 stripThink 剥离。
+/* 发送：POST /tools/treehole 流式（服务端注入官方提示词与模型），思维链用 stripThink 剥离。
    注：streamChat 固定请求 /chat/completions，树洞必须走专用端点，故 SSE 解析在本组件内实现（与 streamChat 同构）。 */
-async function thSend() {
+async function send() {
   if (busy.value) return
   const text = inputText.value.trim()
   if (!text) return
@@ -103,8 +104,8 @@ async function thSend() {
     const payload = s.slice(5).trim()
     if (payload === '[DONE]') return
     try {
-      const j = JSON.parse(payload)
-      const piece = (j?.choices?.[0]?.delta?.content || '') as string
+      const j = JSON.parse(payload) as { choices?: { delta?: { content?: string } }[] }
+      const piece = j?.choices?.[0]?.delta?.content || ''
       if (piece) { full += piece; ai.text = stripThink(full); scrollBottom() }
     } catch { /* 半包/心跳，跳过 */ }
   }
@@ -166,76 +167,150 @@ async function thSend() {
 }
 
 onMounted(() => {
-  thLoadPrompt()
+  loadPrompt()
 })
 </script>
 
 <template>
-  <section class="route-page">
-    <div class="models-page-head">
-      <h1><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>体验中心</h1>
-      <p>登录账号后即可倾诉对话、玩 AI 对弈游戏、用免费实用工具——所有体验与真实 API 行为完全一致。</p>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1><AqIcon name="heart" :size="22" />温柔树洞</h1>
+        <div class="sub">把心里的话说给树洞听——两位倾听伙伴在线，没有评判也没有说教，对话内容不会被保存。</div>
+      </div>
     </div>
-    <AuthBanner />
-    <nav class="hub-subnav" aria-label="体验中心子导航">
-      <router-link class="hub-tab" to="/playground" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>AI 对话</router-link>
-      <router-link class="hub-tab" to="/treehole" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4-3 8-6.5 8-11a8 8 0 1 0-16 0c0 4.5 4 8 8 11z" style="display:none"/><path d="M12 3c-4.4 0-8 3.6-8 8 0 4.4 3.6 8 8 8h.5c.3 0 .5.2.5.5V21l3.8-2.6C19.9 17 20.5 14 20.5 11 20.5 6.6 16.4 3 12 3z"/><circle cx="8.5" cy="10.5" r=".8" fill="currentColor"/><circle cx="12" cy="10.5" r=".8" fill="currentColor"/><circle cx="15.5" cy="10.5" r=".8" fill="currentColor"/></svg></span>树洞</router-link>
-      <router-link class="hub-tab" to="/tools" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>工具箱</router-link>
-      <router-link class="hub-tab" to="/prompts" active-class="active"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>提示词工坊</router-link>
-    </nav>
 
-    <div class="th-wrap">
-      <div class="th-toolbar">
-        <div class="th-modes">
-          <button class="th-mode" :class="{ active: mode === 'gentle' }" data-th-mode="gentle" type="button" @click="thSwitchMode('gentle')">
-            <span class="th-avatar"><AqIcon name="wave" :size="16" /></span>
-            <span class="th-mode-info"><b>小溪</b><i>温柔树洞 · 深夜电台的倾听伙伴</i></span>
+    <div class="th-grid fade-up">
+      <!-- 左：角色选择 + 对话流 -->
+      <div>
+        <div class="th-pick">
+          <button
+            v-for="(cfg, key) in TH_MODES" :key="key"
+            class="card hoverable th-role" :class="{ accent: mode === key }"
+            type="button" @click="switchMode(key)"
+          >
+            <span class="th-avatar"><AqIcon :name="key === 'gentle' ? 'wave' : 'spark'" :size="18" /></span>
+            <span class="th-role-txt">
+              <b>{{ cfg.name }}</b>
+              <i>{{ key === 'gentle' ? '温柔树洞 · 深夜电台的倾听伙伴' : '二次元陪伴 · 跨次元的元气伙伴' }}</i>
+            </span>
+            <AqIcon v-if="mode === key" name="check" :size="16" class="th-check" />
           </button>
-          <button class="th-mode" :class="{ active: mode === 'anime' }" data-th-mode="anime" type="button" @click="thSwitchMode('anime')">
-            <span class="th-avatar"><AqIcon name="spark" :size="16" /></span>
-            <span class="th-mode-info"><b>星璃</b><i>二次元陪伴 · 跨次元的元气伙伴</i></span>
-          </button>
         </div>
-        <button class="btn" id="th-clear" @click="thClear">清空倾诉</button>
-      </div>
-      <div class="th-main">
-        <div class="th-chat" id="th-chat" ref="chatEl">
-          <div v-if="!msgs.length" class="th-welcome">
-            <b>{{ TH_MODES[mode].name }} 在听</b>
-            <p style="white-space:pre-wrap;">{{ TH_MODES[mode].welcome }}</p>
+
+        <div class="card th-flow">
+          <div class="row between th-flow-head">
+            <b><AqIcon :name="mode === 'gentle' ? 'wave' : 'spark'" :size="15" />与 {{ TH_MODES[mode].name }} 的对话</b>
+            <button class="btn ghost sm" type="button" @click="clearChat"><AqIcon name="trash" :size="13" />清空倾诉</button>
           </div>
-          <div v-for="(m, i) in msgs" :key="i" class="th-msg" :class="[m.role, { streaming: m.streaming }]">
-            <span v-if="m.err && !m.text" class="th-err">{{ m.err }}</span>
-            <template v-else>{{ m.text }}{{ m.err ? '\n\n[' + m.err + ']' : '' }}</template>
+
+          <div ref="chatEl" class="th-scroll">
+            <div v-if="!msgs.length" class="empty">
+              <div class="big"><AqIcon :name="mode === 'gentle' ? 'wave' : 'spark'" :size="38" /></div>
+              <b>{{ TH_MODES[mode].name }} 在听</b>
+              <div class="dim th-welcome">{{ TH_MODES[mode].welcome }}</div>
+            </div>
+            <div v-for="(m, i) in msgs" :key="i" class="th-row fade-up" :class="m.role">
+              <div v-if="m.role === 'user'" class="th-bubble me">{{ m.text }}</div>
+              <div v-else class="th-bubble bot" :class="{ streaming: m.streaming }">
+                <div v-if="m.err && !m.text" class="msg bad">{{ m.err }}</div>
+                <template v-else>{{ m.text }}{{ m.err ? '\n\n[' + m.err + ']' : '' }}<span v-if="m.streaming" class="stream-cur" /></template>
+              </div>
+            </div>
+          </div>
+
+          <div class="th-inputbar">
+            <textarea
+              ref="inputEl" v-model="inputText" class="textarea" rows="1"
+              placeholder="把心里的话说给树洞听…（Enter 发送，Shift+Enter 换行）"
+              @keydown.enter.exact.prevent="send" @input="autoGrow"
+            />
+            <button class="btn primary" type="button" :disabled="busy" @click="send"><AqIcon name="send" :size="14" />说给树洞</button>
           </div>
         </div>
-        <div class="th-inputbar">
-          <textarea id="th-input" ref="inputEl" rows="1" placeholder="把心里的话说给树洞听…（Enter 发送，Shift+Enter 换行）" v-model="inputText" @keydown.enter.exact.prevent="thSend" @input="autoGrow"></textarea>
-          <button class="btn th-send" id="th-send" @click="thSend">说给树洞</button>
-        </div>
       </div>
+
+      <!-- 右：安全与说明 -->
       <aside class="th-side">
-        <div class="th-side-card th-hotline">
-          <b>如果你或身边的人正处于危机</b>
-          <p>请立即联系专业支持（24 小时），他们和你一样认真：</p>
-          <div class="th-tel">全国心理援助热线 <a href="tel:12356">12356</a></div>
-          <div class="th-tel">希望24热线 <a href="tel:400-161-9995">400-161-9995</a></div>
+        <div class="card">
+          <b><AqIcon name="heart" :size="15" />如果你或身边的人正处于危机</b>
+          <p class="dim mt8">请立即联系专业支持（24 小时），他们和你一样认真：</p>
+          <div class="th-tel"><span>全国心理援助热线</span><a class="num" href="tel:12356">12356</a></div>
+          <div class="th-tel"><span>希望24热线</span><a class="num" href="tel:400-161-9995">400-161-9995</a></div>
         </div>
-        <div class="th-side-card">
-          <b>树洞伙伴如何思考（完全公开）</b>
-          <p>树洞的温柔来自一套精心打磨的提示词——我们把它完整公开，欢迎复制到你的项目里：</p>
-          <div class="th-actions">
-            <CopyBtn v-if="currentPrompt" :text="currentPrompt" label="复制当前模式提示词" />
-            <button v-else class="btn" id="th-copy-prompt" type="button" @click="thLoadPrompt">复制当前模式提示词</button>
-            <router-link class="btn" to="/prompts">提示词工坊</router-link>
+
+        <div class="card">
+          <b><AqIcon name="bulb" :size="15" />树洞伙伴如何思考（完全公开）</b>
+          <p class="dim mt8">树洞的温柔来自一套精心打磨的提示词——我们把它完整公开，欢迎复制到你的项目里：</p>
+          <div class="row wrap mt12">
+            <CopyBtn v-if="currentPrompt" :text="currentPrompt" label="复制当前模式提示词" size="sm" />
+            <button v-else class="btn sm" type="button" @click="loadPrompt">复制当前模式提示词</button>
+            <router-link class="btn sm" to="/prompts">提示词工坊</router-link>
           </div>
-          <details class="th-prompt-box"><summary>展开完整提示词</summary><pre id="th-prompt-text">{{ promptShow }}</pre></details>
+          <details class="th-prompt-box">
+            <summary>展开完整提示词</summary>
+            <pre>{{ promptShow }}</pre>
+          </details>
         </div>
-        <div class="th-side-card th-disclaimer">
-          <b>温柔的边界</b>
-          <p>树洞伙伴是 AI：能陪伴、能倾听，但不能替代专业心理援助。对话内容不会被保存。</p>
+
+        <div class="card">
+          <b><AqIcon name="info" :size="15" />温柔的边界</b>
+          <p class="dim mt8">树洞伙伴是 AI：能陪伴、能倾听，但不能替代专业心理援助。对话内容不会被保存。</p>
         </div>
       </aside>
     </div>
-  </section>
+  </div>
 </template>
+
+<style scoped>
+/* 布局微调：双列结构 / 气泡宽度 / 热线行，颜色全部走设计令牌 */
+.th-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+
+.th-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.th-role { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; padding: 14px 16px; width: 100%; }
+.th-role-txt { flex: 1; min-width: 0; }
+.th-role-txt i { display: block; font-style: normal; font-size: 12px; color: var(--txt3); margin-top: 2px; }
+.th-check { color: var(--acc); flex: none; }
+.th-avatar { width: 38px; height: 38px; flex: none; border-radius: 12px; background: var(--acc-soft); color: var(--acc); display: inline-flex; align-items: center; justify-content: center; }
+
+.th-flow { display: flex; flex-direction: column; }
+.th-flow-head { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.th-scroll { height: min(46vh, 470px); min-height: 260px; overflow-y: auto; padding: 4px 2px; }
+.th-welcome { white-space: pre-wrap; max-width: 46ch; margin: 0 auto; }
+
+.th-row { display: flex; margin: 13px 0; }
+.th-row.user { justify-content: flex-end; }
+.th-bubble {
+  max-width: min(82%, 560px);
+  padding: 11px 15px;
+  border-radius: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.8px;
+  line-height: 1.75;
+}
+.th-bubble.me { background: var(--acc-soft); color: var(--txt0); border-radius: 16px 16px 4px 16px; }
+.th-bubble.bot { background: var(--bg3); color: var(--txt1); border-radius: 16px 16px 16px 4px; }
+.th-bubble .msg { margin: 0; }
+
+.stream-cur { display: inline-block; width: 7px; height: 14px; margin-left: 3px; vertical-align: -2px; border-radius: 2px; background: var(--acc); animation: th-blink 1s steps(2, start) infinite; }
+@keyframes th-blink { 50% { opacity: 0; } }
+
+.th-inputbar { display: flex; align-items: flex-end; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
+.th-inputbar .textarea { flex: 1; min-height: 42px; max-height: 140px; resize: none; }
+
+.th-tel { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg3); border-radius: var(--r-sm); margin-top: 8px; font-size: 13px; }
+.th-tel a { font-weight: 700; }
+
+.th-side .card + .card { margin-top: 14px; }
+.th-prompt-box { margin-top: 12px; }
+.th-prompt-box summary { cursor: pointer; user-select: none; color: var(--txt3); font-size: 12.5px; }
+.th-prompt-box summary:hover { color: var(--acc); }
+.th-prompt-box pre { margin-top: 8px; padding: 12px; background: var(--bg1); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 12px; line-height: 1.7; color: var(--txt2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
+
+@media (max-width: 960px) { .th-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .th-pick { grid-template-columns: 1fr; }
+  .th-bubble { max-width: 88%; }
+}
+</style>

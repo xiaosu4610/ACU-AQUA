@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
+import CopyBtn from '@/components/CopyBtn.vue'
 
 const TABS = [
   { id: 'uuid', label: 'UUID' },
@@ -105,68 +108,113 @@ onMounted(() => { genUuid() })
 
 <template>
   <p class="tool-intro">常用开发小工具合集，纯算法本地运行零延迟。对应 API：<code>GET /v1/tools/uuid</code>、<code>GET/POST /v1/tools/timestamp</code>、<code>POST /v1/tools/base64</code>、<code>POST /v1/tools/subnet</code>。</p>
-  <div class="dev-tabs">
-    <button v-for="t in TABS" :key="t.id" class="pill" :class="{ active: tab === t.id }" type="button" @click="tab = t.id">{{ t.label }}</button>
+  <div class="chips mb12">
+    <button v-for="t in TABS" :key="t.id" class="chip" :class="{ on: tab === t.id }" type="button" @click="tab = t.id">{{ t.label }}</button>
   </div>
 
   <!-- UUID -->
-  <div v-if="tab === 'uuid'" class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input class="tool-flex1" readonly :value="uuid" style="font-family:var(--mono);">
-      <button class="btn tool-run" @click="genUuid">生成</button>
+  <div v-if="tab === 'uuid'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>UUID v4（服务端/本地熵生成）</label>
+        <input class="input mono" readonly :value="uuid">
+      </div>
+      <button class="btn primary" @click="genUuid"><AqIcon name="refresh" :size="14" />重新生成</button>
+    </div>
+    <div class="card out-pane">
+      <div class="row between"><b>结果</b><CopyBtn :text="uuid" /></div>
+      <div class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.devkit"></svg><span>点击「重新生成」获得新 UUID</span></div>
     </div>
   </div>
 
   <!-- 时间戳 -->
-  <div v-else-if="tab === 'ts'" class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="tsIn" class="tool-flex1" placeholder="输入秒级时间戳，留空显示当前">
-      <button class="btn tool-run" @click="tsIn = tsIn.trim()">转换</button>
+  <div v-else-if="tab === 'ts'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>秒级时间戳（留空显示当前）</label>
+        <input v-model="tsIn" class="input mono" placeholder="如 1770000000" @keydown.enter="tsConv">
+      </div>
+      <button class="btn primary" @click="tsConv"><AqIcon name="clock" :size="14" />转换</button>
     </div>
-    <div class="tool-kv">
-      <div v-for="(r, i) in tsRows" :key="i" class="pg-hrow"><span>{{ r[0] }}</span><b>{{ r[1] }}</b></div>
+    <div class="card out-pane">
+      <div class="tool-kv">
+        <div v-for="(r, i) in tsRows" :key="i"><span>{{ r[0] }}</span><b>{{ r[1] }}</b></div>
+      </div>
     </div>
   </div>
 
   <!-- Base64 -->
-  <div v-else-if="tab === 'b64'" class="tool-io">
-    <textarea v-model="b64In" rows="4" placeholder="输入文本…"></textarea>
-    <div class="tool-btns">
-      <button class="btn tool-run" @click="b64Enc">编码</button>
-      <button class="btn tool-run" @click="b64Dec">解码</button>
+  <div v-else-if="tab === 'b64'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>输入文本</label>
+        <textarea v-model="b64In" class="textarea mono" rows="8" placeholder="输入文本…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" @click="b64Enc">编码</button>
+        <button class="btn" @click="b64Dec">解码</button>
+      </div>
     </div>
-    <textarea v-model="b64Out" rows="4" readonly placeholder="结果…"></textarea>
+    <div class="card out-pane">
+      <div class="row between"><b>结果</b><CopyBtn v-if="b64Out" :text="b64Out" /></div>
+      <textarea v-model="b64Out" class="textarea mono" rows="8" readonly placeholder="结果…"></textarea>
+    </div>
   </div>
 
   <!-- URL -->
-  <div v-else-if="tab === 'url'" class="tool-io">
-    <textarea v-model="urlIn" rows="4" placeholder="输入文本…"></textarea>
-    <div class="tool-btns">
-      <button class="btn tool-run" @click="urlEnc">编码</button>
-      <button class="btn tool-run" @click="urlDec">解码</button>
+  <div v-else-if="tab === 'url'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>输入文本</label>
+        <textarea v-model="urlIn" class="textarea mono" rows="8" placeholder="输入文本…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" @click="urlEnc">编码</button>
+        <button class="btn" @click="urlDec">解码</button>
+      </div>
     </div>
-    <textarea v-model="urlOut" rows="4" readonly placeholder="结果…"></textarea>
+    <div class="card out-pane">
+      <div class="row between"><b>结果</b><CopyBtn v-if="urlOut" :text="urlOut" /></div>
+      <textarea v-model="urlOut" class="textarea mono" rows="8" readonly placeholder="结果…"></textarea>
+    </div>
   </div>
 
   <!-- JSON -->
-  <div v-else-if="tab === 'json'" class="tool-io">
-    <textarea v-model="jsonIn" rows="8" placeholder="粘贴 JSON…"></textarea>
-    <div class="tool-btns">
-      <button class="btn tool-run" @click="jsonFmt(false)">格式化</button>
-      <button class="btn tool-run" @click="jsonFmt(true)">压缩</button>
+  <div v-else-if="tab === 'json'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>粘贴 JSON</label>
+        <textarea v-model="jsonIn" class="textarea mono" rows="12" placeholder="粘贴 JSON…"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" @click="jsonFmt(false)">格式化</button>
+        <button class="btn" @click="jsonFmt(true)">压缩</button>
+      </div>
     </div>
-    <textarea v-model="jsonOut" rows="8" readonly placeholder="结果…"></textarea>
+    <div class="card out-pane">
+      <div class="row between"><b>结果</b><CopyBtn v-if="jsonOut" :text="jsonOut" /></div>
+      <textarea v-model="jsonOut" class="textarea mono" rows="12" readonly placeholder="结果…"></textarea>
+    </div>
   </div>
 
   <!-- 子网计算 -->
-  <div v-else-if="tab === 'subnet'" class="tool-io">
-    <div class="tool-btns" style="width:100%;">
-      <input v-model="snIn" class="tool-flex1" placeholder="输入 IPv4 网段，如 192.168.1.0/24 或 10.0.0.88/26" style="font-family:var(--mono);" @keydown.enter="snCalc">
-      <button class="btn tool-run" @click="snCalc">计算</button>
+  <div v-else-if="tab === 'subnet'" class="grid2">
+    <div class="card out-pane">
+      <div class="field">
+        <label>IPv4 网段（CIDR）</label>
+        <input v-model="snIn" class="input mono" placeholder="如 192.168.1.0/24 或 10.0.0.88/26" @keydown.enter="snCalc">
+      </div>
+      <button class="btn primary" @click="snCalc"><AqIcon name="grid" :size="14" />计算</button>
     </div>
-    <div class="tool-kv">
-      <div v-if="snMsg" class="tool-empty">{{ snMsg }}</div>
-      <div v-for="(r, i) in snRows" :key="i" class="pg-hrow"><span>{{ r[0] }}</span><b>{{ r[1] }}</b></div>
+    <div class="card out-pane">
+      <div v-if="snMsg" class="out-empty"><AqIcon name="info" :size="24" /><span>{{ snMsg }}</span></div>
+      <div v-else class="tool-kv">
+        <div v-for="(r, i) in snRows" :key="i"><span>{{ r[0] }}</span><b>{{ r[1] }}</b></div>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>

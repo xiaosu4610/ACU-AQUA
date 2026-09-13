@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { apiJson, errText } from '@/composables/useApi'
+import { TOOL_ICONS } from '@/tools/meta'
+import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
 
 interface WhItem { method: string; time: string; json: string }
 
 const whId = ref('')
 const busy = ref<'' | 'create' | 'list'>('')
-const msg = ref('')            // tool-empty 文案（提示/已清空，含错误前缀的错误文案）
+const msg = ref('')            // 输出区文案（提示/已清空，含错误前缀的错误文案）
 const noReqUrl = ref('')       // 空列表提示（还没有收到请求 + 收集地址）
 const created = ref<{ url: string; usage: string } | null>(null)
 const total = ref(0)
@@ -86,35 +88,44 @@ async function onClear() {
 
 <template>
   <p class="tool-intro">调试第三方回调的利器：点「创建收集器」得到一个专属地址，把它填到任意需要回调的地方，随后用「查看请求」抓取收到的全部请求（方法 / 头 / 体）。记录保留 <b>24 小时</b>，自动清理。</p>
-  <div class="tool-bar">
-    <button class="btn tool-run" :disabled="busy !== ''" @click="create">① 创建收集器</button>
-    <input v-model="whId" placeholder="Webhook ID（创建后自动填入）" style="flex:1;min-width:160px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-family:var(--mono);">
-    <button class="btn tool-run" :disabled="busy !== ''" @click="onView">② 查看请求</button>
-    <button class="btn" @click="onClear">清空记录</button>
-  </div>
-  <div class="tool-result">
-    <div v-if="busy === 'create'" class="tool-loading">创建中…</div>
-    <div v-else-if="busy === 'list'" class="tool-loading">查询中…</div>
-    <template v-else>
-      <div v-if="created" class="tool-ai-box">
-        <b>收集器已就绪</b>
-        <div class="pg-hrow" style="margin-top:8px;">
-          <span style="user-select:all;color:var(--accent);font-family:var(--mono);font-size:12px;">{{ created.url }}</span>
-          <CopyBtn :text="created.url" label="复制地址" />
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:6px;">{{ created.usage }}</div>
+  <div class="grid2">
+    <div class="card out-pane">
+      <button class="btn primary block" :disabled="busy !== ''" @click="create"><AqIcon name="plus" :size="14" />① 创建收集器</button>
+      <div class="field">
+        <label>Webhook ID（创建后自动填入）</label>
+        <input v-model="whId" class="input mono" placeholder="如 wh_9f2c…">
       </div>
-      <template v-if="items.length">
-        <div class="tool-status" style="margin-bottom:8px;">共 {{ total }} 条 · 展示最近 {{ items.length }} 条</div>
-        <div v-for="(it, i) in items" :key="i" class="tool-ai-box" style="margin-bottom:10px;">
-          <b>{{ it.method }} · {{ it.time }}</b>
-          <pre style="font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--muted);">{{ it.json }}</pre>
+      <div class="row">
+        <button class="btn" style="flex: 1;" :disabled="busy !== ''" @click="onView">② 查看请求</button>
+        <button class="btn danger" @click="onClear"><AqIcon name="trash" :size="14" />清空记录</button>
+      </div>
+    </div>
+    <div class="card out-pane">
+      <div v-if="busy === 'create'" class="out-empty"><AqIcon name="refresh" :size="22" /><span>创建中…</span></div>
+      <div v-else-if="busy === 'list'" class="out-empty"><AqIcon name="refresh" :size="22" /><span>查询中…</span></div>
+      <template v-else>
+        <div v-if="created" class="out-pane">
+          <div class="row between"><b>收集器已就绪</b><CopyBtn :text="created.url" label="复制地址" /></div>
+          <div class="code mono" style="font-size: 12px; color: var(--acc); user-select: all;">{{ created.url }}</div>
+          <div class="dim" style="font-size: 12.5px;">{{ created.usage }}</div>
         </div>
+        <template v-if="items.length">
+          <div class="tool-status">共 {{ total }} 条 · 展示最近 {{ items.length }} 条</div>
+          <div v-for="(it, i) in items" :key="i" class="out-pane">
+            <div class="row between"><b class="mono">{{ it.method }}</b><span class="dim" style="font-size: 12px;">{{ it.time }}</span></div>
+            <pre class="code" style="white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 11.5px;">{{ it.json }}</pre>
+          </div>
+        </template>
+        <div v-else-if="noReqUrl" class="banner">
+          <span>还没有收到请求。地址：<code style="user-select: all; color: var(--acc);">{{ noReqUrl }}</code>——用 curl 或浏览器随便发一个请求试试。</span>
+        </div>
+        <div v-else-if="msg" class="msg" :class="msg.includes('失败') ? 'bad' : 'info'">{{ msg }}</div>
+        <div v-else class="out-empty"><svg class="ticon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="TOOL_ICONS.webhook"></svg><span>创建收集器后，抓到的请求会显示在这里</span></div>
       </template>
-      <div v-else-if="noReqUrl" class="tool-empty">
-        还没有收到请求。地址：<code style="font-family:var(--mono);color:var(--accent);user-select:all;">{{ noReqUrl }}</code> —— 用 curl 或浏览器随便发一个请求试试。
-      </div>
-      <div v-else-if="msg" class="tool-empty">{{ msg }}</div>
-    </template>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.ticon { width: 26px; height: 26px; opacity: .55; }
+</style>
