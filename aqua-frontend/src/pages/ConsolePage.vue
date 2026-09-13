@@ -867,7 +867,7 @@ function fmtTime(ts: number): string {
         <div v-show="view === 'topup'" class="view">
           <div class="vhead">
             <span class="vic"><AqIcon name="spark" :size="17" /></span>
-            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 前缀，按量计费）扣费，免费模型不受影响</p></div>
+            <div><h2>余额充值</h2><p>支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）· 充值余额用于收费模型（aqua/ 前缀，按量计费）扣费，免费模型不受影响。<b>注意：「充 1 = 2」充值翻倍仅限众筹公共池</b>——想用 acu/ 众筹模型或享受充值翻倍，请到 <router-link to="/pool">众筹池充值</router-link>；本页充值入的是个人余额（1:1 到账），众筹模型调用不消耗个人余额。</p></div>
           </div>
           <div class="dash-sec bal-strip" style="margin:0 0 14px">
             <span>当前余额 <b>¥{{ yuan(balance?.balance_micro) }}</b></span>
