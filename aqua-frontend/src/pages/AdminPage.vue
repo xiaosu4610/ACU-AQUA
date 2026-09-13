@@ -2026,6 +2026,8 @@ async function doUserKeyRevoke(kid: number) {
 
 <style scoped>
 /* ===== 仅布局微调（进度条高度 / 弹层定位 / 抽屉 / 单元格排布），视觉全部走全局类 ===== */
+/* 独立入口：无壳渲染，自带页面留白 */
+.wrap { padding: 34px 18px 60px; }
 /* 登录门 */
 .gate { display: flex; align-items: center; justify-content: center; min-height: 62vh; }
 .gate-card { width: 360px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; text-align: center; padding: 30px 28px; }

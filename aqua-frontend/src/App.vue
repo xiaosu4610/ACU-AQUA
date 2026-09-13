@@ -13,9 +13,10 @@ const { meta, loadMeta } = useMeta()
 
 onMounted(() => { loadMeta(); if (sessionToken.value) loadMe() })
 
-/* 工作台壳路径 */
-const BENCH = ['/console', '/finance', '/usage', '/pool', '/admin']
+/* 工作台壳路径；/admin 为独立入口：无任何壳、无任何导航引用，仅站长手动输入 URL 进入 */
+const BENCH = ['/console', '/finance', '/usage', '/pool']
 const isBench = computed(() => BENCH.includes(route.path))
+const isStandalone = computed(() => route.path === '/admin')
 
 /* ---- 门户导航 ---- */
 interface NavLeaf { label: string; to: string }
@@ -76,12 +77,6 @@ const BENCH_NAV = [
       { label: 'API 文档', to: '/api', icon: 'book', match: [] },
     ],
   },
-  {
-    grp: '站长',
-    items: [
-      { label: '站点管理', to: '/admin', icon: 'settings', match: ['/admin'] },
-    ],
-  },
 ]
 function benchOn(it: { match: string[] }): boolean { return it.match.includes(route.path) }
 
@@ -90,13 +85,20 @@ const siteName = computed(() => meta.value?.name || 'AQUA')
 
 async function doLogout() {
   await logout()
-  if (isBench.value && route.path !== '/admin') location.href = '/home'
+  if (isBench.value) location.href = '/home'
 }
 </script>
 
 <template>
+  <!-- ============ 独立页（/admin）：无壳、无导航、与站点页面零关联 ============ -->
+  <router-view v-if="isStandalone" v-slot="{ Component }">
+    <transition name="page" mode="out-in">
+      <component :is="Component" :key="route.path" />
+    </transition>
+  </router-view>
+
   <!-- ============ 工作台壳 ============ -->
-  <div v-if="isBench" class="bench">
+  <div v-else-if="isBench" class="bench">
     <aside class="bside">
       <router-link to="/home" class="brand" style="padding: 2px 11px 10px;">
         <AqIcon name="droplet" :size="22" />
