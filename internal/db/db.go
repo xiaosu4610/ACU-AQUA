@@ -220,6 +220,8 @@ func InitTables(d *sql.DB) error {
 			name TEXT NOT NULL DEFAULT '',
 			mode TEXT NOT NULL DEFAULT 'free',
 			base_url TEXT NOT NULL DEFAULT '',
+			auth_style TEXT NOT NULL DEFAULT '',
+			proxy TEXT NOT NULL DEFAULT '',
 			vip_num INTEGER NOT NULL DEFAULT 0,
 			vip_den INTEGER NOT NULL DEFAULT 0,
 			key_face_micro INTEGER NOT NULL DEFAULT 0,
@@ -293,6 +295,8 @@ func InitTables(d *sql.DB) error {
 		{"admin_line_models", "key_idx", "INTEGER NOT NULL DEFAULT -1"}, // 模型专属密钥池序（-1=自动走粘性池；≥0 锁定非 dead 钥排序后的第 N 把，按模型分工钥）
 		{"payments", "product", "TEXT NOT NULL DEFAULT 'balance'"},      // 支付产品分流：balance=个人余额充值 / pool=众筹池充值
 		{"admin_lines", "dynamic", "INTEGER NOT NULL DEFAULT 0"},        // 免费线动态目录开关（NVIDIA 自动同步上游新模型到 nvidia_models）
+		{"admin_lines", "auth_style", "TEXT NOT NULL DEFAULT ''"},       // 鉴权风格：''=bearer | x-api-key | codex（ChatGPT 账号池 RT→AT+协议转换）
+		{"admin_lines", "proxy", "TEXT NOT NULL DEFAULT ''"},            // 线路级出站代理（http:// 或 socks5://，空=直连；gpt 线走本机 sing-box）
 	}
 	for _, a := range alters {
 		var n int

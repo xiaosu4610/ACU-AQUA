@@ -61,6 +61,35 @@ func (a *App) lineForMode(mode string) *config.Line {
 	return a.Cfg.LineForMode(mode)
 }
 
+// lineForModel 统一前缀模型感知选线：优先计费分组默认线持有该模型；
+// 默认线没有时在同模式其他线里定位（同模式多线并存：如 tide/gpt 同为
+// per_token，模型映射在哪个线就路由到哪个线，分组计费语义不变）。
+// 全局都没有该模型时回退默认线（上层按「模型不在分组可用列表」404，保持原语义）
+func (a *App) lineForModel(grp, siteID string) *config.Line {
+	def := a.lineForMode(grp)
+	if def != nil {
+		for i := range def.Models {
+			if def.Models[i].SiteID == siteID {
+				return def
+			}
+		}
+	}
+	a.linesMu.RLock()
+	defer a.linesMu.RUnlock()
+	for i := range a.Cfg.Lines {
+		l := &a.Cfg.Lines[i]
+		if l.Mode != grp {
+			continue
+		}
+		for j := range l.Models {
+			if l.Models[j].SiteID == siteID {
+				return l
+			}
+		}
+	}
+	return def
+}
+
 // linesSnap 线路快照（读锁内取 slice 头；reload 只整体替换，快照元素不可变）
 func (a *App) linesSnap() []config.Line {
 	a.linesMu.RLock()

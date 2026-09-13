@@ -65,6 +65,7 @@ type Line struct {
 	BaseURL      string   `toml:"base_url"`
 	Keys         []string `toml:"keys"`
 	AuthStyle    string   `toml:"auth_style"`     // bearer | x-api-key
+	Proxy        string   `toml:"proxy"`          // 出站代理（http:// 或 socks5://，仅该线转发走代理；空=直连）
 	KeyFaceMicro int64    `toml:"key_face_micro"` // 每把密钥面值（微元，面值台账用；0=不限）
 	Dynamic      bool     `toml:"dynamic"`        // 免费线：启用动态目录（nvidia_models 表，自动同步上游新模型）
 	// vip 折扣 = 普通售价 × VipNum/VipDen（分数表达，整数可除零精度损失）

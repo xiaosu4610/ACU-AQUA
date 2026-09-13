@@ -124,7 +124,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			errOut(w, 403, "official_grp_scope", "官方中转通道已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，如 acu/glm-5.3，按官方原价扣站点额度）；按量模型请使用按量分组密钥")
 			return
 		}
-		line = a.lineForMode(grp)
+		line = a.lineForModel(grp, siteID) // 模型感知：分组默认线无此模型时在同模式其他线定位（如 gpt 线）
 		if line == nil {
 			if grp == "per_call" {
 				// 按次线下架并入众筹池（admin_lines.enabled=0）：引导众筹池/按量分组

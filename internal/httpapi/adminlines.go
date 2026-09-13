@@ -53,9 +53,9 @@ func seedLinesToDB(lines []config.Line, d *sql.DB) error {
 	for i := range lines {
 		l := &lines[i]
 		if _, err := d.Exec(
-			`INSERT INTO admin_lines (id, name, mode, base_url, vip_num, vip_den, key_face_micro, enabled, dynamic, updated_ts)
-			 VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
-			l.ID, l.Name, l.Mode, l.BaseURL, l.VipNum, l.VipDen, l.KeyFaceMicro, 1, b2i(l.Dynamic), now); err != nil {
+			`INSERT INTO admin_lines (id, name, mode, base_url, auth_style, proxy, vip_num, vip_den, key_face_micro, enabled, dynamic, updated_ts)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+			l.ID, l.Name, l.Mode, l.BaseURL, l.AuthStyle, l.Proxy, l.VipNum, l.VipDen, l.KeyFaceMicro, 1, b2i(l.Dynamic), now); err != nil {
 			return err
 		}
 		for k := range l.Keys {
@@ -89,7 +89,7 @@ func seedLinesToDB(lines []config.Line, d *sql.DB) error {
 // linesFromDB 三表 → []config.Line（enabled 线；keys 按 idx 排序剔除 dead）
 func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	rows, err := d.Query(
-		`SELECT id, name, mode, base_url, vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0)
+		`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0)
 		 FROM admin_lines ORDER BY rowid`)
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	for rows.Next() {
 		var l config.Line
 		var enabled, dynamic int
-		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic); err != nil {
+		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.AuthStyle, &l.Proxy, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic); err != nil {
 			return nil, err
 		}
 		if enabled == 0 {
@@ -205,11 +205,11 @@ func (a *App) handleAdminLines(w http.ResponseWriter, r *http.Request) { //nolin
 	}
 	// 先整体读出线路（SQLite 单连接：rows 遍历中不得再发起查询）
 	type lineRow struct {
-		id, name, mode, baseURL string
-		vipNum, vipDen, face    int64
-		enabled, dynamic        int64
+		id, name, mode, baseURL, authStyle, proxy string
+		vipNum, vipDen, face                      int64
+		enabled, dynamic                          int64
 	}
-	rows, err := a.DB.Query(`SELECT id, name, mode, base_url, vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0) FROM admin_lines ORDER BY rowid`)
+	rows, err := a.DB.Query(`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0) FROM admin_lines ORDER BY rowid`)
 	if err != nil {
 		errAdmin(w, 500, "internal_error", "查询失败")
 		return
@@ -217,7 +217,7 @@ func (a *App) handleAdminLines(w http.ResponseWriter, r *http.Request) { //nolin
 	ls := []lineRow{}
 	for rows.Next() {
 		var x lineRow
-		if err := rows.Scan(&x.id, &x.name, &x.mode, &x.baseURL, &x.vipNum, &x.vipDen, &x.face, &x.enabled, &x.dynamic); err == nil {
+		if err := rows.Scan(&x.id, &x.name, &x.mode, &x.baseURL, &x.authStyle, &x.proxy, &x.vipNum, &x.vipDen, &x.face, &x.enabled, &x.dynamic); err == nil {
 			ls = append(ls, x)
 		}
 	}
@@ -236,9 +236,9 @@ func (a *App) handleAdminLines(w http.ResponseWriter, r *http.Request) { //nolin
 		_ = a.DB.QueryRow(
 			"SELECT COALESCE(SUM(used_micro),0), COALESCE(SUM(initial_micro),0) FROM line_keys WHERE line_id=?", x.id).Scan(&used, &initial)
 		items = append(items, map[string]any{
-			"id": x.id, "name": x.name, "mode": x.mode, "base_url": x.baseURL,
+			"id": x.id, "name": x.name, "mode": x.mode, "base_url": x.baseURL, "auth_style": x.authStyle, "proxy": x.proxy,
 			"vip_num": x.vipNum, "vip_den": x.vipDen, "key_face_micro": x.face,
-			"enabled":    x.enabled != 0, "dynamic": x.dynamic != 0,
+			"enabled": x.enabled != 0, "dynamic": x.dynamic != 0,
 			"keys_total": kTotal, "keys_dead": kDead, "models_total": mTotal,
 			"calls_1h": calls, "ok_1h": oks,
 			"face_used_micro": used, "face_initial_micro": initial,
@@ -257,6 +257,8 @@ func (a *App) handleAdminLineCreate(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		Mode            string `json:"mode"`
 		BaseURL         string `json:"base_url"`
+		AuthStyle       string `json:"auth_style"`
+		Proxy           string `json:"proxy"`
 		VipNum          int64  `json:"vip_num"`
 		VipDen          int64  `json:"vip_den"`
 		KeyFaceMicro    int64  `json:"key_face_micro"`
@@ -290,9 +292,9 @@ func (a *App) handleAdminLineCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	if _, err := a.DB.Exec(
-		`INSERT INTO admin_lines (id, name, mode, base_url, vip_num, vip_den, key_face_micro, enabled, updated_ts)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		req.ID, req.Name, req.Mode, req.BaseURL, req.VipNum, req.VipDen, req.KeyFaceMicro, 1, now); err != nil {
+		`INSERT INTO admin_lines (id, name, mode, base_url, auth_style, proxy, vip_num, vip_den, key_face_micro, enabled, updated_ts)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		req.ID, req.Name, req.Mode, req.BaseURL, strings.TrimSpace(req.AuthStyle), strings.TrimSpace(req.Proxy), req.VipNum, req.VipDen, req.KeyFaceMicro, 1, now); err != nil {
 		errAdmin(w, 500, "internal_error", "创建失败")
 		return
 	}
@@ -309,14 +311,16 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	lineID := r.PathValue("line")
 	var req struct {
-		Name            string `json:"name"`
-		BaseURL         string `json:"base_url"`
-		VipNum          int64  `json:"vip_num"`
-		VipDen          int64  `json:"vip_den"`
-		KeyFaceMicro    int64  `json:"key_face_micro"`
-		Enabled         *bool  `json:"enabled"`
-		Dynamic         *bool  `json:"dynamic"`
-		ConfirmPassword string `json:"confirm_password"`
+		Name            string  `json:"name"`
+		BaseURL         string  `json:"base_url"`
+		AuthStyle       *string `json:"auth_style"` // nil=不改动；""=bearer
+		Proxy           *string `json:"proxy"`      // nil=不改动；""=清空代理
+		VipNum          int64   `json:"vip_num"`
+		VipDen          int64   `json:"vip_den"`
+		KeyFaceMicro    int64   `json:"key_face_micro"`
+		Enabled         *bool   `json:"enabled"`
+		Dynamic         *bool   `json:"dynamic"`
+		ConfirmPassword string  `json:"confirm_password"`
 	}
 	if err := adminBody(r, 8192, &req); err != nil {
 		errAdmin(w, 400, "bad_request", "请求体格式错误")
@@ -328,8 +332,8 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
 		return
 	}
-	var name, mode, baseURL string
-	if err := a.DB.QueryRow("SELECT name, mode, base_url FROM admin_lines WHERE id=?", lineID).Scan(&name, &mode, &baseURL); err == sql.ErrNoRows {
+	var name, mode, baseURL, authStyle, proxy string
+	if err := a.DB.QueryRow("SELECT name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,'') FROM admin_lines WHERE id=?", lineID).Scan(&name, &mode, &baseURL, &authStyle, &proxy); err == sql.ErrNoRows {
 		errAdmin(w, 404, "not_found", "线路不存在")
 		return
 	} else if err != nil {
@@ -341,6 +345,12 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.BaseURL != "" {
 		baseURL = req.BaseURL
+	}
+	if req.AuthStyle != nil {
+		authStyle = strings.TrimSpace(*req.AuthStyle)
+	}
+	if req.Proxy != nil {
+		proxy = strings.TrimSpace(*req.Proxy)
 	}
 	enabled := 1
 	if req.Enabled != nil {
@@ -363,12 +373,12 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 		_ = a.DB.QueryRow("SELECT COALESCE(dynamic,0) FROM admin_lines WHERE id=?", lineID).Scan(&dynamic)
 	}
 	if _, err := a.DB.Exec(
-		`UPDATE admin_lines SET name=?, base_url=?, vip_num=?, vip_den=?, key_face_micro=?, enabled=?, dynamic=?, updated_ts=? WHERE id=?`,
-		name, baseURL, req.VipNum, req.VipDen, req.KeyFaceMicro, enabled, dynamic, time.Now().Unix(), lineID); err != nil {
+		`UPDATE admin_lines SET name=?, base_url=?, auth_style=?, proxy=?, vip_num=?, vip_den=?, key_face_micro=?, enabled=?, dynamic=?, updated_ts=? WHERE id=?`,
+		name, baseURL, authStyle, proxy, req.VipNum, req.VipDen, req.KeyFaceMicro, enabled, dynamic, time.Now().Unix(), lineID); err != nil {
 		errAdmin(w, 500, "internal_error", "更新失败")
 		return
 	}
-	a.auditAppend("line_update", 0, fmt.Sprintf("线=%s enabled=%d base=%s", lineID, enabled, baseURL), ip)
+	a.auditAppend("line_update", 0, fmt.Sprintf("线=%s enabled=%d base=%s auth=%s proxy=%s", lineID, enabled, baseURL, authStyle, proxy), ip)
 	_ = a.reloadLines()
 	jsonOut(w, 200, map[string]any{"ok": true})
 }
@@ -1030,6 +1040,21 @@ func (a *App) handleAdminLinesReload(w http.ResponseWriter, r *http.Request) {
 // lineTestHTTP 渠道测试专用 HTTP 客户端（独立于转发 KeyPool，轻量短超时）
 var lineTestHTTP = &http.Client{Timeout: 15 * time.Second}
 
+// lineHTTP 按线路代理配置返回测试用 client：带代理的线（如 gpt 线走本机 sing-box）
+// 现建带 Proxy 的短超时 client，普通线复用全局 lineTestHTTP 直连
+func lineHTTP(l *config.Line) *http.Client {
+	if l.Proxy == "" {
+		return lineTestHTTP
+	}
+	if pu, err := url.Parse(l.Proxy); err == nil && pu.Scheme != "" {
+		return &http.Client{
+			Timeout:   20 * time.Second,
+			Transport: &http.Transport{Proxy: http.ProxyURL(pu)},
+		}
+	}
+	return lineTestHTTP
+}
+
 // testLineUpstream 单线测试：GET {base}/models（上游标准端点，零计费），
 // 返回 状态码/延迟/上游模型数；key 取线内第一把活钥（免费线无钥不带鉴权头）。
 func testLineUpstream(l *config.Line) map[string]any {
@@ -1047,7 +1072,7 @@ func testLineUpstream(l *config.Line) map[string]any {
 			req.Header.Set("Authorization", "Bearer "+l.Keys[0])
 		}
 	}
-	resp, err := lineTestHTTP.Do(req)
+	resp, err := lineHTTP(l).Do(req)
 	if err != nil {
 		return map[string]any{"line": l.ID, "name": l.Name, "ok": false,
 			"latency_ms": time.Since(start).Milliseconds(), "error": "network_error"}
@@ -1129,7 +1154,7 @@ func (a *App) handleAdminLineUpstreamModels(w http.ResponseWriter, r *http.Reque
 			req.Header.Set("Authorization", "Bearer "+l.Keys[0])
 		}
 	}
-	resp, err := lineTestHTTP.Do(req)
+	resp, err := lineHTTP(l).Do(req)
 	if err != nil {
 		errAdmin(w, 502, "upstream_error", "上游不可达: "+err.Error())
 		return

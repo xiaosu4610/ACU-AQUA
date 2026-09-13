@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -194,18 +195,25 @@ type Client struct {
 // 连接/TLS 快速失败：上游 CDN 拦截（TLS 握手挂死）场景 10 秒内报错进入重试/冷却，
 // 而非拖满整段请求超时
 func NewClient(l *config.Line) *Client {
+	tr := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        64,
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	// 线路级出站代理：gpt 线经本机 sing-box 出美国口（OpenAI 地域风控），其余线直连
+	if l.Proxy != "" {
+		if pu, err := url.Parse(l.Proxy); err == nil && pu.Scheme != "" {
+			tr.Proxy = http.ProxyURL(pu)
+		}
+	}
 	return &Client{
 		Line: l,
 		Pool: NewKeyPool(l.Keys, l.KeyFaceMicro, 300),
 		HTTP: &http.Client{
-			Timeout: 300 * time.Second,
-			Transport: &http.Transport{
-				DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-				TLSHandshakeTimeout: 10 * time.Second,
-				MaxIdleConns:        64,
-				MaxIdleConnsPerHost: 16,
-				IdleConnTimeout:     90 * time.Second,
-			},
+			Timeout:   300 * time.Second,
+			Transport: tr,
 		},
 	}
 }
@@ -388,8 +396,12 @@ func (c *Client) DoKey(ctx context.Context, body []byte, stream bool, path strin
 	return resp, k, nil
 }
 
-// send 单次上游请求：注入密钥认证（bearer / x-api-key）
+// send 单次上游请求：注入密钥认证（bearer / x-api-key / codex OAuth）
 func (c *Client) send(ctx context.Context, k *KeyState, body []byte, stream bool, path string) (*http.Response, error) {
+	if c.Line.AuthStyle == "codex" {
+		// Codex（ChatGPT 账号）线：RT→AT 换票 + chat/completions↔Responses 协议转换（见 codex.go）
+		return c.codexSend(ctx, k, body, stream, path)
+	}
 	url := strings.TrimRight(c.Line.BaseURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
