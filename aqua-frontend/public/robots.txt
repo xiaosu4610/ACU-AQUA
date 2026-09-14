@@ -1,0 +1,10 @@
+# AQUA — https://acu.ltzy.top
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /console
+Disallow: /login
+Disallow: /usage
+Disallow: /finance
+
+Sitemap: https://acu.ltzy.top/sitemap.xml

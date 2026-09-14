@@ -2,7 +2,7 @@
 /* 站长管理控制台：单密码登录（独立 adm_ 会话，与用户体系隔离）
  * 视图：仪表盘 / 客户管理 / 上游管理 / 上游额度 / 众筹池 / 额度监管 / 审计日志 / 对账 / 系统更新 / 站点设置
  * 资金红线：高危操作二次密码；金额全程微元整数；任一接口 401 → 清 token 回登录视图。 */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { apiJson as apiJsonRaw, errText, fmt } from '@/composables/useApi'
 import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
@@ -46,18 +46,11 @@ const loginPw = ref('')
 const loginMsg = ref('')
 const lastLogin = ref<{ ts: number; ip: string } | null>(null)
 
-/* noindex：进入页面设 robots，离开还原 */
-let metaEl: HTMLMetaElement | null = null
+/* title 与 robots noindex 由路由钩子统一管理（router.ts afterEach） */
 onMounted(() => {
   try { token.value = localStorage.getItem(TOKEN_KEY) || '' } catch { /* 忽略 */ }
-  metaEl = document.createElement('meta')
-  metaEl.name = 'robots'
-  metaEl.content = 'noindex, nofollow'
-  document.head.appendChild(metaEl)
-  document.title = '管理控制台 · AQUA'
   if (token.value) { loadStats(); loadQuota(); loadSupervision() }
 })
-onUnmounted(() => { if (metaEl) metaEl.remove() })
 
 async function doLogin() {
   if (!loginPw.value) return
