@@ -807,7 +807,7 @@ func (a *App) epaySettle(outTradeNo, tradeNo string) {
 		return
 	}
 	if product == "pool" {
-		// 众筹池充值：站点额度口径——实付 amount，到账 2×amount 站点额度（充值翻倍营销，扣费按官方原价走账）
+		// 众筹池充值：站点额度口径——实付 amount，1:1 到账 amount 站点额度（扣池价=拿货价=真实成本，翻倍补贴已取消）
 		if err := poolChargeTx(tx, uid, amount); err != nil {
 			_ = tx.Rollback()
 			return

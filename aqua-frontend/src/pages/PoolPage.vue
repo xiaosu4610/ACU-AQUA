@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* 众筹公共算力池（acu/）：资金池驾驶舱 + 充值翻倍 + 四大榜单 + 透明流水 + 个人注入记录
+/* 众筹公共算力池（acu/）：资金池驾驶舱 + 众筹模型一览 + 1:1 充值注入 + 四大榜单 + 透明流水 + 个人注入记录
  * 铁律：本页零上游调用——只打本网关 /v1/pool/* /v1/pay/* /v1/my/pool/* 接口 */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AqIcon from '@/components/AqIcon.vue'
@@ -48,6 +48,24 @@ interface MyPool {
   my_used_micro?: number
   net_micro?: number
   items?: MyPoolFlow[]
+}
+
+/* ===== 众筹模型一览（/v1/models acu/ 前缀，price_micro = 拿货价单次价） ===== */
+interface CrowdModel { id: string; price_micro?: number | null; description?: string }
+const crowdModels = ref<CrowdModel[]>([])
+const crowdModelsMsg = ref('')
+async function loadCrowdModels() {
+  try {
+    const j = await apiJson<{ data?: CrowdModel[] }>('/models')
+    crowdModels.value = (j.data || []).filter(m => m.id.startsWith('acu/'))
+  } catch (e) {
+    crowdModelsMsg.value = errText(e)
+    crowdModels.value = []
+  }
+}
+function microYuan(v?: number | null): string {
+  if (v == null) return '--'
+  return (v / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
 }
 
 /* ===== 池子状态与公开流水 ===== */
@@ -167,9 +185,17 @@ function yuan(v?: number | null): string {
   return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
 }
 const topupMicro = computed(() => Math.round((Number(topupAmt.value) || 0) * 1_000_000))
-const giftYuan = computed(() => yuan((Number(topupAmt.value) || 0) * 2 * 1_000_000))
+const giftYuan = computed(() => yuan((Number(topupAmt.value) || 0) * 1_000_000)) // 1:1 注入：到账 = 实付
 const alive = computed(() => !!status.value && status.value.balance_micro > 0)
-const tokensOf = (micro: number) => Math.floor((micro / 1_000_000) * 50) // ¥1 ≈ 50 万输入 tokens（v4f 官方原价口径）
+const cheapModel = computed(() => crowdModels.value.reduce<CrowdModel | null>((min, m) => {
+  if (m.price_micro == null) return min
+  return !min || (min.price_micro ?? 0) > m.price_micro ? m : min
+}, null))
+const callsOf = (micro: number) => {
+  const p = cheapModel.value?.price_micro
+  if (!p || p <= 0) return null
+  return Math.floor(micro / p)
+}
 
 async function createTopup() {
   if (!isLoggedIn()) {
@@ -214,7 +240,7 @@ function startPolling() {
       )
       if (j.status === 'paid') {
         payOk.value = true
-        payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
+        payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
         stopPolling()
         payingOrder.value = null
         payOpen.value = false
@@ -243,7 +269,7 @@ async function manualCheck() {
     )
     if (j.status === 'paid') {
       payOk.value = true
-      payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
+      payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
       stopPolling()
       payingOrder.value = null
       payOpen.value = false
@@ -283,7 +309,7 @@ function myTypeText(f: MyPoolFlow): string {
 const netCls = computed(() => ((myPool.value.net_micro ?? 0) >= 0 ? 'pos' : 'negw'))
 
 onMounted(async () => {
-  await Promise.all([loadStatus(), loadFlows(), loadRanks()])
+  await Promise.all([loadStatus(), loadFlows(), loadRanks(), loadCrowdModels()])
   loading.value = false
   if (sessionToken.value) loadMyPool()
 })
@@ -297,7 +323,7 @@ onMounted(async () => {
         <div>
           <h1><AqIcon name="coin" :size="24" />众筹公共算力池</h1>
           <div class="sub">
-            acu/ 前缀众筹模型按<b>官方原价</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。充值翻倍：充 1 元 = 2 元站点额度，额度由大家共同充值扩充，见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
+            acu/ 前缀众筹模型按<b>拿货价</b>（远低于官方原价）从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。站点额度由大家共同充值维持（充多少进多少，1:1 注入），见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
           </div>
         </div>
         <div class="ops">
@@ -317,7 +343,7 @@ onMounted(async () => {
         </div>
         <template v-else-if="status">
           <div class="row between wrap">
-            <span class="dim"><AqIcon name="droplet" :size="14" /> 当前站点额度 ≈ 可供 {{ tokensOf(status.balance_micro).toLocaleString() }} 万输入 tokens（v4f 官方原价口径）</span>
+            <span class="dim"><AqIcon name="droplet" :size="14" /> 当前站点额度<template v-if="callsOf(status.balance_micro) != null"> ≈ 可供 {{ callsOf(status.balance_micro)?.toLocaleString() }} 次 {{ cheapModel?.id.split('/')[1] }}（¥{{ microYuan(cheapModel?.price_micro) }}/次 拿货价）</template></span>
           </div>
           <div class="pool-balance grad-text">¥{{ yuan(status.balance_micro) }}</div>
         </template>
@@ -330,10 +356,33 @@ onMounted(async () => {
 
       <!-- 四 KPI -->
       <div class="kpis mt16">
-        <div class="kpi"><span>累计充值</span><b>{{ status ? '¥' + yuan(status.charged_micro) : '--' }}</b><span class="trend">充 1 元 = 2 元站点额度</span></div>
-        <div class="kpi"><span>累计消耗</span><b>{{ status ? '¥' + yuan(status.used_micro) : '--' }}</b><span class="trend">按官方原价从池扣费</span></div>
+        <div class="kpi"><span>累计充值</span><b>{{ status ? '¥' + yuan(status.charged_micro) : '--' }}</b><span class="trend">1:1 注入站点额度</span></div>
+        <div class="kpi"><span>累计消耗</span><b>{{ status ? '¥' + yuan(status.used_micro) : '--' }}</b><span class="trend">按拿货价从池扣费</span></div>
         <div class="kpi"><span>今日消耗</span><b>{{ status ? '¥' + yuan(status.today_used_micro) : '--' }}</b><span class="trend">每天 0 点重置</span></div>
         <div class="kpi"><span>共同使用人数</span><b>{{ status ? status.consumers : '--' }}</b><span class="trend">无需充值即可调用</span></div>
+      </div>
+
+      <!-- 众筹模型一览 -->
+      <div class="card mt16">
+        <b><AqIcon name="server" :size="16" /> 众筹模型一览（acu/ 前缀 · 按拿货价扣池）</b>
+        <p class="msg info mt12" style="margin: 0;">以下模型<b>所有分组密钥均可调用</b>（含纯免费），每次成功请求按下方<b>拿货价</b>从公共站点额度扣费，个人余额分文不动；失败请求全额退回池子。</p>
+        <p v-if="crowdModelsMsg" class="msg bad mt12">{{ crowdModelsMsg }}</p>
+        <div v-else-if="!crowdModels.length" class="empty" style="padding: 18px 0;">
+          <b>模型列表加载中或暂未上架</b>
+          <div class="dim">以 /v1/models 实时下发为准 · 每分钟自动刷新</div>
+        </div>
+        <div v-else class="tbl-wrap mt12">
+          <table class="table">
+            <thead><tr><th>模型 ID</th><th class="num">单次价格（拿货价）</th><th>计费说明</th></tr></thead>
+            <tbody>
+              <tr v-for="m in crowdModels" :key="m.id">
+                <td><code class="crowd-id">{{ m.id }}</code> <CopyBtn :text="m.id" size="xs" /></td>
+                <td class="num"><b class="grad-text">¥{{ microYuan(m.price_micro) }}</b><span class="dim"> / 次</span></td>
+                <td class="dim">{{ m.description || '按次计费：每次成功请求扣一次，与生成长度无关' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 登录提示卡 / 个人注入记录 -->
@@ -374,11 +423,11 @@ onMounted(async () => {
         </template>
       </div>
 
-      <!-- 充值翻倍 -->
+      <!-- 充值注入（1:1） -->
       <div class="card mt16">
-        <b><AqIcon name="plus" :size="16" /> 充值翻倍 · 扩充站点额度</b>
+        <b><AqIcon name="plus" :size="16" /> 充值 · 扩充站点额度</b>
         <p class="dim mt8" style="max-width: 72ch;">
-          <b style="color: var(--warn);">充值翻倍：充 1 元 = 2 元站点额度</b>（实付 ¥10 → 到账 ¥20），注入公共池由所有人共用消耗，<b style="color: var(--warn);">不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。
+          <b>充多少进多少（1:1 注入站点额度）</b>，注入公共池由所有人共用消耗，<b style="color: var(--warn);">不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。
         </p>
         <div class="chips mt12">
           <button v-for="a in AMTS" :key="a" type="button" class="chip" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>
@@ -552,6 +601,7 @@ onMounted(async () => {
 .pop { width: 400px; max-width: 100%; background: var(--bg2-solid); box-shadow: var(--shadow-2); display: flex; flex-direction: column; gap: 12px; }
 .order-no { font-family: var(--mono); font-size: 12px; color: var(--txt1); background: var(--bg3); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; word-break: break-all; }
 tr.me td { background: var(--acc-soft); }
+.crowd-id { font-family: var(--mono); font-size: 12.5px; color: var(--acc); font-weight: 600; }
 .pos { color: var(--ok); }
 .neg { color: var(--bad); }
 .negw { color: var(--warn); }

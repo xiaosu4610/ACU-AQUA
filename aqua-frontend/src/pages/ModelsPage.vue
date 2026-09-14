@@ -222,8 +222,7 @@ const crowdModels = computed(() => orderedModels.value
   .filter(m => isCrowd(m.id))
   .map(m => ({
     id: m.id,
-    inPrice: m.in_price ?? 0,
-    outPrice: m.out_price ?? 0,
+    price: m.price_micro ?? 0,
     health: healthOf(m),
     st: statusOf(m),
     link: modelLink(m.id),
@@ -237,7 +236,7 @@ const CROWD_DESC: Record<string, { t: string; d: string }> = {
   'acu/glm-5.3': { t: '智谱 GLM 旗舰', d: '中文创作与代码生成双优' },
   'acu/glm-5.3-flash': { t: 'GLM 极速版', d: '毫秒级响应，高并发场景利器' },
 }
-function crowdDesc(id: string) { return CROWD_DESC[id] || { t: '官方自营通道', d: '按官方原价从站点额度扣费' } }
+function crowdDesc(id: string) { return CROWD_DESC[id] || { t: '官方自营通道', d: '按拿货价从站点额度扣费' } }
 
 /* ================= 加载/同步状态提示条（旧 updateModelsNotice 平移） ================= */
 function timeStr(t: number): string {
@@ -631,8 +630,8 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             </div>
           </div>
           <p class="dim mt8" style="font-size: 12.5px;">
-            acu/ 前缀模型按<b>官方原价</b>从<b>众筹站点额度</b>扣费——无需充值即可调用，任何分组密钥可用，个人余额分文不动；
-            充值翻倍：充 1 元 = 2 元站点额度，额度见底即暂停，充值立刻复活。
+            acu/ 前缀模型按<b>拿货价</b>（远低于官方原价）从<b>众筹站点额度</b>扣费——无需充值即可调用，任何分组密钥可用，个人余额分文不动；
+            站点额度 1:1 充值注入，见底即暂停，充值立刻复活。
           </p>
           <div class="grid3 mt12">
             <div v-for="m in crowdModels" :key="m.id" class="crowd-item">
@@ -645,15 +644,15 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="dim" style="font-size: 11.5px;">{{ crowdDesc(m.id).d }}</div>
               </div>
               <div class="row wrap mt8" style="gap: 6px;">
-                <span class="tag">¥{{ m.inPrice }}/M 入 · ¥{{ m.outPrice }}/M 出</span>
+                <span class="tag grad num">¥{{ microYuan(m.price) }}<em>/次</em></span>
                 <span v-if="m.health" class="tag"><span class="dot" :class="m.health.dot"></span>健康 {{ m.health.score }}</span>
                 <span v-if="m.st" class="tag bad" :title="m.st.title">{{ m.st.text }}</span>
               </div>
             </div>
             <div class="crowd-item cta">
-              <b>充值翻倍</b>
-              <p class="dim" style="font-size: 12px;">充 1 元 = 2 元站点额度——充 10 到账 20，给所有人的公共算力扩容，无最低限制；额度归零后第一笔充值自动登上荣誉墙。</p>
-              <router-link to="/pool" class="btn primary sm">去充值翻倍</router-link>
+              <b>充值扩容</b>
+              <p class="dim" style="font-size: 12px;">充多少进多少（1:1 注入站点额度）——给所有人的公共算力扩容，无最低限制；额度归零后第一笔充值自动登上荣誉墙。</p>
+              <router-link to="/pool" class="btn primary sm">去充值</router-link>
             </div>
           </div>
         </div>

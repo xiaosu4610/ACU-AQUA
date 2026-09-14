@@ -581,7 +581,7 @@ function fmtTime(ts: number): string {
             <b><AqIcon name="list" :size="16" /> 密钥列表</b>
             <button class="btn sm" :disabled="keysLoading" @click="loadKeys"><AqIcon name="refresh" :size="13" /> 刷新</button>
           </div>
-          <p class="dim mt8">acu/ 前缀为<router-link to="/pool">众筹公共模型</router-link>——任何分组密钥都可调用，按<b>官方原价</b>从站点额度扣费（充 1 元 = 2 元额度），个人余额不受影响。</p>
+          <p class="dim mt8">acu/ 前缀为<router-link to="/pool">众筹公共模型</router-link>——任何分组密钥都可调用，按<b>拿货价</b>从站点额度扣费（1:1 充值注入），个人余额不受影响。</p>
           <div v-if="keysLoading && !keys.length" class="mt12"><div class="skeleton" style="min-height: 120px;"></div></div>
           <div v-else-if="!keys.length" class="empty">
             <div class="big"><AqIcon name="key" :size="34" /></div>
@@ -713,7 +713,7 @@ function fmtTime(ts: number): string {
       <div v-show="view === 'topup'">
         <div class="banner warn">
           <AqIcon name="info" :size="14" />
-          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值余额用于收费模型（aqua/ 前缀，按次计费）扣费，免费模型不受影响。<b>「充 1 = 2」充值翻倍仅限众筹公共池</b>——想用 acu/ 众筹模型请到 <router-link to="/pool">众筹池充值</router-link>。</span>
+          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值余额用于收费模型（aqua/ 前缀，按次计费）扣费，免费模型不受影响。acu/ 众筹公共模型扣<b>站点额度</b>不动余额——想为公共算力扩容请到 <router-link to="/pool">众筹池充值</router-link>（1:1 注入）。</span>
         </div>
 
         <!-- 在线充值 -->
