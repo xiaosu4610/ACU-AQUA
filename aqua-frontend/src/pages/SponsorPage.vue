@@ -21,8 +21,8 @@ const FREE = [
   <div class="wrap">
     <div class="page-head fade-up">
       <div>
-        <h1><AqIcon name="heart" style="color: var(--bad);" />赞助 AQUA</h1>
-        <div class="sub">AQUA 是 ACU 工程系列的开源旗舰项目——注册免费、密钥自助创建、账号制长期运行。但服务器、带宽与上游算力都是每月真实支出的成本。如果 AQUA 帮你的项目省了钱、省了心，欢迎请作者喝杯咖啡，这是对我们最直接的支持。</div>
+        <h1><AqIcon name="heart" style="color: var(--bad);" />赞助 AQUA api</h1>
+        <div class="sub">AQUA api 是 ACU 工程系列的开源旗舰项目——注册免费、密钥自助创建、账号制长期运行。但服务器、带宽与上游算力都是每月真实支出的成本。如果 AQUA api 帮你的项目省了钱、省了心，欢迎请作者喝杯咖啡，这是对我们最直接的支持。</div>
       </div>
     </div>
 
@@ -50,7 +50,7 @@ const FREE = [
             </a>
           </div>
           <p class="dim mt12" style="font-size: 13px;">
-            赞助完全自愿、金额随意，<b>不与任何功能挂钩</b>——AQUA 注册免费，登录后在控制台自助创建密钥即可使用。
+            赞助完全自愿、金额随意，<b>不与任何功能挂钩</b>——AQUA api 注册免费，登录后在控制台自助创建密钥即可使用。
             感谢每一位支持者，你们让免费 AI 网关走得更远 <AqIcon name="heart" :size="13" style="color: var(--bad);" />
           </p>
         </div>

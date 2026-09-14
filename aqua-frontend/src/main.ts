@@ -1,4 +1,4 @@
-/* AQUA 前端入口：主题先行 + 全局错误防线 + hash 链接兼容 + 路由守卫 */
+/* AQUA api 前端入口：主题先行 + 全局错误防线 + hash 链接兼容 + 路由守卫 */
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'

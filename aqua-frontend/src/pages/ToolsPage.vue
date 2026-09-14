@@ -33,7 +33,7 @@ const groups = computed(() => {
     <div class="page-head fade-up">
       <div>
         <h1><AqIcon name="box" />工具箱</h1>
-        <div class="sub">基于 AQUA 网关构建的对弈游戏与实用工具——每个工具既是网页应用，也是网关 API，兼容性拉满。共 {{ toolCount() }} 个。</div>
+        <div class="sub">基于 AQUA api 网关构建的对弈游戏与实用工具——每个工具既是网页应用，也是网关 API，兼容性拉满。共 {{ toolCount() }} 个。</div>
       </div>
       <div class="ops">
         <input v-model="q" class="input" style="width: 250px;" placeholder="搜索工具名称 / 功能 / 接口路径…">

@@ -104,7 +104,7 @@ const flowTypeLabel: Record<string, string> = {
 
 /* ===== 站点设置（settings 表外置化：改完即时生效，无需改代码发版） ===== */
 const SETTINGS_FIELDS: { key: string; label: string; ph: string; hint?: string }[] = [
-  { key: 'site_name', label: '站点名称', ph: 'AQUA Gateway' },
+  { key: 'site_name', label: '站点名称', ph: 'AQUA api' },
   { key: 'qq_group', label: 'QQ 一群号', ph: '' },
   { key: 'qq_group_url', label: 'QQ 一群加群链接', ph: 'https://qm.qq.com/…' },
   { key: 'qq_group2', label: 'QQ 二群号', ph: '' },

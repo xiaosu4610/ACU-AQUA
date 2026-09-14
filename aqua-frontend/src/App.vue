@@ -81,7 +81,7 @@ const BENCH_NAV = [
 function benchOn(it: { match: string[] }): boolean { return it.match.includes(route.path) }
 
 const initial = computed(() => (me.value?.username || 'A').charAt(0).toUpperCase())
-const siteName = computed(() => meta.value?.name || 'AQUA')
+const siteName = computed(() => meta.value?.name || 'AQUA api')
 
 async function doLogout() {
   await logout()

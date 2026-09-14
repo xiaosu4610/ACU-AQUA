@@ -364,7 +364,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
       "上下文 1M tokens，单次最大输出 384K tokens",
       "思考模式：支持非思考与思考双模式（默认思考，最高 Think Max 深度档）",
       "官方支持 Tool Calls / JSON Output / 结构化输出 / 对话前缀续写，请求体参数原样透传",
-      "AQUA 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
+      "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     unsupported: ACU_UNSUPPORTED
   },
@@ -374,7 +374,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
       "上下文 1M tokens，单次最大输出 384K tokens",
       "思考三档：Non-Think（快速响应）/ Think High / Think Max（最深推理）",
       "官方支持 Tool Calls / JSON Output / 结构化输出 / 对话前缀续写，请求体参数原样透传",
-      "AQUA 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
+      "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     unsupported: ACU_UNSUPPORTED
   },
@@ -384,7 +384,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
       "Solid 1M 上下文（IndexShare 架构），单次最大输出 128K tokens",
       "思考力度可调：High（平衡）/ Max（深度）档位，none / minimal 可放弃思考",
       "官方支持 Tool Calls / JSON 结构化输出 / 上下文缓存 / 流式输出，请求体参数原样透传",
-      "AQUA 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
+      "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     extraParams: [
       ["thinking", "object", "enabled", "思维链开关（GLM-5.2 及以上支持）：{\"type\": \"enabled\"}"],
@@ -398,7 +398,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
       "上下文 1M tokens，单次最大输出 128K tokens",
       "深度思考强制开启（不可关闭），reasoning_effort 支持 low / high / max（默认 max）",
       "官方支持 Tool Calls / JSON 结构化输出 / 上下文缓存 / 流式输出，请求体参数原样透传",
-      "AQUA 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
+      "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     extraParams: [
       ["thinking", "object", "enabled", "思维链开关：{\"type\": \"enabled\"}（GLM-5.3 强制开启）"],
@@ -413,7 +413,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
       "深度思考默认开启且不可关闭，reasoning_effort 支持 low / high / max",
       "GLM-5 系列首个原生多模态基座（文本 / 图片 / 视频输入），本站专线当前以文本对话为主",
       "官方支持 Tool Calls / JSON 结构化输出 / 上下文缓存 / 流式输出，请求体参数原样透传",
-      "AQUA 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
+      "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     extraParams: [
       ["thinking", "object", "enabled", "思维链开关：{\"type\": \"enabled\"}（GLM-5.3-Flash 强制开启）"],
@@ -458,7 +458,7 @@ function exBody(): string {
   const t = meta.value.type
   if (t === 'embedding') return '{"model":"' + mid + '","input":"你好"}'
   if (t === 'rerank') return '{"model":"' + mid + '","query":"你好","documents":["文档A","文档B"]}'
-  if (t === 'tts') return '{"model":"' + mid + '","input":"你好，欢迎使用 AQUA","voice":"default"}'
+  if (t === 'tts') return '{"model":"' + mid + '","input":"你好，欢迎使用 AQUA api","voice":"default"}'
   if (t === 'moderation') return '{"model":"' + mid + '","input":"待检测文本"}'
   if (t === 'image') return '{"model":"' + mid + '","prompt":"一只可爱的橘猫","size":"1024x1024"}'
   if (t === 'video') return '{"model":"' + mid + '","prompt":"一只小狗在草地上奔跑"}'
@@ -489,7 +489,7 @@ const exPy = computed(() => {
     return head + 'r = client.audio.transcriptions.create(\n    model="' + mid + '",\n    file=open("audio.wav", "rb"),\n)\nprint(r.text)'
   }
   if (t === 'tts') {
-    return head + 'r = client.audio.speech.create(\n    model="' + mid + '",\n    voice="default",\n    input="你好，欢迎使用 AQUA",\n)\nr.stream_to_file("speech.mp3")'
+    return head + 'r = client.audio.speech.create(\n    model="' + mid + '",\n    voice="default",\n    input="你好，欢迎使用 AQUA api",\n)\nr.stream_to_file("speech.mp3")'
   }
   if (t === 'moderation') {
     return head + 'r = client.moderations.create(\n    model="' + mid + '",\n    input="待检测文本",\n)\nprint(r.results[0])'
@@ -522,7 +522,7 @@ const exJs = computed(() => {
     return head + 'const r = await client.audio.transcriptions.create({\n  model: "' + mid + '",\n  file: fs.createReadStream("audio.wav"),\n});\nconsole.log(r.text);'
   }
   if (t === 'tts') {
-    return head + 'const r = await client.audio.speech.create({\n  model: "' + mid + '",\n  voice: "default",\n  input: "你好，欢迎使用 AQUA",\n});\nawait r.writeFile("speech.mp3");'
+    return head + 'const r = await client.audio.speech.create({\n  model: "' + mid + '",\n  voice: "default",\n  input: "你好，欢迎使用 AQUA api",\n});\nawait r.writeFile("speech.mp3");'
   }
   if (t === 'moderation') {
     return head + 'const r = await client.moderations.create({\n  model: "' + mid + '",\n  input: "待检测文本",\n});\nconsole.log(r.results[0]);'

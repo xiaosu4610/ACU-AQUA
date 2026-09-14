@@ -102,7 +102,7 @@ const codeApiModelsCurl = `curl https://api.ltzy.top/v1/models
 
 const codeApiChatBody = `{"model": "gpt-oss-20b",
   "messages": [
-    {"role": "system", "content": "你是 AQUA 助手"},
+    {"role": "system", "content": "你是 AQUA api 助手"},
     {"role": "user", "content": "你好"}
   ],
   "temperature": 0.7,
@@ -181,7 +181,7 @@ function jump(id: string) {
       <div>
         <h1><AqIcon name="book" :size="22" />API 文档</h1>
         <div class="sub">
-          AQUA 网关完整兼容 OpenAI 协议，所有端点均可直接用 OpenAI SDK 调用。
+          AQUA api 网关完整兼容 OpenAI 协议，所有端点均可直接用 OpenAI SDK 调用。
           <b>API Key 账号制：注册登录后，在个人控制台一键创建密钥（sk-****），注册免费、随时吊销重建</b>；模型列表以「模型中心」为准（实时同步）。
         </div>
       </div>
@@ -210,11 +210,11 @@ function jump(id: string) {
           <h3>API 是什么？——一家「自动点餐」的餐厅</h3>
           <p class="desc">想象一家餐厅：<b>你（你的程序）</b>写好一份<b>点菜单（请求）</b>递给<b>服务员（API）</b>，服务员把单子送进<b>后厨（AI 模型）</b>，做好菜再把<b>结果（回复）</b>端出来。你不需要知道后厨怎么炒的——会递单子、能接菜，就够了。<b>API 就是这套「递单子 → 出菜」的规矩</b>，大家按同一个规矩来，程序之间就能互相使唤。</p>
           <h3>API 网关是什么？——前台总服务台</h3>
-          <p class="desc">AQUA 就是那个前台。后面有几家后厨（Nvidia NIM、官方自营专线……几十个模型），但你只跟前台一个窗口打交道：<b>报一个菜名（模型 ID），前台自动转给对应的后厨</b>。免费模型的菜名是小写短 ID（比如 <code>gpt-oss-20b</code>），官方自营收费模型带 <code>aqua/</code> 前缀（比如 <code>aqua/deepseek-v4-flash</code>），前台拿着菜名查自己的「菜单目录」，就知道该送往哪家后厨。</p>
+          <p class="desc">AQUA api 就是那个前台。后面有几家后厨（Nvidia NIM、官方自营专线……几十个模型），但你只跟前台一个窗口打交道：<b>报一个菜名（模型 ID），前台自动转给对应的后厨</b>。免费模型的菜名是小写短 ID（比如 <code>gpt-oss-20b</code>），官方自营收费模型带 <code>aqua/</code> 前缀（比如 <code>aqua/deepseek-v4-flash</code>），前台拿着菜名查自己的「菜单目录」，就知道该送往哪家后厨。</p>
           <h3>API Key（密钥）是什么？——一张自助领取的门票</h3>
-          <p class="desc">大部分网站的 API Key 像<b>演唱会门票</b>：要实名申请、要花钱、丢了要补办。AQUA 的 Key 是一张<b>自助领取的门票</b>：<b>注册登录后，进「个人控制台」一键创建</b>，立刻可用——<b>注册免费、创建自助、随时吊销重建</b>。每个密钥有独立备注和用量统计，丢了就吊销重发，不用问任何人。</p>
+          <p class="desc">大部分网站的 API Key 像<b>演唱会门票</b>：要实名申请、要花钱、丢了要补办。AQUA api 的 Key 是一张<b>自助领取的门票</b>：<b>注册登录后，进「个人控制台」一键创建</b>，立刻可用——<b>注册免费、创建自助、随时吊销重建</b>。每个密钥有独立备注和用量统计，丢了就吊销重发，不用问任何人。</p>
           <h3>一次调用的完整旅程</h3>
-          <pre class="code">你的程序                          AQUA 网关                        AI 模型（后厨）
+          <pre class="code">你的程序                          AQUA api 网关                        AI 模型（后厨）
    │                                 │                                │
    │  ① 递单子：带密钥的 HTTP 请求     │                                │
    │  「模型 deepseek-v4-flash，   │  ② 看菜名找后厨                 │
@@ -223,7 +223,7 @@ function jump(id: string) {
    │  ④ 端菜：JSON 回复               │  ◄─────────────  原样转交        │
    │  「你好！很高兴见到你」 ◄─────────│                                │
    ▼</pre>
-          <p class="desc">所以对接 AQUA 你只需要记三样东西：<b>① 接口地址</b>（本站 <code>https://api.ltzy.top/v1</code>）；<b>② 密钥</b>（控制台创建）；<b>③ 模型 ID</b>（去「模型中心」抄）。往下看，三分钟跑通第一条请求。</p>
+          <p class="desc">所以对接 AQUA api 你只需要记三样东西：<b>① 接口地址</b>（本站 <code>https://api.ltzy.top/v1</code>）；<b>② 密钥</b>（控制台创建）；<b>③ 模型 ID</b>（去「模型中心」抄）。往下看，三分钟跑通第一条请求。</p>
         </section>
 
         <!-- ===== 三分钟跑通 ===== -->
@@ -422,7 +422,7 @@ function jump(id: string) {
           <h2>特殊模型说明</h2>
           <ul class="tips">
             <li><b>Auto 路由</b>：填入 <code>auto</code>（旧写法 <code>acu/auto-models</code> 仍兼容），网关自动从 Nvidia 候选池随机命中一个主流模型。</li>
-            <li><b>官方自营（收费）</b>：模型 ID 带 <code>aqua/</code> 前缀（如 <code>aqua/deepseek-v4-flash</code>），由 AQUA 官方自营专线通道提供，按次计费（每次成功请求扣一次），长期服务、稳定可靠。</li>
+            <li><b>官方自营（收费）</b>：模型 ID 带 <code>aqua/</code> 前缀（如 <code>aqua/deepseek-v4-flash</code>），由 AQUA api 官方自营专线通道提供，按次计费（每次成功请求扣一次），长期服务、稳定可靠。</li>
             <li><b>专线排队</b>：专线通道有并发保护，高峰期会自动排队等待（先到先得）；排队超时会返回提示，请稍后重试，不要重复提交。</li>
             <li><b>非标准端点</b>：付费图像模型（<code>/v1/images/generations</code>）等特殊能力已适配为标准 OpenAI SDK 端点，可直接用官方 SDK 调用。</li>
             <li><b>账号制密钥</b>：注册登录后在个人控制台创建密钥（<code>sk-****</code>）即可调用——注册免费、创建自助、随时吊销重建。大版本更新与公告在 QQ 频道（频道号 pd57362562）通知。</li>
@@ -552,8 +552,8 @@ function jump(id: string) {
 
         <!-- ===== 对接指南 ===== -->
         <section id="a-integration" class="card sec">
-          <h2>对接指南：把 AQUA 接进你的软件</h2>
-          <p class="desc">AQUA 说的是标准「OpenAI 方言」——凡是支持自定义 OpenAI 接口的软件（聊天客户端、翻译插件、IDE 编程助手、自动化工作流…）都能直接接。</p>
+          <h2>对接指南：把 AQUA api 接进你的软件</h2>
+          <p class="desc">AQUA api 说的是标准「OpenAI 方言」——凡是支持自定义 OpenAI 接口的软件（聊天客户端、翻译插件、IDE 编程助手、自动化工作流…）都能直接接。</p>
           <h3>通用三要素（所有软件都问这三样）</h3>
           <div class="tbl-wrap">
             <table class="table">
@@ -597,12 +597,12 @@ function jump(id: string) {
           <p class="desc">点开看答案。没找到你的问题？QQ 一群 1103667832 / 二群 1006740220 或频道 pd57362562 随时提问。</p>
           <details><summary><b>密钥到底怎么获取？要申请吗？</b></summary><p class="desc">自助领取，不用找任何人申请。<b>注册登录后进「个人控制台」一键创建</b>——形如 <code>sk-****</code>，注册免费、创建即用、随时吊销重建。每个密钥的完整明文只在创建时展示一次，请保存好；丢了就吊销重新创建。</p></details>
           <details><summary><b>真的免费吗？有没有隐藏收费？</b></summary><p class="desc">除官方自营收费系列（<code>aqua/</code> 前缀，预充值按次计费，见上方「计费说明」章节）外，本站全部模型与工具均免费使用，无隐藏收费。acu/ 众筹公共模型也免费调用（从站点公共额度按次扣费，不动个人余额）。个别通道有并发/额度保护（如部分通道日额度、收费通道并发限流），是为了让所有人都能公平使用，不是收费墙。免费模型不涉及任何余额与扣费，今后也不会收费。</p></details>
-          <details><summary><b>有官方 SDK 吗？</b></summary><p class="desc">不需要专门的 SDK——AQUA 完整兼容 OpenAI 协议，<b>直接用 OpenAI 官方 SDK</b>（Python / JS / Go / Java 全平台都有），只改 <code>base_url</code> 和 <code>api_key</code> 两个参数即可（见「三分钟跑通第一条请求」）。</p></details>
+          <details><summary><b>有官方 SDK 吗？</b></summary><p class="desc">不需要专门的 SDK——AQUA api 完整兼容 OpenAI 协议，<b>直接用 OpenAI 官方 SDK</b>（Python / JS / Go / Java 全平台都有），只改 <code>base_url</code> 和 <code>api_key</code> 两个参数即可（见「三分钟跑通第一条请求」）。</p></details>
           <details><summary><b>模型这么多，我该用哪个？</b></summary><p class="desc">按场景选：<b>日常聊天</b>→<code>gpt-oss-20b</code>（免费）或收费专区性价比款 <code>aqua/glm-5.3-flash</code>；<b>写代码 / 长文写作</b>→收费专区 <code>aqua/deepseek-v4-pro</code> / <code>aqua/kimi-k3</code> 旗舰款。每个卡片都有实时时延与价格标注，选哪个都不亏，自由试。</p></details>
           <details><summary><b>为什么 AI 不记得上一句说了什么？</b></summary><p class="desc">AI 没有记忆，每次调用都是全新开始。要多轮对话，请把历史聊天记录放进 <code>messages</code> 数组一起传回（详见「对话接口进阶 · 多轮对话」）。</p></details>
           <details><summary><b>报 429 / 排队怎么办？</b></summary><p class="desc">429 = 限流或额度保护，不是封禁。等 10 秒~1 分钟重试；高峰期换其他平台模型；程序里建议加「指数退避」重试（第一次等 1 秒、第二次 2 秒、第三次 4 秒…）。不要连续狂点，那样只会更堵。</p></details>
           <details><summary><b>支持联网搜索 / 文件上传吗？</b></summary><p class="desc">模型本身的能力决定：通用 chat 模型不做实时联网。需要最新信息时，把内容直接粘贴进问题里（RAG 思路：先给资料再提问）。</p></details>
-          <details><summary><b>我想自己部署一套 AQUA 可以吗？</b></summary><p class="desc">可以！AQUA 是 ACU 工程系列开源项目（AGPL-3.0），Go 语言实现的 OpenAI 兼容网关，编译为单二进制，部署到任意 VPS 即可运行（Nginx/Caddy 反代 + HTTPS 即完成上线）。仓库：<a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> / <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a>，README 有完整自部署教程。</p></details>
+          <details><summary><b>我想自己部署一套 AQUA api 可以吗？</b></summary><p class="desc">可以！AQUA api 是 ACU 工程系列开源项目（AGPL-3.0），Go 语言实现的 OpenAI 兼容网关，编译为单二进制，部署到任意 VPS 即可运行（Nginx/Caddy 反代 + HTTPS 即完成上线）。仓库：<a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> / <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a>，README 有完整自部署教程。</p></details>
           <details><summary><b>调用出错时，怎么向社区求助最有效？</b></summary><p class="desc">带上三样东西：① 完整的错误 JSON（里面有 <code>error.code</code> 和 <code>hint</code>）；② 你请求的模型 ID 和端点；③ 时间点。发到 QQ 一群 1103667832 / 二群 1006740220 或频道 pd57362562，一般很快有人响应。</p></details>
         </section>
       </div>

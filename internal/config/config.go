@@ -138,7 +138,7 @@ type Cfg struct {
 // Default 内置默认值（全部为安全占位，不含任何运营事实）
 func Default() *Cfg {
 	return &Cfg{
-		Site:     Site{Name: "AQUA Gateway", Domain: "", DocsURL: "", QQGroup: "", QQGroupURL: ""},
+		Site:     Site{Name: "AQUA api", Domain: "", DocsURL: "", QQGroup: "", QQGroupURL: ""},
 		Database: Database{Driver: "sqlite", Path: "data/aqua.db"},
 		Server:   Server{Listen: "0.0.0.0:8787"},
 		Billing:  Billing{UnifiedPrefix: "", DefaultGrp: "per_call"}, // 统一前缀默认关闭，由配置显式启用

@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import { compression } from 'vite-plugin-compression2'
 import { fileURLToPath, URL } from 'node:url'
 
-// AQUA 前端构建配置
+// AQUA api 前端构建配置
 // - base '/'：history 路由真实路径部署（站点在域名根），资源绝对路径在任意深度的 URL 下都正确
 // - /v1 代理：dev 模式直连线上网关，本地边改边用真实 API
 // - 预压缩：构建期生成 .gz / .br，服务器零压缩 CPU 开销（弱主机友好）

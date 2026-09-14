@@ -123,7 +123,7 @@ function goConsole() {
           <div class="row">
             <span class="brand-ic"><AqIcon name="wave" :size="22" /></span>
             <div>
-              <h1 class="login-title">AQUA 账号</h1>
+              <h1 class="login-title">AQUA api 账号</h1>
               <p class="sub">注册登录后即可创建 API 密钥、查看用量与调用日志</p>
             </div>
           </div>

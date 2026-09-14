@@ -202,7 +202,7 @@ onMounted(() => {
       <div ref="chatEl" class="chat-scroll">
         <div v-if="!msgs.length" class="empty">
           <div class="big"><AqIcon name="chat" :size="40" /></div>
-          <b>开始体验 AQUA 网关</b>
+          <b>开始体验 AQUA api 网关</b>
           <div class="dim">选择上方任意模型，输入消息即可对话。回复为 SSE 流式实时输出，与真实 API 行为完全一致。</div>
           <div class="code pg-endpoint">POST {{ GATEWAY }}/chat/completions</div>
         </div>

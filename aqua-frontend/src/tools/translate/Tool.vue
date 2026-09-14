@@ -34,7 +34,7 @@ async function run() {
 </script>
 
 <template>
-  <p class="tool-intro">多语种互译，源语言可自动检测。底层由 AQUA 网关对话模型驱动，译文自然流畅。</p>
+  <p class="tool-intro">多语种互译，源语言可自动检测。底层由 AQUA api 网关对话模型驱动，译文自然流畅。</p>
   <div class="grid2">
     <div class="card out-pane">
       <div class="field">

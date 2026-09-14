@@ -1,4 +1,4 @@
-# AQUA — https://acu.ltzy.top
+# AQUA api — https://acu.ltzy.top
 User-agent: *
 Allow: /
 Disallow: /admin

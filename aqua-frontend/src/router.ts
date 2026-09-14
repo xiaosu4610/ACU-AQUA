@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { TOOL_REGISTRY } from '@/tools/registry'
 
 // 19 个页面路由（history 模式，可直达/可分享；旧 hash 链接由 main.ts 入口改写）
-// meta.title = 页面主标题（渲染时自动补 " · AQUA" 后缀；/home 为完整标题不补）
+// meta.title = 页面主标题（渲染时自动补 " · AQUA api" 后缀；/home 为完整标题不补）
 // meta.desc  = 每页专属 description；meta.noindex = 私密页禁止收录
 const router = createRouter({
   history: createWebHistory(),
@@ -10,49 +10,49 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/home' },
     { path: '/home', component: () => import('@/pages/HomePage.vue'), meta: {
-      title: 'AQUA — 免费 AI API 网关 · ACU 工程系列',
-      desc: 'AQUA — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。' } },
+      title: 'AQUA api — 免费 AI API 网关 · ACU 工程系列',
+      desc: 'AQUA api — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。' } },
     { path: '/models', component: () => import('@/pages/ModelsPage.vue'), meta: {
       title: '模型广场 — 在线 AI 模型列表与实时价格',
-      desc: 'AQUA 模型广场：GPT、Claude、Gemini、DeepSeek、GLM、Kimi 等主流 AI 模型实时在线状态与按次价格，免费与低价档任选。' } },
+      desc: 'AQUA api 模型广场：GPT、Claude、Gemini、DeepSeek、GLM、Kimi 等主流 AI 模型实时在线状态与按次价格，免费与低价档任选。' } },
     { path: '/model/:id', component: () => import('@/pages/ModelDetailPage.vue'), meta: {
       title: '模型详情' } },
     { path: '/capabilities', redirect: { path: '/models', query: { view: 'cap' } } },
     { path: '/api', component: () => import('@/pages/ApiPage.vue'), meta: {
       title: 'API 文档 — OpenAI 兼容接口接入指南',
-      desc: 'AQUA API 文档：OpenAI 兼容的 /v1/chat/completions 等接口，任何 OpenAI SDK 改个 base_url 即可接入，含密钥创建与计费说明。' } },
+      desc: 'AQUA api API 文档：OpenAI 兼容的 /v1/chat/completions 等接口，任何 OpenAI SDK 改个 base_url 即可接入，含密钥创建与计费说明。' } },
     { path: '/playground', component: () => import('@/pages/PlaygroundPage.vue'), meta: {
       title: '在线 Playground — 免费试玩大模型',
-      desc: 'AQUA Playground：浏览器里直接与各大 AI 模型对话试玩，无需本地环境，注册即可用。' } },
+      desc: 'AQUA api Playground：浏览器里直接与各大 AI 模型对话试玩，无需本地环境，注册即可用。' } },
     { path: '/tools', component: () => import('@/pages/ToolsPage.vue'), meta: {
       title: '工具箱 — 免费在线 AI 与开发者工具',
-      desc: 'AQUA 工具箱：IP 归属地、AI 翻译、AI 摘要、正则解释、哈希计算、周报生成、五子棋等免费在线工具，即开即用。' } },
+      desc: 'AQUA api 工具箱：IP 归属地、AI 翻译、AI 摘要、正则解释、哈希计算、周报生成、五子棋等免费在线工具，即开即用。' } },
     { path: '/tools/:name', component: () => import('@/pages/ToolPage.vue') },
     { path: '/treehole', component: () => import('@/pages/TreeholePage.vue'), meta: {
       title: '树洞 — 匿名心事社区',
-      desc: 'AQUA 树洞：匿名倾诉心事，AI 温柔回应，也可以看看别人的故事。' } },
+      desc: 'AQUA api 树洞：匿名倾诉心事，AI 温柔回应，也可以看看别人的故事。' } },
     { path: '/prompts', component: () => import('@/pages/PromptsPage.vue'), meta: {
       title: '提示词库 — 精选 Prompt 模板',
-      desc: 'AQUA 提示词库：写作、编程、学习、办公等场景的精选 Prompt 模板，一键复制到 Playground 试用。' } },
+      desc: 'AQUA api 提示词库：写作、编程、学习、办公等场景的精选 Prompt 模板，一键复制到 Playground 试用。' } },
     { path: '/arena', component: () => import('@/pages/ArenaPage.vue'), meta: {
       title: '竞技场 — 模型盲测对战',
-      desc: 'AQUA 竞技场：匿名盲测两个 AI 模型的回答并投票，看看谁更强。' } },
+      desc: 'AQUA api 竞技场：匿名盲测两个 AI 模型的回答并投票，看看谁更强。' } },
     { path: '/status', component: () => import('@/pages/StatusPage.vue'), meta: {
       title: '服务状态 — 实时可用性监控',
-      desc: 'AQUA 服务状态：网关与各上游模型线路的实时可用性监控。' } },
+      desc: 'AQUA api 服务状态：网关与各上游模型线路的实时可用性监控。' } },
     { path: '/usage', component: () => import('@/pages/UsagePage.vue'), meta: {
       title: '用量查询', noindex: true } },
     { path: '/finance', component: () => import('@/pages/FinancePage.vue'), meta: {
       title: '财务中心', noindex: true } },
     { path: '/community', component: () => import('@/pages/CommunityPage.vue'), meta: {
       title: '社区 — 交流与反馈',
-      desc: 'AQUA 社区：QQ 群交流、问题反馈与最新动态。' } },
+      desc: 'AQUA api 社区：QQ 群交流、问题反馈与最新动态。' } },
     { path: '/sponsor', component: () => import('@/pages/SponsorPage.vue'), meta: {
-      title: '赞助支持 — 请 AQUA 喝杯咖啡',
-      desc: 'AQUA 是半公益项目，赞助帮助我们覆盖上游算力成本，让免费额度持续下去。' } },
+      title: '赞助支持 — 请 AQUA api 喝杯咖啡',
+      desc: 'AQUA api 是半公益项目，赞助帮助我们覆盖上游算力成本，让免费额度持续下去。' } },
     { path: '/pool', component: () => import('@/pages/PoolPage.vue'), meta: {
       title: '公共众筹池 — 半公益 AI 算力',
-      desc: 'AQUA 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按拿货价从池扣费，个人余额分文不动。' } },
+      desc: 'AQUA api 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按拿货价从池扣费，个人余额分文不动。' } },
     { path: '/login', component: () => import('@/pages/LoginPage.vue'), meta: {
       title: '登录 / 注册', noindex: true } },
     { path: '/console', component: () => import('@/pages/ConsolePage.vue'), meta: {
@@ -66,8 +66,8 @@ const router = createRouter({
 /* SEO：SPA 单壳 HTML 的逐页搜索引擎适配——每次路由切换同步
  * title / description / canonical / og:* / robots(noindex)。 */
 const SITE = 'https://acu.ltzy.top'
-const SEO_TITLE = 'AQUA — 免费 AI API 网关 · ACU 工程系列'
-const SEO_DESC = 'AQUA — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。'
+const SEO_TITLE = 'AQUA api — 免费 AI API 网关 · ACU 工程系列'
+const SEO_DESC = 'AQUA api — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。'
 
 function upsertMeta(name: string, content: string, attr: 'name' | 'property' = 'name') {
   let el = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${name}"]`)
@@ -81,11 +81,11 @@ function upsertMeta(name: string, content: string, attr: 'name' | 'property' = '
 
 router.afterEach((to) => {
   const m = to.meta as { title?: string; desc?: string; noindex?: boolean }
-  // 工具子页标题取自注册表（/tools/translate → "AI 翻译 — 免费在线工具 · AQUA"）
+  // 工具子页标题取自注册表（/tools/translate → "AI 翻译 — 免费在线工具 · AQUA api"）
   const tool = to.path.startsWith('/tools/') ? TOOL_REGISTRY[to.params.name as string] : null
   const title = m.title ?? (tool ? `${tool.title} — 免费在线工具` : SEO_TITLE)
   const desc = m.desc ?? tool?.desc ?? SEO_DESC
-  document.title = to.path === '/home' ? title : `${title} · AQUA`
+  document.title = to.path === '/home' ? title : `${title} · AQUA api`
   upsertMeta('description', desc)
   upsertMeta('og:title', title, 'property')
   upsertMeta('og:description', desc, 'property')

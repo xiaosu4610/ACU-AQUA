@@ -121,7 +121,7 @@ const qqNum = computed(() => meta.value?.qq_group || '1103667832')
 
       <span class="tag acc hero-badge"><AqIcon name="bolt" :size="13" />OpenAI 兼容 · 注册即用 · 永久免费额度</span>
       <h1 class="hero-title">
-        AQUA · 算力如水 普惠共享<br />
+        AQUA api · 算力如水 普惠共享<br />
         <span class="grad-text">一个接口接入全部大模型</span>
       </h1>
       <p class="hero-sub">
@@ -246,7 +246,7 @@ const qqNum = computed(() => meta.value?.qq_group || '1103667832')
       </div>
       <div class="grid2 fade-up">
         <div class="card">
-          <b><AqIcon name="star" :size="16" />AQUA · ACU 工程系列开源项目</b>
+          <b><AqIcon name="star" :size="16" />AQUA api · ACU 工程系列开源项目</b>
           <p class="mt8 dim">
             可自由自部署；二开对外提供服务需以同协议开源。喜欢就给作者点个 Star，是项目持续演进的最大动力。
           </p>

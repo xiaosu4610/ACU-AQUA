@@ -1,8 +1,8 @@
-# AQUA 前端 4.0 开发约定（移植期必读）
+# AQUA api 前端 4.0 开发约定（移植期必读）
 
 ## 项目性质
 将旧版单文件前端（5899 行）全面重构为 Vite + Vue 3 + TS 工程。
-**参考源（只读，严禁修改）**：`D:\AQUA-ACU\aqua-worker\frontend\public\index.html`
+**参考源（只读，严禁修改）**：`D:\AQUA api-ACU\aqua-worker\frontend\public\index.html`
 - 行 1-1269：CSS（已 1:1 提取到 `src/styles/legacy.css`，全局生效，勿重复定义）
 - 行 1270-2698：HTML 各页面结构
 - 行 2699-5897：JS 逻辑（含 TOOL_REGISTRY、各工具/游戏渲染函数）
