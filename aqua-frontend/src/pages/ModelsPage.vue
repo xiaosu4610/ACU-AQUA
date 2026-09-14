@@ -740,6 +740,51 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>收费模型加载中或暂未在售</b><div class="dim">在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
         </div>
 
+        <!-- 按量计费分组 -->
+        <section v-if="tokenLineRows.length" class="mt16">
+          <div class="line-title">按量计费分组<small>密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，无保底，先付后用</small></div>
+          <div class="grid3">
+            <div v-for="m in tokenLineRows" :key="m.id" class="card hoverable pcard" :class="{ paused: !!m.st }">
+              <div class="row between">
+                <span class="mono pid" :title="'完整模型 ID：' + m.id"><i>{{ m.id.split('/')[0] }}/</i>{{ m.id.split('/').slice(1).join('/') }}</span>
+                <span v-if="m.id === 'tlinks/deepseek-flash'" class="tag grad" title="DeepSeek V4.1 Flash 同源架构 · 极速轻量实验通道">DeepSeek V4.1 Flash 同源</span>
+                <span v-else-if="m.subsidized && rateBadgeOf(m)" class="tag warn num" title="官方原价 × 补贴倍率 = 现价">{{ rateBadgeOf(m) }}</span>
+                <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="tag warn" title="VIP 专享拿货价已生效">VIP</span>
+              </div>
+              <div class="row mt8" style="gap: 7px; font-size: 12px;">
+                <span class="dot" :class="liveStatusOf(m.id).dot"></span>
+                <span>{{ liveStatusOf(m.id).text }}</span>
+                <span class="dim" style="margin-left: auto; font-size: 11px;">{{ liveMap[m.id] ? fmtAgo(liveMap[m.id].last_ts) : '' }}</span>
+              </div>
+              <template v-if="m.perImage != null">
+                <div class="row wrap mt8" style="gap: 6px;">
+                  <span class="tag grad num">¥{{ microYuan(m.perImage) }}<em>/张</em></span>
+                  <span class="tag">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
+                </div>
+                <div v-if="m.basePerImage != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
+              </template>
+              <template v-else>
+                <div class="tp mt8">
+                  <div><i>输入</i><b class="num">¥{{ perMYuan(m.inPrice) }}</b><s v-if="m.baseInPrice != null" title="官方原价">¥{{ perMYuan(m.baseInPrice) }}</s><em>/M</em></div>
+                  <div><i>缓存命中</i><b class="num">¥{{ perMYuan(m.cachePrice) }}</b><s v-if="m.baseCachePrice != null" title="官方原价">¥{{ perMYuan(m.baseCachePrice) }}</s><em>/M</em></div>
+                  <div><i>输出</i><span class="tag grad num">¥{{ perMYuan(m.outPrice) }}</span><s v-if="m.baseOutPrice != null" title="官方原价">¥{{ perMYuan(m.baseOutPrice) }}</s><em>/M</em></div>
+                </div>
+                <div class="dim mt8" style="font-size: 11.5px;">先付后用 · 用多少付多少 · 缓存命中更省<span v-if="m.floor"> · 单次最低消费 ¥{{ microYuan(m.floor) }}</span><span v-if="m.id === 'tlinks/deepseek-flash'"> · DeepSeek V4.1 Flash 同源极速通道</span></div>
+              </template>
+              <div class="pmetrics mt8">
+                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
+                <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
+              </div>
+              <div class="row between mt12">
+                <CopyBtn :text="m.id" />
+                <router-link :to="m.link" class="btn ghost sm">能力详情 <AqIcon name="arrow-right" :size="13" /></router-link>
+              </div>
+            </div>
+          </div>
+          <div v-if="!tokenLineRows.length" class="empty mt12"><b>未找到匹配的收费模型</b></div>
+        </section>
+
         <!-- 按次计费分组 -->
         <section v-if="callLineRows.length" class="mt16">
           <div class="line-title">收费模型（按次计费）<small>密钥选「免费 + 收费」时可用：每次成功请求扣一次，与生成长度无关</small></div>
@@ -795,49 +840,6 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           </div>
         </section>
 
-        <!-- 按量计费分组 -->
-        <section v-if="tokenLineRows.length" class="mt16">
-          <div class="line-title">按量计费分组<small>密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，无保底，先付后用</small></div>
-          <div class="grid3">
-            <div v-for="m in tokenLineRows" :key="m.id" class="card hoverable pcard" :class="{ paused: !!m.st }">
-              <div class="row between">
-                <span class="mono pid" :title="'完整模型 ID：' + m.id"><i>{{ m.id.split('/')[0] }}/</i>{{ m.id.split('/').slice(1).join('/') }}</span>
-                <span v-if="m.subsidized && rateBadgeOf(m)" class="tag warn num" title="官方原价 × 补贴倍率 = 现价">{{ rateBadgeOf(m) }}</span>
-                <span v-else-if="m.baseInPrice != null || m.basePerImage != null" class="tag warn" title="VIP 专享拿货价已生效">VIP</span>
-              </div>
-              <div class="row mt8" style="gap: 7px; font-size: 12px;">
-                <span class="dot" :class="liveStatusOf(m.id).dot"></span>
-                <span>{{ liveStatusOf(m.id).text }}</span>
-                <span class="dim" style="margin-left: auto; font-size: 11px;">{{ liveMap[m.id] ? fmtAgo(liveMap[m.id].last_ts) : '' }}</span>
-              </div>
-              <template v-if="m.perImage != null">
-                <div class="row wrap mt8" style="gap: 6px;">
-                  <span class="tag grad num">¥{{ microYuan(m.perImage) }}<em>/张</em></span>
-                  <span class="tag">{{ m.basePerImage != null ? 'VIP 拿货价' : (m.subsidized ? '限时补贴' : '按张计费') }}</span>
-                </div>
-                <div v-if="m.basePerImage != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePerImage) }}/张 · VIP 专享拿货价已生效</div>
-              </template>
-              <template v-else>
-                <div class="tp mt8">
-                  <div><i>输入</i><b class="num">¥{{ perMYuan(m.inPrice) }}</b><s v-if="m.baseInPrice != null" title="官方原价">¥{{ perMYuan(m.baseInPrice) }}</s><em>/M</em></div>
-                  <div><i>缓存命中</i><b class="num">¥{{ perMYuan(m.cachePrice) }}</b><s v-if="m.baseCachePrice != null" title="官方原价">¥{{ perMYuan(m.baseCachePrice) }}</s><em>/M</em></div>
-                  <div><i>输出</i><span class="tag grad num">¥{{ perMYuan(m.outPrice) }}</span><s v-if="m.baseOutPrice != null" title="官方原价">¥{{ perMYuan(m.baseOutPrice) }}</s><em>/M</em></div>
-                </div>
-                <div class="dim mt8" style="font-size: 11.5px;">先付后用 · 用多少付多少 · 缓存命中更省<span v-if="m.floor"> · 单次最低消费 ¥{{ microYuan(m.floor) }}</span></div>
-              </template>
-              <div class="pmetrics mt8">
-                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
-                <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
-                <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
-              </div>
-              <div class="row between mt12">
-                <CopyBtn :text="m.id" />
-                <router-link :to="m.link" class="btn ghost sm">能力详情 <AqIcon name="arrow-right" :size="13" /></router-link>
-              </div>
-            </div>
-          </div>
-          <div v-if="!tokenLineRows.length" class="empty mt12"><b>未找到匹配的收费模型</b></div>
-        </section>
 
         <!-- 官方中转 · 高速专线 -->
         <section v-if="officialLineRows.length" class="mt16">
