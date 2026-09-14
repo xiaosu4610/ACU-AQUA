@@ -193,26 +193,6 @@ const quotaPct = computed(() => {
   const { total_micro, used_micro } = stats.value.upstream
   return total_micro > 0 ? Math.min(100, Math.round((used_micro / total_micro) * 100)) : 0
 })
-/** 最低输入三段价（元/百万tokens，当前计费档主卡显示） */
-const minInPrice = computed<number | null>(() => {
-  const arr = (stats.value?.prices || []).filter((p: any) => p?.mode === 'per_token' && p.in_price > 0)
-  return arr.length ? Math.min(...arr.map((p: any) => p.in_price)) : null
-})
-/** 保底安全自检（后端 floor_safety：每款生效价目保底 vs 含手续费保本线） */
-const floorSafetyRows = computed<any[]>(() => stats.value?.floor_safety || [])
-const floorSafeCount = computed(() => floorSafetyRows.value.filter((r: any) => r.safe).length)
-const floorUnsafe = computed(() => floorSafetyRows.value.length > 0 && floorSafeCount.value < floorSafetyRows.value.length)
-const floorMargins = computed(() => floorSafetyRows.value.map((r: any) => Number(r.margin_pct) || 0).filter((v: number) => Number.isFinite(v)))
-const floorMinMargin = computed(() => floorMargins.value.length ? Math.min(...floorMargins.value).toFixed(1) : '0')
-const floorMaxMargin = computed(() => floorMargins.value.length ? Math.max(...floorMargins.value).toFixed(1) : '0')
-/** tide 专线面值池消耗百分比（仪表盘进度条） */
-const tideFacePct = computed(() => {
-  const t = stats.value?.tide
-  if (!t || !t.face_cap_micro) return 0
-  return Math.min(100, Math.round((t.face_total_micro / t.face_cap_micro) * 100))
-})
-/** tide 专线已耗尽摘除的密钥数 */
-const tideDeadKeys = computed(() => (stats.value?.tide?.keys || []).filter((k: any) => k.dead).length)
 const rate = (c: number, ok: number) => (c > 0 ? Math.round((ok / c) * 1000) / 10 : 100)
 /** 近 8 日收入（div 条形图） */
 const trend8 = computed<any[]>(() => (stats.value?.trend || []).slice(-8))
@@ -304,15 +284,6 @@ async function loadQuota() {
   try { quota.value = await apiJson<any>('/admin/quota', { key: token.value }) }
   catch (e) { quotaMsg.value = errText(e) }
 }
-const topupPreview = computed(() => {
-  const micro = toMicro(topup.value.amount)
-  if (micro <= 0) return ''
-  // 换算预览按当前上游通道成本折算（从 /admin/quota 实时数据取，不硬编码任何渠道价格）
-  const chs = (quota.value?.channels || []).filter((c: any) => c?.cost_per_call_micro > 0)
-  if (!chs.length) return ''
-  const cost = Math.max(...chs.map((c: any) => Number(c.cost_per_call_micro))) // 取较贵通道保守估算
-  return `≈ ${fmt(Math.floor(micro / cost))} 次（按当前通道成本折算）`
-})
 async function doTopup() {
   const micro = toMicro(topup.value.amount)
   if (micro <= 0) { topupMsg.value = '请输入充值金额'; return }
@@ -358,28 +329,6 @@ async function doSync() {
   syncing.value = false
 }
 
-/* 汇率速查：用户充值 X 元 → 需向上游充值 Y 元才不超发
- * 售价 price_micro/次（当前价），成本 cost/次；渠道手续费本站承担（支付宝 5%/微信 6%），
- * 实收 = X × (1 − 费率)；上游需充 = 实收 × (成本/售价)，留利 = 实收 − 上游需充。 */
-const rateCheck = ref('')
-const RATE_ROWS = [1, 5, 6, 10, 50, 100]
-/** 最不利渠道费率（微信 6%）：留利按保守口径 */
-const FEE_RATE = 0.06
-function rateNet(userYuan: number): number {
-  return userYuan * (1 - FEE_RATE)
-}
-function rateNeed(userYuan: number): number {
-  const price = sup.value?.core?.price_now_micro || 2000
-  const cost = sup.value?.core?.cost_per_call_micro || 2700
-  return Math.ceil((rateNet(userYuan) * cost) / price * 1000) / 1000 // 分向上取整到厘
-}
-const rateHint = computed(() => {
-  const price = sup.value?.core?.price_now_micro || 2000
-  const cost = sup.value?.core?.cost_per_call_micro || 2700
-  const ratio = price > 0 ? (cost / price * 100).toFixed(1) : '—'
-  return `用户每充 ¥1（实收 ¥${(1 - FEE_RATE).toFixed(2)}，支付宝 5%/微信 6% 手续费本站承担，按最不利微信口径；最坏可撑 ${fmt(Math.floor(1_000_000 / price))} 次保底请求），需向上游充值 ¥${(Math.ceil(rateNet(1) * cost / price * 1000) / 1000).toFixed(3)} 才不留缺口 · 成本占比 ${ratio}%`
-})
-
 /* ===== 审计 ===== */
 const auditItems = ref<any[]>([])
 const auditPage = ref(1)
@@ -408,21 +357,7 @@ async function loadReconcile() {
   reconciling.value = false
 }
 
-/* ===== 额度监管 =====
- * A=上游剩余次数；B=用户总余额按当前价折算次数（售价只升不降，当前价=最坏口径）
- * 超发率=B/A；C=缺口。横幅阈值存 localStorage（仅前端提示，后端固定 60/80/100）。 */
-const SUP_TH_KEY = 'aqua_sup_thresholds'
-const supTh = ref({ warn: 60, danger: 80, critical: 100 })
-try {
-  const saved = JSON.parse(localStorage.getItem(SUP_TH_KEY) || '')
-  if (saved && typeof saved.warn === 'number') supTh.value = saved
-} catch { /* 忽略 */ }
-function saveSupTh() {
-  const t = supTh.value
-  if (!(t.warn > 0 && t.danger > t.warn && t.critical >= t.danger)) return
-  try { localStorage.setItem(SUP_TH_KEY, JSON.stringify(t)) } catch { /* 忽略 */ }
-}
-
+/* ===== 额度监管（发放台账 + 余额持有） ===== */
 const sup = ref<any>(null)
 const supMsg = ref('')
 const supQ = ref('')
@@ -441,42 +376,11 @@ async function loadSupervision() {
 function searchSup() { supPage.value = 1; loadSupervision() }
 const supPages = computed(() => Math.max(1, Math.ceil(((sup.value?.ledger?.total) || 0) / 20)))
 
-/* 按本机阈值重算级别（横幅 / 视图着色用） */
-const supLevel = computed<'normal' | 'warn' | 'danger' | 'critical'>(() => {
-  const pct = sup.value?.core?.overissue_pct ?? 0
-  if (pct >= supTh.value.critical) return 'critical'
-  if (pct >= supTh.value.danger) return 'danger'
-  if (pct >= supTh.value.warn) return 'warn'
-  return 'normal'
-})
-const supLevelLabel: Record<string, string> = { normal: '正常', warn: '预警', danger: '危险', critical: '已超发' }
-/* 全控制台常驻告警横幅（级别≥预警才显示） */
-const supBanner = computed(() => {
-  if (!sup.value?.core || supLevel.value === 'normal') return null
-  const c = sup.value.core
-  const cost = c.cost_per_call_micro || 2700
-  return {
-    level: supLevel.value, label: supLevelLabel[supLevel.value], pct: c.overissue_pct,
-    bYuan: (c.b_now_calls || 0) * cost, aYuan: (c.a_remain_calls || 0) * cost,
-    gap: c.gap_calls, gapYuan: c.gap_topup_micro,
-  }
-})
 /* 余额持有占比 */
 function supShare(micro: number): string {
   const liab = sup.value?.core?.liability_micro || 0
   return liab > 0 ? ((micro / liab) * 100).toFixed(1) + '%' : '—'
 }
-/* 发放弹窗预检：发放后折算负债与超发率（只提示不阻断） */
-const adjustPreview = computed(() => {
-  const c = sup.value?.core
-  if (!c || !adjust.value.open || adjust.value.sign <= 0) return ''
-  const micro = toMicro(adjust.value.amount)
-  if (micro <= 0) return ''
-  const newLiab = (c.liability_micro || 0) + micro
-  const newB = Math.floor(newLiab / (c.price_now_micro || 2000))
-  const pct = c.a_remain_calls > 0 ? (newB / c.a_remain_calls) * 100 : 999
-  return `发放后折算负债 ${fmt(newB)} 次最坏保底 / 上游剩余 ${fmt(c.a_remain_calls)} 次 · 超发率 ${pct.toFixed(1)}%${pct >= 100 ? '（将超发）' : pct >= supTh.value.warn ? '（进入预警）' : ''}`
-})
 
 /* ===== 系统更新（gitee 发行版源） ===== */
 const update = ref<any>(null)
@@ -1020,15 +924,6 @@ async function doUserKeyRevoke(kid: number) {
 
         <p v-if="sessMsg" class="msg bad">{{ sessMsg }}</p>
 
-        <!-- 额度监管告警横幅（全视图常驻，级别≥预警才显示） -->
-        <div v-if="supBanner" class="banner mb16" :class="supBanner.level === 'critical' || supBanner.level === 'danger' ? 'bad' : 'warn'">
-          <AqIcon name="alert" :size="15" />
-          <b>额度{{ supBanner.label }}</b>
-          <span>发放折算 ¥{{ yuan(supBanner.bYuan) }} / 上游剩余 ¥{{ yuan(supBanner.aYuan) }} · 超发率 {{ supBanner.pct }}%</span>
-          <span v-if="supBanner.gap > 0">缺口 ¥{{ yuan(supBanner.gapYuan) }}（{{ fmt(supBanner.gap) }} 次），请及时向上游充值</span>
-          <button class="btn xs" @click="go('supervision')">查看监管</button>
-        </div>
-
         <!-- ▼ 仪表盘 ▼ -->
         <div v-if="view === 'dashboard'" style="display: grid; gap: 16px;">
           <p v-if="statsMsg" class="msg bad" style="margin: 0;">{{ statsMsg }}</p>
@@ -1053,61 +948,19 @@ async function doUserKeyRevoke(kid: number) {
               </div>
             </div>
 
-            <!-- KPI：收入 / 净利 / 计费数 / 负债 -->
+            <!-- KPI：收入 / 计费数 / 负债 -->
             <div class="kpis">
               <div class="kpi"><span>累计收入</span><b>¥{{ yuan(stats.income.all_micro) }}</b><span class="trend">今日 ¥{{ yuan(stats.income.today_micro) }} · 7 日 ¥{{ yuan(stats.income.week_micro) }} · 30 日 ¥{{ yuan(stats.income.month_micro) }}</span></div>
-              <div class="kpi"><span>净利（收入 − 手续费 − 已履约成本）</span><b>¥{{ yuan(stats.upstream.profit_net_micro ?? stats.upstream.profit_micro) }}</b><span class="trend">毛利（未扣手续费）¥{{ yuan(stats.upstream.profit_micro) }} · 手续费 ¥{{ yuan(stats.upstream.fee_est_micro ?? 0) }}</span></div>
               <div class="kpi"><span>计费调用（累计）</span><b>{{ fmt(stats.calls.all) }}</b><span class="trend">成功率 {{ rate(stats.calls.all, stats.calls.all_ok) }}%</span></div>
               <div class="kpi"><span>待履约负债</span><b>¥{{ yuan(stats.users.liability_micro) }}</b><span class="trend">{{ stats.users.with_balance }} 人持有余额</span></div>
             </div>
             <div class="kpis">
               <div class="kpi">
-                <span>当前计费档</span>
-                <b v-if="minInPrice != null" style="font-size: 19px;">按量 ¥{{ minInPrice }}<span class="dim" style="font-size: 12px; font-weight: 400;"> /百万tokens 起</span></b>
-                <b v-else style="font-size: 19px;">¥{{ yuan(stats.price_micro) }}<span class="dim" style="font-size: 12px; font-weight: 400;"> /次 · 按次正式价</span></b>
-                <span class="trend">{{ minInPrice != null ? '三段价：输入 / 缓存命中 / 输出分段计价' : '按次计费：每次成功请求扣一次，与生成长度无关' }}</span>
-              </div>
-              <div class="kpi" :style="floorUnsafe ? 'border-color: var(--bad);' : ''">
-                <span>保底安全校验（逐单不亏）</span>
-                <b :class="floorUnsafe ? 'neg' : 'pos'">{{ floorSafeCount }}/{{ floorSafetyRows.length }} 通过</b>
-                <span class="trend">{{ floorUnsafe ? '存在亏损价目：网关已拒绝启用该行（自动回退安全价目），请立即修正 pricing 表' : `全部价目安全，单次收费安全边际 +${floorMinMargin}% ~ +${floorMaxMargin}%（含 6% 手续费保本线）` }}</span>
+                <span>计费模式</span>
+                <b style="font-size: 19px;">按次计费</b>
+                <span class="trend">每次成功请求扣一次，与生成长度无关；acu/ 众筹线扣站点额度，aqua/ 收费线扣余额</span>
               </div>
               <div class="kpi"><span>通道手续费（本站承担）</span><b>¥{{ yuan(stats.upstream.fee_micro || 0) }}</b><span class="trend">实付费率 {{ ((stats.upstream.fee_rate ?? 0) * 100).toFixed(2) }}%</span></div>
-            </div>
-
-            <!-- 按量计费专线（tide/）· 独立池，数学级对账 -->
-            <div v-if="stats.tide" class="card">
-              <b><AqIcon name="bolt" :size="16" /> 按量计费专线（tide/）· 密钥面值池</b>
-              <div class="bar-track mt12"><span :style="{ width: tideFacePct + '%' }"></span></div>
-              <div class="row wrap mt8" style="gap: 18px;">
-                <span class="dim">面值总额 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.face_cap_micro) }}</b></span>
-                <span class="dim">面值已耗 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.face_total_micro) }}</b></span>
-                <span class="dim">剩 <b class="grad-text" style="font-size: 15px;">¥{{ yuan(stats.tide.face_remain_micro) }}</b></span>
-              </div>
-              <div class="grid2 mt12">
-                <div>
-                  <div class="row wrap" style="gap: 16px;">
-                    <span class="dim">今日面值消耗 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.face_today_micro) }}</b></span>
-                    <span class="dim">7 日 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.face_7d_micro) }}</b></span>
-                  </div>
-                  <div class="row wrap mt8" style="gap: 16px;">
-                    <span class="dim">按量线累计收入 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.income_micro) }}</b></span>
-                    <span class="dim">今日 <b style="color: var(--txt0);">¥{{ yuan(stats.tide.income_today_micro) }}</b></span>
-                    <span class="dim">已计费 <b style="color: var(--txt0);">{{ fmt(stats.tide.calls) }}</b> 次</span>
-                  </div>
-                  <div class="dim mt8">毛利（收入 − 面值成本）¥{{ yuan(stats.tide.profit_micro) }} · 实测 tokens：输入 {{ fmt(stats.tide.tokens_in) }} / 缓存命中 {{ fmt(stats.tide.tokens_cached) }} / 输出 {{ fmt(stats.tide.tokens_out) }}</div>
-                </div>
-                <div>
-                  <div class="row between">
-                    <span class="dim">专线密钥池（{{ stats.tide.keys?.length || 0 }} 把）</span>
-                    <span class="tag" :class="tideDeadKeys > 0 ? 'bad' : 'ok'">已摘除 {{ tideDeadKeys }} 把</span>
-                  </div>
-                  <div class="row wrap mt8" style="gap: 8px;">
-                    <span v-for="k in stats.tide.keys || []" :key="k.idx" class="tag" :class="k.dead ? 'bad' : 'ok'">#{{ k.idx }} 剩 ¥{{ yuan(k.remain_micro) }}{{ k.dead ? '（已摘除）' : '' }}</span>
-                    <span v-if="!stats.tide.keys?.length" class="dim">暂无密钥</span>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <!-- 调用统计 + 近 8 日收入条形图 -->
@@ -1440,7 +1293,6 @@ async function doUserKeyRevoke(kid: number) {
                 <div class="field"><label>充值金额（元）</label><input v-model="topup.amount" class="input" type="number" min="0" step="0.001" placeholder="如 10" /></div>
                 <div class="field"><label>备注（可选）</label><input v-model="topup.note" class="input" maxlength="100" placeholder="如：微信充值" /></div>
                 <div class="field"><label>管理密码确认</label><input v-model="topup.pw" class="input" type="password" autocomplete="current-password" /></div>
-                <p v-if="topupPreview" class="msg ok" style="margin: 0;">换算预览：¥{{ topup.amount }} {{ topupPreview }}</p>
                 <button class="btn primary" :disabled="topping || !topup.amount || !topup.pw" @click="doTopup">{{ topping ? '充值中…' : '确认充值' }}</button>
                 <p v-if="topupMsg" class="msg" style="margin: 0;" :class="topupMsg.includes('失败') || topupMsg.includes('错误') ? 'bad' : 'ok'">{{ topupMsg }}</p>
               </div>
@@ -1457,30 +1309,6 @@ async function doUserKeyRevoke(kid: number) {
                 <button class="btn primary" :disabled="syncing || !sync.amount || !sync.pw" @click="doSync">{{ syncing ? '同步中…' : '同步真实余额' }}</button>
                 <p v-if="syncMsg" class="msg" style="margin: 0;" :class="syncMsg.includes('失败') || syncMsg.includes('错误') ? 'bad' : 'ok'">{{ syncMsg }}</p>
               </div>
-            </div>
-            <div class="card">
-              <b><AqIcon name="gauge" :size="16" /> 充值换算速查</b>
-              <p class="msg ok" style="margin: 10px 0 0;">{{ rateHint }}</p>
-              <div class="tbl-wrap mt12">
-                <table class="table">
-                  <thead><tr><th>用户充值</th><th class="num">保底请求(最坏)</th><th class="num">需向上游充</th><th class="num">留利(扣费后)</th></tr></thead>
-                  <tbody>
-                    <tr v-for="r in RATE_ROWS" :key="r">
-                      <td>¥{{ r }}</td>
-                      <td class="num">{{ fmt(Math.floor((r * 1_000_000) / (sup?.core?.price_now_micro || 2000))) }}</td>
-                      <td class="num">¥{{ rateNeed(r) }}</td>
-                      <td class="num pos">¥{{ (rateNet(r) - rateNeed(r)).toFixed(3) }}</td>
-                    </tr>
-                    <tr v-if="rateCheck">
-                      <td>¥{{ rateCheck }}</td>
-                      <td class="num">{{ fmt(Math.floor((Number(rateCheck) * 1_000_000 || 0) / (sup?.core?.price_now_micro || 2000))) }}</td>
-                      <td class="num grad-text" style="font-weight: 700;">¥{{ rateNeed(Number(rateCheck) || 0) }}</td>
-                      <td class="num pos">¥{{ (rateNet(Number(rateCheck) || 0) - rateNeed(Number(rateCheck) || 0)).toFixed(3) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <input v-model="rateCheck" class="input mt12" type="number" min="0" step="0.01" placeholder="任意金额试算：如用户充 6 元，要向上游充多少？" />
             </div>
           </div>
           <div v-if="quota?.topups?.length" class="card">
@@ -1550,46 +1378,6 @@ async function doUserKeyRevoke(kid: number) {
         <!-- ▼ 额度监管 ▼ -->
         <div v-else-if="view === 'supervision'" style="display: grid; gap: 16px;">
           <p v-if="supMsg" class="msg bad" style="margin: 0;">{{ supMsg }}</p>
-          <div v-if="sup?.core" class="kpis">
-            <div class="kpi">
-              <span>A · 上游资产（剩余）</span>
-              <b>¥{{ yuan(sup.core.a_remain_calls * sup.core.cost_per_call_micro) }}</b>
-              <span class="trend">（{{ fmt(sup.core.a_remain_calls) }} 次）池总额 ¥{{ yuan(sup.core.pool_total_micro) }} · 已消耗 ¥{{ yuan(sup.core.pool_used_micro) }} · 成本 ¥{{ yuan(sup.core.cost_per_call_micro) }}/次<template v-if="sup.core.days_left >= 0"> · 预计耗尽约 {{ sup.core.days_left }} 天</template> · 近 7 天消耗 ¥{{ yuan(sup.core.used_7d_money) }}</span>
-            </div>
-            <div class="kpi">
-              <span>B · 发放折算（履约成本）</span>
-              <b>¥{{ yuan(sup.core.b_now_calls * sup.core.cost_per_call_micro) }}</b>
-              <span class="trend">（{{ fmt(sup.core.b_now_calls) }} 次）用户余额合计 ¥{{ yuan(sup.core.liability_micro) }} · {{ sup.core.holders }} 人持有 · 按最低单价 ¥{{ yuan(sup.core.price_now_micro) }}/次折算（最坏口径，告警依据）</span>
-            </div>
-            <div class="kpi" :style="supLevel !== 'normal' ? 'border-color: var(--bad);' : ''">
-              <span>超发率 B ÷ A</span>
-              <b :class="supLevel !== 'normal' ? 'neg' : 'pos'">{{ sup.core.overissue_pct }}%</b>
-              <span class="trend">状态：{{ supLevelLabel[supLevel] }}（阈值 {{ supTh.warn }}/{{ supTh.danger }}/{{ supTh.critical }}%）<template v-if="sup.core.gap_calls > 0"> · 缺口 ¥{{ yuan(sup.core.gap_topup_micro) }}（{{ fmt(sup.core.gap_calls) }} 次），需向上游充值补齐</template><template v-else> · 富余 ¥{{ yuan(-sup.core.gap_calls * sup.core.cost_per_call_micro) }}（{{ fmt(-sup.core.gap_calls) }} 次），完全可覆盖</template></span>
-            </div>
-          </div>
-
-          <!-- 结论横幅 -->
-          <div v-if="sup?.core" class="banner" :class="sup.core.gap_calls <= 0 ? '' : 'bad'">
-            <template v-if="sup.core.gap_calls <= 0">
-              <b class="pos">✓ 可覆盖</b>
-              <span>用户把余额全部消费完，履约成本 ¥{{ yuan(sup.core.b_now_calls * sup.core.cost_per_call_micro) }} ≤ 上游剩余 ¥{{ yuan(sup.core.a_remain_calls * sup.core.cost_per_call_micro) }}；富余 <b class="pos">¥{{ yuan(-sup.core.gap_calls * sup.core.cost_per_call_micro) }}</b>（{{ fmt(-sup.core.gap_calls) }} 次）。</span>
-            </template>
-            <template v-else>
-              <b>✗ 有缺口</b>
-              <span>用户全部消费完履约成本 ¥{{ yuan(sup.core.b_now_calls * sup.core.cost_per_call_micro) }}，超出上游剩余 ¥{{ yuan(sup.core.a_remain_calls * sup.core.cost_per_call_micro) }}，缺口 <b>¥{{ yuan(sup.core.gap_topup_micro) }}</b>（{{ fmt(sup.core.gap_calls) }} 次）；向上游充值等额即可补齐。</span>
-            </template>
-          </div>
-
-          <!-- 阈值（仅前端横幅，本机保存） -->
-          <div class="row wrap" style="gap: 6px; font-size: 12px; color: var(--txt2);">
-            横幅告警阈值（%）：预警
-            <input v-model.number="supTh.warn" class="input th-in" type="number" min="1" @change="saveSupTh" />
-            危险
-            <input v-model.number="supTh.danger" class="input th-in" type="number" min="1" @change="saveSupTh" />
-            超发
-            <input v-model.number="supTh.critical" class="input th-in" type="number" min="1" @change="saveSupTh" />
-            <span class="dim">仅影响本机横幅提示（后端状态固定 60/80/100）</span>
-          </div>
 
           <!-- 发放台账 -->
           <div class="card">
@@ -1798,7 +1586,6 @@ async function doUserKeyRevoke(kid: number) {
           <div class="field"><label>备注（必填，审计留痕）</label><input v-model="adjust.note" class="input" maxlength="100" placeholder="如：活动赠送 / 误发追回" /></div>
           <div class="field"><label>管理密码确认</label><input v-model="adjust.pw" class="input" type="password" autocomplete="current-password" /></div>
           <p v-if="adjust.sign < 0" class="dim" style="margin: 0;">减余额封底 0，不允许扣成负数。</p>
-          <p v-if="adjustPreview" class="msg" :class="adjustPreview.includes('超发') ? 'bad' : 'info'" style="margin: 0;">{{ adjustPreview }}</p>
           <p v-if="adjustMsg" class="msg bad" style="margin: 0;">{{ adjustMsg }}</p>
           <div class="pop-ops">
             <button class="btn" @click="adjust.open = false">取消</button>

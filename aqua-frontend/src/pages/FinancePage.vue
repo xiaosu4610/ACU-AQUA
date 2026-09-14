@@ -114,7 +114,7 @@ function barW(amount: number): number {
           <b><AqIcon name="chart" :size="16" /> 近 30 天按模型消费 <span class="dim">Top 10</span></b>
           <div v-if="!data.by_model.length" class="empty" style="padding: 24px 0;">
             <b>暂无消费记录</b>
-            <div class="dim">使用收费模型（aqua/ 前缀，按量计费）后这里会出现统计</div>
+            <div class="dim">使用收费模型（aqua/ 前缀，按次计费）后这里会出现统计</div>
           </div>
           <div v-else class="bar-list mt12">
             <div v-for="m in data.by_model" :key="m.model" class="bar-row">

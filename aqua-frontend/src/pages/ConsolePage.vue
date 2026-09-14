@@ -103,7 +103,7 @@ const levelTag: Record<string, { cls: string; label: string }> = {
 const keys = ref<KeyItem[]>([])
 const keysLoading = ref(false)
 const newKeyName = ref('')
-const newKeyGrp = ref<BillingGrp>('per_token') // 创建分组，默认按量（按次线临时下架）
+const newKeyGrp = ref<BillingGrp>('per_call') // 创建分组，默认按次计费（收费线 aqua/）
 const creating = ref(false)
 const freshKey = ref('') // 仅创建后展示一次
 const keysMsg = ref('')
@@ -120,12 +120,12 @@ function grpLabel(g: string) {
   return g === 'per_call' ? '按次计费' : g === 'per_token' ? '按量计费' : g === 'official' ? '官方中转' : g === 'free' ? '纯免费' : '未分组'
 }
 function grpTagCls(g?: string) {
-  return g === 'per_token' ? 'ok' : g === 'free' ? 'acc' : g === 'per_call' || g === 'official' ? 'warn' : ''
+  return g === 'per_call' ? 'ok' : g === 'free' ? 'acc' : g === 'per_token' || g === 'official' ? 'warn' : ''
 }
 function grpTitle(g?: string) {
-  if (g === 'per_token') return '该密钥调用收费模型时按 tokens 三段计费'
-  if (g === 'per_call') return '按次计费线路已下架，调用收费模型将失败——建议切换为按量分组'
-  if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为按量分组'
+  if (g === 'per_call') return '按次计费：收费模型（aqua/）每次成功请求扣一次，余额付费、失败全额退回'
+  if (g === 'per_token') return '按量分组已下架，调用收费模型将失败——建议切换为按次计费分组'
+  if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为按次计费分组'
   if (g === 'free') return '纯免费分组：仅可调用免费模型，调收费模型直接拒绝'
   return '旧式密钥未选分组，收费模型按默认分组（按次）计费'
 }
@@ -477,7 +477,7 @@ function fmtTime(ts: number): string {
         <div class="grid2 mt16">
           <div class="card hoverable">
             <b><AqIcon name="spark" :size="16" /> 余额充值</b>
-            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。余额只影响收费模型 aqua/ 收费专线，其余模型完全免费。</div>
+            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。余额只影响收费模型 aqua/ 收费专线（按次计费），acu/ 众筹模型扣站点额度，其余模型完全免费。</div>
             <div class="row wrap mt12">
               <button class="btn primary sm" @click="go('topup')"><AqIcon name="spark" :size="13" /> 立即充值</button>
               <span class="tag acc">今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
@@ -542,7 +542,7 @@ function fmtTime(ts: number): string {
         <!-- 创建表单 -->
         <div class="card">
           <b><AqIcon name="key" :size="16" /> 创建密钥</b>
-          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。按量分组按 tokens 三段精算、模型最全；纯免费密钥只可调免费模型，绝不产生扣费。</p>
+          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。按次计费分组可调用收费模型（aqua/ 前缀，每次成功请求扣一次）；纯免费密钥只可调免费模型，绝不产生扣费。</p>
           <div class="form-grid mt12">
             <div class="field">
               <label>密钥名称</label>
@@ -551,7 +551,7 @@ function fmtTime(ts: number): string {
             <div class="field">
               <label>计费分组（仅影响收费模型）</label>
               <select v-model="newKeyGrp" class="select">
-                <option value="per_token">免费 + 按量计费（推荐）</option>
+                <option value="per_call">免费 + 按次计费（推荐）</option>
                 <option value="free">纯免费（仅免费模型）</option>
               </select>
             </div>
@@ -608,8 +608,8 @@ function fmtTime(ts: number): string {
                         :disabled="grpSavingId === k.id" @change="changeGrp(k)"
                       >
                         <option value="" disabled>未分组（旧密钥）</option>
-                        <option value="per_token">按量计费（推荐）</option>
-                        <option value="per_call">按次计费（已下架）</option>
+                        <option value="per_call">按次计费（推荐）</option>
+                        <option value="per_token">按量计费（已下架）</option>
                         <option value="official">官方中转（已下架）</option>
                         <option value="free">纯免费</option>
                       </select>
@@ -713,7 +713,7 @@ function fmtTime(ts: number): string {
       <div v-show="view === 'topup'">
         <div class="banner warn">
           <AqIcon name="info" :size="14" />
-          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值余额用于收费模型（aqua/ 前缀，按量计费）扣费，免费模型不受影响。<b>「充 1 = 2」充值翻倍仅限众筹公共池</b>——想用 acu/ 众筹模型请到 <router-link to="/pool">众筹池充值</router-link>。</span>
+          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值余额用于收费模型（aqua/ 前缀，按次计费）扣费，免费模型不受影响。<b>「充 1 = 2」充值翻倍仅限众筹公共池</b>——想用 acu/ 众筹模型请到 <router-link to="/pool">众筹池充值</router-link>。</span>
         </div>
 
         <!-- 在线充值 -->
@@ -739,7 +739,7 @@ function fmtTime(ts: number): string {
             <button class="btn primary" :disabled="paying || !topupAmt" @click="createTopup">
               {{ paying ? '创建中…' : '去支付' }}
             </button>
-            <span class="dim">当前余额 ¥{{ yuan(balance?.balance_micro) }} · 收费模型按量计费，余额不足时收费模型返回 402，免费模型照常可用</span>
+            <span class="dim">当前余额 ¥{{ yuan(balance?.balance_micro) }} · 收费模型按次计费（每次成功请求扣一次），余额不足时收费模型返回 402，免费模型照常可用</span>
           </div>
           <p v-if="topupCreditPreview > 0" class="dim mt8">
             支付 ¥{{ topupAmt }}，预计到账余额 <b class="col-ok">¥{{ yuan(topupCreditPreview) }}</b>（100% 全额到账，渠道手续费由本站承担）
@@ -750,7 +750,7 @@ function fmtTime(ts: number): string {
             <button class="btn xs" @click="manualCheck">我已支付，立即查询</button>
             <button class="btn xs ghost" @click="stopPolling(); payingOrder = null">取消检测</button>
           </div>
-          <p class="dim mt8">支付成功后自动入账；到账前请勿关闭本页。收费模型按量计费（实时单价见模型中心收费专区），余额低于阈值可在「账号设置」开启邮件提醒。</p>
+          <p class="dim mt8">支付成功后自动入账；到账前请勿关闭本页。收费模型按次计费（每次成功请求扣一次，单价见模型中心收费专区），余额低于阈值可在「账号设置」开启邮件提醒。</p>
           <p class="dim mt8 pay-help">
             <b class="col-warn">支付遇到问题？</b>已支付但余额未到账、重复扣款、金额有误——请勿重复支付，保留支付凭证（账单截图 / 商户单号），
             <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">加入 QQ 频道</a> 或
