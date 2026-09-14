@@ -103,7 +103,7 @@ const levelTag: Record<string, { cls: string; label: string }> = {
 const keys = ref<KeyItem[]>([])
 const keysLoading = ref(false)
 const newKeyName = ref('')
-const newKeyGrp = ref<BillingGrp>('per_call') // 创建分组，默认按次计费（收费线 aqua/）
+const newKeyGrp = ref<BillingGrp>('per_call') // 创建分组，默认「免费 + 收费」（收费线 aqua/）
 const creating = ref(false)
 const freshKey = ref('') // 仅创建后展示一次
 const keysMsg = ref('')
@@ -117,15 +117,15 @@ function keysNote(t: string, ok = false) { keysMsg.value = t; keysOk.value = ok 
 
 /** 分组显示名（成功态提示用） */
 function grpLabel(g: string) {
-  return g === 'per_call' ? '按次计费' : g === 'per_token' ? '按量计费' : g === 'official' ? '官方中转' : g === 'free' ? '纯免费' : '未分组'
+  return g === 'per_call' ? '免费 + 收费' : g === 'per_token' ? '按量计费' : g === 'official' ? '官方中转' : g === 'free' ? '纯免费' : '未分组'
 }
 function grpTagCls(g?: string) {
   return g === 'per_call' ? 'ok' : g === 'free' ? 'acc' : g === 'per_token' || g === 'official' ? 'warn' : ''
 }
 function grpTitle(g?: string) {
-  if (g === 'per_call') return '按次计费：收费模型（aqua/）每次成功请求扣一次，余额付费、失败全额退回'
-  if (g === 'per_token') return '按量分组已下架，调用收费模型将失败——建议切换为按次计费分组'
-  if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为按次计费分组'
+  if (g === 'per_call') return '免费 + 收费分组：免费模型随便调，收费模型（aqua/）每次成功请求扣一次余额、失败全额退回'
+  if (g === 'per_token') return '按量分组已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
+  if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
   if (g === 'free') return '纯免费分组：仅可调用免费模型，调收费模型直接拒绝'
   return '旧式密钥未选分组，收费模型按默认分组（按次）计费'
 }
@@ -542,7 +542,7 @@ function fmtTime(ts: number): string {
         <!-- 创建表单 -->
         <div class="card">
           <b><AqIcon name="key" :size="16" /> 创建密钥</b>
-          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。按次计费分组可调用收费模型（aqua/ 前缀，每次成功请求扣一次）；纯免费密钥只可调免费模型，绝不产生扣费。</p>
+          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。「免费 + 收费」分组免费模型随便调、收费模型（aqua/ 前缀）按次扣余额；「纯免费」密钥只可调免费模型，绝不产生扣费。</p>
           <div class="form-grid mt12">
             <div class="field">
               <label>密钥名称</label>
@@ -551,7 +551,7 @@ function fmtTime(ts: number): string {
             <div class="field">
               <label>计费分组（仅影响收费模型）</label>
               <select v-model="newKeyGrp" class="select">
-                <option value="per_call">免费 + 按次计费（推荐）</option>
+                <option value="per_call">免费 + 收费（推荐）</option>
                 <option value="free">纯免费（仅免费模型）</option>
               </select>
             </div>
@@ -608,7 +608,7 @@ function fmtTime(ts: number): string {
                         :disabled="grpSavingId === k.id" @change="changeGrp(k)"
                       >
                         <option value="" disabled>未分组（旧密钥）</option>
-                        <option value="per_call">按次计费（推荐）</option>
+                        <option value="per_call">免费 + 收费（推荐）</option>
                         <option value="per_token">按量计费（已下架）</option>
                         <option value="official">官方中转（已下架）</option>
                         <option value="free">纯免费</option>

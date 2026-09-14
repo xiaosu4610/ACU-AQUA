@@ -743,7 +743,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
 
         <!-- 按次计费分组 -->
         <section v-if="callLineRows.length" class="mt16">
-          <div class="line-title">按次计费分组<small>密钥选「免费 + 按次计费」时可用：每次成功请求扣一次，与生成长度无关</small></div>
+          <div class="line-title">收费模型（按次计费）<small>密钥选「免费 + 收费」时可用：每次成功请求扣一次，与生成长度无关</small></div>
           <div class="grid3">
             <div v-for="m in callLineRows" :key="m.id + ':call'" class="card hoverable pcard" :class="{ paused: !!m.st }">
               <div class="row between">
@@ -884,7 +884,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <div>
               <b style="font-size: 13.5px;">2 · 收费模型：官方自营系列（统一 aqua/ 前缀）</b>
               <p class="dim" style="font-size: 13px;">
-                计费方式由你密钥的计费分组决定：「免费 + 按次计费」每次成功请求扣一次，与生成长度无关，失败全额退回；「纯免费」密钥仅可调用免费模型。acu/ 前缀的众筹公共模型任何密钥都能调，按次从站点公共额度扣费、不动个人余额。
+                计费方式由你密钥的计费分组决定：「免费 + 收费」免费模型随便调，收费模型每次成功请求扣一次、与生成长度无关、失败全额退回；「纯免费」密钥仅可调用免费模型。acu/ 前缀的众筹公共模型任何密钥都能调，按次从站点公共额度扣费、不动个人余额。
                 调用方式与免费模型完全一致——同一个接口，只是 model 换成它们，支持流式输出。
               </p>
             </div>
