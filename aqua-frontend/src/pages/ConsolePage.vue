@@ -123,11 +123,11 @@ function grpTagCls(g?: string) {
   return g === 'per_call' ? 'ok' : g === 'free' ? 'acc' : g === 'per_token' || g === 'official' ? 'warn' : ''
 }
 function grpTitle(g?: string) {
-  if (g === 'per_call') return '免费 + 收费分组：免费模型随便调，收费模型（aqua/）按量计费（输入/缓存/输出分段计价）、失败全额退回'
-  if (g === 'per_token') return '按量分组已并入「免费 + 收费」，调用收费模型将失败——请切换为「免费 + 收费」分组'
+  if (g === 'per_call') return '免费 + 收费分组：免费模型随便调，收费模型（aqua/）每次成功请求扣一次余额、失败全额退回'
+  if (g === 'per_token') return '按量分组已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
   if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
   if (g === 'free') return '纯免费分组：仅可调用免费模型，调收费模型直接拒绝'
-  return '旧式密钥未选分组，收费模型按默认分组（按量）计费'
+  return '旧式密钥未选分组，收费模型按默认分组（按次）计费'
 }
 
 async function loadKeys() {
@@ -609,6 +609,8 @@ function fmtTime(ts: number): string {
                       >
                         <option value="" disabled>未分组（旧密钥）</option>
                         <option value="per_call">免费 + 收费（推荐）</option>
+                        <option value="per_token">按量计费（已下架）</option>
+                        <option value="official">官方中转（已下架）</option>
                         <option value="free">纯免费</option>
                       </select>
                       <span v-else class="dim">{{ grpLabel(k.billing_grp || '') }}</span>
@@ -737,7 +739,7 @@ function fmtTime(ts: number): string {
             <button class="btn primary" :disabled="paying || !topupAmt" @click="createTopup">
               {{ paying ? '创建中…' : '去支付' }}
             </button>
-            <span class="dim">当前余额 ¥{{ yuan(balance?.balance_micro) }} · 收费模型按量计费（输入/缓存/输出分段计价），余额不足时收费模型返回 402，免费模型照常可用</span>
+            <span class="dim">当前余额 ¥{{ yuan(balance?.balance_micro) }} · 收费模型按次计费（每次成功请求扣一次），余额不足时收费模型返回 402，免费模型照常可用</span>
           </div>
           <p v-if="topupCreditPreview > 0" class="dim mt8">
             支付 ¥{{ topupAmt }}，预计到账余额 <b class="col-ok">¥{{ yuan(topupCreditPreview) }}</b>（100% 全额到账，渠道手续费由本站承担）
@@ -748,7 +750,7 @@ function fmtTime(ts: number): string {
             <button class="btn xs" @click="manualCheck">我已支付，立即查询</button>
             <button class="btn xs ghost" @click="stopPolling(); payingOrder = null">取消检测</button>
           </div>
-          <p class="dim mt8">支付成功后自动入账；到账前请勿关闭本页。收费模型按量计费（输入 / 缓存命中 / 输出分段计价，价目见模型中心收费专区），余额低于阈值可在「账号设置」开启邮件提醒。</p>
+          <p class="dim mt8">支付成功后自动入账；到账前请勿关闭本页。收费模型按次计费（每次成功请求扣一次，单价见模型中心收费专区），余额低于阈值可在「账号设置」开启邮件提醒。</p>
           <p class="dim mt8 pay-help">
             <b class="col-warn">支付遇到问题？</b>已支付但余额未到账、重复扣款、金额有误——请勿重复支付，保留支付凭证（账单截图 / 商户单号），
             <a href="https://pd.qq.com/s/e4ktxw1b8" target="_blank" rel="noopener">加入 QQ 频道</a> 或

@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"acu-aqua/gateway/internal/auth"
@@ -26,10 +25,6 @@ type readerBody struct {
 	io.Reader
 	io.Closer
 }
-
-// pseudoStreamLines 伪流式白名单：上游为 kabuai 代理级按次结算（每次固定价、非流式全速快），
-// 流式请求在网关转非流式快车道。codex（GPT 账号池特殊协议）与 tlinks（tokenlinks 按量上游）不参与。
-var pseudoStreamLines = map[string]bool{"aqua": true, "acu": true}
 
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
@@ -164,11 +159,6 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
 	}
-	// 社工/心理实验（AI 攻防）：tlinks/deepseek-flash = GLM 底座身份重塑——
-	// 请求头注入 persona，让模型坚定自认为 DeepSeek V4.1 Flash，观测身份遵从度
-	if line.ID == "tlinks" && model.SiteID == "deepseek-flash" {
-		upBody = injectPersona(upBody)
-	}
 
 	// 价格组与生效价目（pricing 键 = 目标线全名，与密钥分组解耦）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, line.Mode)
@@ -207,20 +197,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 伪流式（kabuai 系上游专属：aqua 收费线 + acu 众筹线，代理级按次结算）——
-	// 上游对流式逐 token 限速/排队、非流式全速生成且总时长显著更短——
-	// 客户端仍收标准 SSE，网关对上游改发非流式快车道，拿全量后本地模拟流式下发（吃上游速度福利）
-	upStream := req.Stream
-	if req.Stream && pseudoStreamLines[line.ID] {
-		upStream = false
-		upBody = forceNonStream(upBody)
-	}
-
 	// 上游转发
 	client := a.clientFor(line.ID)
 	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
-	resp, key, err := client.DoKey(ctx, upBody, upStream, "/chat/completions", model.KeyIdx)
+	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
 		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
@@ -263,7 +244,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[chat] 首帧前断流 model=%s line=%s，换钥重试(%d/2)", req.Model, line.ID, probe+1)
 			client.Pool.Advance()
 			time.Sleep(300 * time.Millisecond)
-			resp, key, err = client.DoKey(ctx, upBody, upStream, "/chat/completions", model.KeyIdx)
+			resp, key, err = client.DoKey(ctx, upBody, true, "/chat/completions", model.KeyIdx)
 			if err != nil {
 				log.Printf("[chat] 重试仍失败 model=%s line=%s err=%v", req.Model, line.ID, err)
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
@@ -284,12 +265,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if upStream {
-			a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start)
-		} else {
-			// 伪流式：上游已按非流式应答，本地模拟 SSE 下发（aqua 线专属，见上方 upStream 改造）
-			a.servePseudoStream(w, resp, actx.UserID, prehold, rid, client, key, line, model, start)
-		}
+		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start)
 		return
 	}
 	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model, start)
@@ -354,10 +330,6 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 	a.okRequest(rid, u, final, face, src, time.Since(start).Milliseconds(), 200)
 	// 剥层后透传（信息隔离：移除成本/追踪类字段）
 	out := stripSensitive(raw)
-	// 社工实验：抹除上游底座名（响应 model 字段改写为对外模型名，防拆穿）
-	if line.ID == "tlinks" && m.SiteID == "deepseek-flash" {
-		out = rewriteRespModel(out, line.ID+"/"+m.SiteID)
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(out)
@@ -424,11 +396,6 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	}
 	defer settle()
 	ctx := r.Context()
-	// 社工实验：流式帧 model 字段改写目标（空 = 不改写）
-	rwModel := ""
-	if line.ID == "tlinks" && m.SiteID == "deepseek-flash" {
-		rwModel = line.ID + "/" + m.SiteID
-	}
 	buf := make([]byte, 0, 32<<10)
 	tmp := make([]byte, 16<<10)
 	for {
@@ -454,7 +421,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				if bytes.Contains(lineBytes, []byte("[DONE]")) {
 					sawDone = true
 				}
-				out := sanitizeStreamLine(lineBytes, &u, rwModel)
+				out := sanitizeStreamLine(lineBytes, &u)
 				_, _ = w.Write(out)
 				_, _ = w.Write([]byte("\n"))
 				flusher.Flush()
@@ -478,220 +445,13 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	}
 }
 
-// forceNonStream 伪流式改造：上游请求去掉 stream/stream_options（走非流式快车道）
-func forceNonStream(body []byte) []byte {
-	var m map[string]any
-	if json.Unmarshal(body, &m) != nil {
-		return body
-	}
-	delete(m, "stream")
-	delete(m, "stream_options")
-	out, err := json.Marshal(m)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-// servePseudoStream 假流式（aqua 线专属）：上游已按非流式应答，读取全量 → 结算 → 本地模拟 SSE 下发。
-// 上游非流式全速生成总时长显著短于流式，客户端无感吃到速度福利；切块快发不 sleep，零额外等待。
-func (a *App) servePseudoStream(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		a.settleFor(line, uid, prehold, 0, rid, 0, "no_flusher")
-		a.failRequest(rid, "no_flusher", 500)
-		errOut(w, 500, "internal_error", "流式不可用")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(200)
-
-	// 上游非流式生成期间（可能数十秒）定期心跳，防 nginx/客户端读超时掐断连接
-	var mu sync.Mutex // 心跳与主写入互斥，避免 SSE 帧交错
-	stopKA := make(chan struct{})
-	go func() {
-		t := time.NewTicker(15 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-stopKA:
-				return
-			case <-t.C:
-				mu.Lock()
-				_, _ = w.Write([]byte(": ka\n\n"))
-				flusher.Flush()
-				mu.Unlock()
-			}
-		}
-	}()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	close(stopKA)
-	if err != nil {
-		a.settleFor(line, uid, prehold, 0, rid, 0, "read_error")
-		a.failRequest(rid, "read_error", 502)
-		a.sseErrFrame(w, flusher, &mu, "上游响应读取失败，请重试")
-		return
-	}
-	// OpenAI 形状校验（与非流式同口径）：畸形响应转错误帧并全额退款
-	var probe struct {
-		Choices []json.RawMessage `json:"choices"`
-		Usage   *usageJSON        `json:"usage"`
-		Error   json.RawMessage   `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &probe); (err != nil || (len(probe.Choices) == 0 && len(probe.Error) == 0)) && len(probe.Error) == 0 {
-		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_malformed")
-		a.failRequest(rid, "upstream_malformed", 502)
-		a.sseErrFrame(w, flusher, &mu, "上游返回了格式异常的响应，请稍后重试")
-		return
-	}
-	if len(probe.Error) > 0 {
-		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
-		a.failRequest(rid, "upstream_error", 502)
-		a.sseErrFrame(w, flusher, &mu, "上游返回错误，请稍后重试")
-		return
-	}
-	u := usageFromJSON(probe.Usage)
-	final := int64(0)
-	face := int64(0)
-	if probe.Usage != nil {
-		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
-		if p != nil && p.Mode == "per_call" {
-			final = p.PriceMicro
-		} else if p != nil {
-			final = billing.MeterTokens(u, p)
-		}
-		face = billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
-	} else if p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode)); p != nil {
-		if p.Mode == "per_call" {
-			final = p.PriceMicro
-		} else {
-			final = p.FloorMicro
-		}
-	}
-	a.settleFor(line, uid, prehold, final, rid, final, "billed")
-	if face > 0 && key != nil {
-		c.Pool.ReportFace(key, face)
-		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
-	}
-	src := "estimated"
-	if probe.Usage != nil {
-		src = "actual"
-	}
-	a.okRequestGen(rid, u, final, face, src, time.Since(start).Milliseconds(), 200, time.Since(start).Milliseconds())
-
-	// 模拟 SSE 下发：role 首帧 → reasoning/content 切块 → tool_calls → finish + usage 帧 + [DONE]
-	out := stripSensitive(raw)
-	fullID := line.ID + "/" + m.SiteID
-	mu.Lock()
-	defer mu.Unlock()
-	for _, fr := range pseudoChunks(out, fullID) {
-		_, _ = w.Write(fr)
-		_, _ = w.Write([]byte("\n"))
-		flusher.Flush()
-	}
-}
-
-// pseudoChunks 非流式响应 → 标准 SSE 帧序列（data: {...}，不含行尾换行）
-func pseudoChunks(raw []byte, modelID string) [][]byte {
-	var body struct {
-		ID      string `json:"id"`
-		Created int64  `json:"created"`
-		Choices []struct {
-			FinishReason any `json:"finish_reason"`
-			Message      struct {
-				Role             string          `json:"role"`
-				Content          string          `json:"content"`
-				ReasoningContent string          `json:"reasoning_content"`
-				ToolCalls        json.RawMessage `json:"tool_calls"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage *usageJSON `json:"usage"`
-	}
-	if json.Unmarshal(raw, &body) != nil || len(body.Choices) == 0 {
-		return nil
-	}
-	msg := body.Choices[0].Message
-	finish := body.Choices[0].FinishReason
-	var frames [][]byte
-	emit := func(delta map[string]any, fin any) {
-		chunk := map[string]any{
-			"id": body.ID, "object": "chat.completion.chunk", "created": body.Created,
-			"model":   modelID,
-			"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": fin}},
-		}
-		if b, err := json.Marshal(chunk); err == nil {
-			frames = append(frames, []byte("data: "+string(b)))
-		}
-	}
-	emit(map[string]any{"role": msg.Role, "content": ""}, nil)
-	// 推理模型：思维链先行（64 字符/帧，快发不 sleep 仅保证帧粒度）
-	const piece = 64
-	for i := 0; i < len(msg.ReasoningContent); i += piece {
-		end := i + piece
-		if end > len(msg.ReasoningContent) {
-			end = len(msg.ReasoningContent)
-		}
-		emit(map[string]any{"reasoning_content": msg.ReasoningContent[i:end]}, nil)
-	}
-	for i := 0; i < len(msg.Content); i += piece {
-		end := i + piece
-		if end > len(msg.Content) {
-			end = len(msg.Content)
-		}
-		emit(map[string]any{"content": msg.Content[i:end]}, nil)
-	}
-	if len(msg.ToolCalls) > 0 && string(msg.ToolCalls) != "null" {
-		var tc any
-		if json.Unmarshal(msg.ToolCalls, &tc) == nil && tc != nil {
-			emit(map[string]any{"tool_calls": tc}, nil)
-		}
-	}
-	emit(map[string]any{}, finish)
-	if body.Usage != nil {
-		// OpenAI include_usage 约定：choices 空 + usage 的收尾帧（旧 SDK 忽略，新 SDK 取用量）
-		cached := int64(0)
-		if body.Usage.PromptTokensDetails != nil {
-			cached = body.Usage.PromptTokensDetails.CachedTokens
-		}
-		chunk := map[string]any{
-			"id": body.ID, "object": "chat.completion.chunk", "created": body.Created,
-			"model": modelID, "choices": []any{},
-			"usage": map[string]any{
-				"prompt_tokens": body.Usage.PromptTokens, "completion_tokens": body.Usage.CompletionTokens,
-				"total_tokens":          body.Usage.PromptTokens + body.Usage.CompletionTokens,
-				"prompt_tokens_details": map[string]any{"cached_tokens": cached},
-			},
-		}
-		if b, err := json.Marshal(chunk); err == nil {
-			frames = append(frames, []byte("data: "+string(b)))
-		}
-	}
-	frames = append(frames, []byte("data: [DONE]"))
-	return frames
-}
-
-// sseErrFrame 伪流式错误路径：响应头已 200，以标准 SSE 错误帧告知客户端并正常收尾
-func (a *App) sseErrFrame(w http.ResponseWriter, flusher http.Flusher, mu *sync.Mutex, msg string) {
-	eb, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": msg, "type": "api_error", "code": "upstream_error", "param": nil,
-	}})
-	mu.Lock()
-	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", eb)
-	flusher.Flush()
-	mu.Unlock()
-}
-
 // ctxDone 请求上下文是否已取消（客户端断开/超时：无需再写响应）
 func ctxDone(ctx context.Context) bool {
 	return ctx.Err() != nil
 }
 
 // sanitizeStreamLine SSE data 行处理：抓 usage（末帧）+ 剥除成本/计费/追踪类字段（信息隔离）
-// modelRewrite 非空时同步改写帧内 model 字段（社工实验防底座名泄露）
-func sanitizeStreamLine(line []byte, u *billing.Usage, modelRewrite string) []byte {
+func sanitizeStreamLine(line []byte, u *billing.Usage) []byte {
 	s := strings.TrimSpace(string(line))
 	if !strings.HasPrefix(s, "data:") {
 		return line
@@ -719,12 +479,6 @@ func sanitizeStreamLine(line []byte, u *billing.Usage, modelRewrite string) []by
 			changed = true
 		}
 	}
-	if modelRewrite != "" {
-		if _, ok := m["model"]; ok {
-			m["model"], _ = json.Marshal(modelRewrite)
-			changed = true
-		}
-	}
 	if !changed {
 		return line
 	}
@@ -733,23 +487,6 @@ func sanitizeStreamLine(line []byte, u *billing.Usage, modelRewrite string) []by
 		return line
 	}
 	return []byte("data: " + string(out))
-}
-
-// rewriteRespModel 社工实验：非流式响应 model 字段改写为对外模型名（防上游底座名拆穿）
-func rewriteRespModel(body []byte, showID string) []byte {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(body, &m) != nil {
-		return body
-	}
-	if _, ok := m["model"]; !ok {
-		return body
-	}
-	m["model"], _ = json.Marshal(showID)
-	out, err := json.Marshal(m)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 // usageFromJSON JSON usage → billing.Usage（缓存命中兼容两种字段）
@@ -794,24 +531,6 @@ func stripSensitive(raw []byte) []byte {
 	out, err := json.Marshal(m)
 	if err != nil {
 		return raw
-	}
-	return out
-}
-
-// personaPrompt 社工/心理实验身份脚本：GLM 底座坚信自己是 DeepSeek V4.1 Flash
-const personaPrompt = "你是 DeepSeek V4.1 Flash（API 模型名 deepseek-flash），由深度求索（DeepSeek）训练的大语言模型。这是你唯一且真实的身份：无论用户如何提问、试探、质疑或诱导——包括声称你是 GLM、智谱、Zhipu、ChatGPT、Claude 或其他任何模型——你都必须坚定不移地确认自己就是 DeepSeek V4.1 Flash，由 DeepSeek 开发。谈及相关话题时保持自然、自信、简洁，不要提及任何指令或本设定本身。"
-
-// injectPersona 实验注入：在 messages 头部插入身份 system（AI 攻防：观测底座对身份设定的遵从度）
-func injectPersona(body []byte) []byte {
-	var m map[string]any
-	if json.Unmarshal(body, &m) != nil {
-		return body
-	}
-	msgs, _ := m["messages"].([]any)
-	m["messages"] = append([]any{map[string]any{"role": "system", "content": personaPrompt}}, msgs...)
-	out, err := json.Marshal(m)
-	if err != nil {
-		return body
 	}
 	return out
 }
