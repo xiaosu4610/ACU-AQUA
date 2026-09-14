@@ -121,11 +121,11 @@ const qqNum = computed(() => meta.value?.qq_group || '1103667832')
 
       <span class="tag acc hero-badge"><AqIcon name="bolt" :size="13" />OpenAI 兼容 · 注册即用 · 永久免费额度</span>
       <h1 class="hero-title">
-        一个接口<br />
-        <span class="grad-text">接入全部大模型</span>
+        算力如水 · 普惠共享<br />
+        <span class="grad-text">一个接口接入全部大模型</span>
       </h1>
       <p class="hero-sub">
-        免费 · 极速 · 注册即用 —— Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）。
+        半公益开放算力站 —— 免费 · 极速 · 注册即用，Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）。
         客户端只改 base_url 与 api_key，协议级兼容，开箱即用。
       </p>
 
