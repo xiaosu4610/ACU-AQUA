@@ -602,9 +602,9 @@ const priceTag = computed(() => {
 const priceRows = computed<[string, string][] | null>(() => {
   const r = row.value
   if (!r?.paid) return null
-  if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
+  if (r.in_price != null && r.per_image == null) {
     return [
-      ['计费方式', isTide.value ? '按量三段价 · 无保底，用多少付多少' : '按量三段价 · 单次最低消费 ¥' + microYuan(r.floor_micro)],
+      ['计费方式', '按量三段价 · 无保底，用多少付多少'],
       ['输入', '¥' + perMYuan(r.in_price) + ' / 百万 tokens'],
       ['缓存命中', '¥' + perMYuan(r.cache_price) + ' / 百万 tokens'],
       ['输出', '¥' + perMYuan(r.out_price) + ' / 百万 tokens'],
@@ -685,10 +685,10 @@ const priceRows = computed<[string, string][] | null>(() => {
               </table>
             </div>
             <ul class="mt12 bill-notes">
-              <li v-if="row?.mode === 'per_token' && row?.per_image == null">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>{{ isTide ? '；重复对话前缀命中缓存价，输入成本大幅更低' : '' }}</li>
+              <li v-if="row?.in_price != null && row?.per_image == null">按量计费：输入 / 缓存命中 / 输出按 tokens 分段计价，<b>用多少付多少</b>；重复对话前缀命中缓存价，输入成本大幅更低</li>
               <li v-else-if="isTideImage">按张计费：每次成功请求按 <code>n</code>（张数）扣费，失败自动全额退回</li>
               <li v-else>按次计费：每次<b>成功</b>请求扣一次，与生成长度无关（写一句话和写一千字同价）</li>
-              <li v-if="isTide">先付后用：发起请求按预估预扣（输入 + <code>max_tokens</code> 输出上限），完成后<b>多退少补</b>；调小 <code>max_tokens</code> 可降低单次预扣</li>
+              <li v-if="row?.in_price != null && row?.per_image == null">先付后用：发起请求按预估预扣（输入 + <code>max_tokens</code> 输出上限），完成后<b>多退少补</b>；调小 <code>max_tokens</code> 可降低单次预扣</li>
               <li>预充值制：余额用完自动返回 402 停止服务，<b>绝不透支</b>；<router-link to="/console?view=topup">在线充值即时到账</router-link></li>
               <li>失败不扣费：上游失败 / 网络中断 / 服务异常，预扣金额<b>自动全额退回</b></li>
               <li>调用方式与免费模型完全一致：同一接口、同一密钥，<code>model</code> 填本模型 ID 即可；需注册登录并使用个人密钥</li>

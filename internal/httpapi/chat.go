@@ -27,6 +27,10 @@ type readerBody struct {
 	io.Closer
 }
 
+// pseudoStreamLines 伪流式白名单：上游为 kabuai 代理级按次结算（每次固定价、非流式全速快），
+// 流式请求在网关转非流式快车道。codex（GPT 账号池特殊协议）与 tlinks（tokenlinks 按量上游）不参与。
+var pseudoStreamLines = map[string]bool{"aqua": true, "acu": true}
+
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
 	Model     string          `json:"model"`
@@ -203,10 +207,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 伪流式（aqua 线专属）：上游对流式逐 token 限速/排队、非流式全速生成且总时长显著更短——
+	// 伪流式（kabuai 系上游专属：aqua 收费线 + acu 众筹线，代理级按次结算）——
+	// 上游对流式逐 token 限速/排队、非流式全速生成且总时长显著更短——
 	// 客户端仍收标准 SSE，网关对上游改发非流式快车道，拿全量后本地模拟流式下发（吃上游速度福利）
 	upStream := req.Stream
-	if req.Stream && line.ID == "aqua" {
+	if req.Stream && pseudoStreamLines[line.ID] {
 		upStream = false
 		upBody = forceNonStream(upBody)
 	}

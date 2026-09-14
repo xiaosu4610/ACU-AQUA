@@ -303,11 +303,11 @@ function jump(id: string) {
             <li>没有余额、不充值，免费模型<b>照样随便用</b>，二者互不影响。</li>
           </ul>
           <h3>哪些收费？——aqua/ 收费系列（统一前缀）</h3>
-          <p class="desc">官方自营收费模型<b>统一 <code>aqua/</code> 前缀</b>，<b>按次计费</b>：每次成功请求扣一次，与生成长度无关（写一句话和写一千字同价），覆盖 DeepSeek / GLM / Kimi 全系列旗舰。调用方式和免费模型<b>完全一样</b>——同一个接口、同一套 SDK，只是 <code>model</code> 字段带上 <code>aqua/</code> 前缀：</p>
+          <p class="desc">官方自营收费模型<b>统一 <code>aqua/</code> 前缀</b>，<b>按量计费</b>：输入 / 缓存命中 / 输出按 tokens 分段计价，用多少付多少（重复对话前缀命中缓存价，成本大幅更低），覆盖 DeepSeek / GLM / Kimi 全系列旗舰。调用方式和免费模型<b>完全一样</b>——同一个接口、同一套 SDK，只是 <code>model</code> 字段带上 <code>aqua/</code> 前缀：</p>
           <div class="codewrap"><div class="row between codetop"><span class="tag grad">收费模型示例</span><CopyBtn :text="codePaidCurl" /></div><pre class="code flat">{{ codePaidCurl }}</pre></div>
-          <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>price_micro</code> 字段。</p>
-          <h3>计费方式——按次计费（每次成功请求扣一次）</h3>
-          <p class="desc">收费模型<b>按次收费</b>：每次成功请求扣一次单价，与 tokens 用量、生成长度无关，价格透明可预期；失败请求<b>一分钱不收</b>。调用示例：</p>
+          <p class="desc">支持 <code>stream: true</code> 流式输出，效果与免费模型一致，对客户端完全透明。需先<b>注册登录</b>并使用<b>个人密钥</b>调用（会话令牌调用收费模型会被拒绝）。各模型实时单价见「模型中心」收费模型专区或 <code>/v1/models</code> 返回的 <code>in_price / cache_price / out_price</code> 字段。</p>
+          <h3>计费方式——按量计费（三段分段计价）</h3>
+          <p class="desc">收费模型<b>按量收费</b>：输入、缓存命中、输出三段分别按 tokens 计价，<b>无保底、用多少付多少</b>；失败请求<b>一分钱不收</b>。调用示例：</p>
           <div class="codewrap"><div class="row between codetop"><span class="tag grad">按次计费示例</span><CopyBtn :text="codeVolCurl" /></div><pre class="code flat">{{ codeVolCurl }}</pre></div>
           <p class="desc">收费模型全线<b>先付后用</b>：发起请求前按单价预扣，完成后按实际结果结算；上游失败、网络中断时预扣金额<b>自动全额退回</b>，绝不透支。</p>
           <h3>收费政策与资金安全（五条铁律）</h3>
@@ -315,7 +315,7 @@ function jump(id: string) {
             <table class="table">
               <thead><tr><th>规则</th><th>具体内容</th><th>对你的意义</th></tr></thead>
               <tbody>
-                <tr><td><b>按次计费</b></td><td><b>按次分组密钥</b>：每次成功请求扣一次单价，与 tokens 用量、生成长度无关，价格透明可预期。</td><td>一句话和一千字同价，失败全额退回</td></tr>
+                <tr><td><b>按量计费</b></td><td><b>收费分组密钥</b>：输入 / 缓存命中 / 输出三段按 tokens 计价，无保底，用多少付多少。</td><td>缓存命中大幅省钱，失败全额退回</td></tr>
                 <tr><td><b>预充值制</b></td><td>余额<b>在线充值即时到账</b>，每次请求前预扣，余额不足直接返回 <code>402</code>，绝不透支。</td><td>永远不可能「不知不觉欠费」</td></tr>
                 <tr><td><b>失败不扣费</b></td><td>上游失败、网络中断、服务异常——预扣金额<b>自动全额退回</b>，错误请求一分钱不收。</td><td>只为成功的结果付费</td></tr>
                 <tr><td><b>流水可查</b></td><td>每一笔扣费/退回都永久留存：个人控制台「消费账单」随时核对，含时间、金额、余额、请求明细。</td><td>账目自己随时能查，不用找人对账</td></tr>
@@ -422,7 +422,7 @@ function jump(id: string) {
           <h2>特殊模型说明</h2>
           <ul class="tips">
             <li><b>Auto 路由</b>：填入 <code>auto</code>（旧写法 <code>acu/auto-models</code> 仍兼容），网关自动从 Nvidia 候选池随机命中一个主流模型。</li>
-            <li><b>官方自营（收费）</b>：模型 ID 带 <code>aqua/</code> 前缀（如 <code>aqua/deepseek-v4-flash</code>），由 AQUA 官方自营专线通道提供，按次计费（每次成功请求扣一次），长期服务、稳定可靠。</li>
+            <li><b>官方自营（收费）</b>：模型 ID 带 <code>aqua/</code> 前缀（如 <code>aqua/deepseek-v4-flash</code>），由 AQUA 官方自营专线通道提供，按量计费（输入 / 缓存命中 / 输出分段计价），长期服务、稳定可靠。</li>
             <li><b>专线排队</b>：专线通道有并发保护，高峰期会自动排队等待（先到先得）；排队超时会返回提示，请稍后重试，不要重复提交。</li>
             <li><b>非标准端点</b>：付费图像模型（<code>/v1/images/generations</code>）等特殊能力已适配为标准 OpenAI SDK 端点，可直接用官方 SDK 调用。</li>
             <li><b>账号制密钥</b>：注册登录后在个人控制台创建密钥（<code>sk-****</code>）即可调用——注册免费、创建自助、随时吊销重建。大版本更新与公告在 QQ 频道（频道号 pd57362562）通知。</li>

@@ -785,20 +785,32 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-if="!tokenLineRows.length" class="empty mt12"><b>未找到匹配的收费模型</b></div>
         </section>
 
-        <!-- 按次计费分组 -->
+        <!-- 收费模型（按量计费） -->
         <section v-if="callLineRows.length" class="mt16">
-          <div class="line-title">收费模型（按次计费）<small>密钥选「免费 + 收费」时可用：每次成功请求扣一次，与生成长度无关</small></div>
+          <div class="line-title">收费模型（按量计费）<small>密钥选「免费 + 收费」时可用：输入 / 缓存命中 / 输出分段计价，无保底，先付后用，用多少付多少</small></div>
           <div class="grid3">
             <div v-for="m in callLineRows" :key="m.id + ':call'" class="card hoverable pcard" :class="{ paused: !!m.st }">
               <div class="row between">
                 <span class="mono pid" :title="'完整模型 ID：' + m.id"><i>{{ m.id.split('/')[0] }}/</i>{{ m.id.split('/').slice(1).join('/') }}</span>
                 <span v-if="m.st" class="tag bad" :title="m.st.title">{{ m.st.text }}</span>
+                <span v-else-if="m.baseInPrice != null" class="tag warn" title="VIP 专享代理价已生效">VIP</span>
               </div>
-              <div class="row wrap mt8" style="gap: 6px;">
-                <span class="tag grad num">¥{{ microYuan(m.price) }}<em>/次</em></span>
-                <span class="tag">{{ m.basePrice != null ? 'VIP 拿货价' : '正常价' }}</span>
+              <div class="row mt8" style="gap: 7px; font-size: 12px;">
+                <span class="dot" :class="liveStatusOf(m.id).dot"></span>
+                <span>{{ liveStatusOf(m.id).text }}</span>
+                <span class="dim" style="margin-left: auto; font-size: 11px;">{{ liveMap[m.id] ? fmtAgo(liveMap[m.id].last_ts) : '' }}</span>
               </div>
-              <div v-if="m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
+              <div class="tp mt8">
+                <div><i>输入</i><b class="num">¥{{ perMYuan(m.inPrice) }}</b><s v-if="m.baseInPrice != null" title="原价">¥{{ perMYuan(m.baseInPrice) }}</s><em>/M</em></div>
+                <div><i>缓存命中</i><b class="num">¥{{ perMYuan(m.cachePrice) }}</b><s v-if="m.baseCachePrice != null" title="原价">¥{{ perMYuan(m.baseCachePrice) }}</s><em>/M</em></div>
+                <div><i>输出</i><span class="tag grad num">¥{{ perMYuan(m.outPrice) }}</span><s v-if="m.baseOutPrice != null" title="原价">¥{{ perMYuan(m.baseOutPrice) }}</s><em>/M</em></div>
+              </div>
+              <div class="dim mt8" style="font-size: 11.5px;">按量计费 · 先付后用 · 缓存命中更省 · 官方空闲刊例 3 折</div>
+              <div class="pmetrics mt8">
+                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
+                <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
+              </div>
               <div class="row between mt12">
                 <CopyBtn :text="m.id" />
                 <router-link :to="m.link" class="btn ghost sm">能力详情 <AqIcon name="arrow-right" :size="13" /></router-link>
@@ -885,7 +897,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             <div>
               <b style="font-size: 13.5px;">2 · 收费模型：官方自营系列（统一 aqua/ 前缀）</b>
               <p class="dim" style="font-size: 13px;">
-                计费方式由你密钥的计费分组决定：「免费 + 收费」免费模型随便调，收费模型每次成功请求扣一次、与生成长度无关、失败全额退回；「纯免费」密钥仅可调用免费模型。acu/ 前缀的众筹公共模型任何密钥都能调，按次从站点公共额度扣费、不动个人余额。
+                计费方式由你密钥的计费分组决定：「免费 + 收费」免费模型随便调，收费模型按量计费（输入 / 缓存命中 / 输出分段计价，用多少付多少，失败全额退回）；「纯免费」密钥仅可调用免费模型。acu/ 前缀的众筹公共模型任何密钥都能调，按次从站点公共额度扣费、不动个人余额。
                 调用方式与免费模型完全一致——同一个接口，只是 model 换成它们，支持流式输出。
               </p>
             </div>

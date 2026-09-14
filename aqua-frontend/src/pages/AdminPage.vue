@@ -950,8 +950,8 @@ async function doUserKeyRevoke(kid: number) {
             <div class="kpis">
               <div class="kpi">
                 <span>计费模式</span>
-                <b style="font-size: 19px;">按次计费</b>
-                <span class="trend">每次成功请求扣一次，与生成长度无关；acu/ 众筹线扣站点额度，aqua/ 收费线扣余额</span>
+                <b style="font-size: 19px;">按量计费</b>
+                <span class="trend">收费线按量三段计价（输入/缓存/输出）；acu/ 众筹线扣站点额度，aqua/ 收费线扣余额</span>
               </div>
               <div class="kpi"><span>通道手续费（本站承担）</span><b>¥{{ yuan(stats.upstream.fee_micro || 0) }}</b><span class="trend">实付费率 {{ ((stats.upstream.fee_rate ?? 0) * 100).toFixed(2) }}%</span></div>
             </div>

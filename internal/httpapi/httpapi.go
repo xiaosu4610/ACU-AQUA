@@ -672,11 +672,30 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				}
 			}
 			if pc != nil {
-				item["price_micro"] = pc.p.PriceMicro
-				if pb := a.promoBase(pc.p, pc.base != nil); pb != nil {
-					item["base_price_micro"] = pb.PriceMicro
-				} else if pc.base != nil {
-					item["base_price_micro"] = pc.base.PriceMicro
+				if pc.p.Mode == "per_token" {
+					// 线分组名保持 per_call（路由/密钥零破坏），但价目已按量（pricing 驱动）→ 输出三段价
+					item["floor_micro"] = pc.p.FloorMicro
+					item["in_price"] = float64(pc.p.InRate10) / 10000
+					item["cache_price"] = float64(pc.p.CacheRate10) / 10000
+					item["out_price"] = float64(pc.p.OutRate10) / 10000
+					if pb := a.promoBase(pc.p, pc.base != nil); pb != nil {
+						item["base_floor_micro"] = pb.FloorMicro
+						item["base_in_price"] = float64(pb.InRate10) / 10000
+						item["base_cache_price"] = float64(pb.CacheRate10) / 10000
+						item["base_out_price"] = float64(pb.OutRate10) / 10000
+					} else if pc.base != nil {
+						item["base_floor_micro"] = pc.base.FloorMicro
+						item["base_in_price"] = float64(pc.base.InRate10) / 10000
+						item["base_cache_price"] = float64(pc.base.CacheRate10) / 10000
+						item["base_out_price"] = float64(pc.base.OutRate10) / 10000
+					}
+				} else {
+					item["price_micro"] = pc.p.PriceMicro
+					if pb := a.promoBase(pc.p, pc.base != nil); pb != nil {
+						item["base_price_micro"] = pb.PriceMicro
+					} else if pc.base != nil {
+						item["base_price_micro"] = pc.base.PriceMicro
+					}
 				}
 				// 描述跟随价格来源：双线同模（按次+按量并存）时 price_micro 取按次价，描述也必须按次，
 				// 避免"按次价 + 按量描述"混搭误导；纯按量模型（pc==nil）在下方回落按量描述
