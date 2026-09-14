@@ -216,9 +216,10 @@ func (a *App) Routes() http.Handler {
 // 1. OPTIONS 预检全局应答（204 + CORS 头）——跨域 SPA 依赖预检放行。
 // 2. 全部响应注入 CORS 头（单一来源）。
 // ⚠️ 必须走 mux.ServeHTTP 而非 mux.Handler(r)+手动调用：后者绕过 Go 1.22
-//    ServeMux 的路径参数注入（r.matches 私有字段仅 ServeMux.ServeHTTP 设置），
-//    导致所有 {id} 路径参数为空——reveal/吊销/头像等带参数端点全线 404。
-//    反代响应中的上游 CORS 头由 ReverseProxy ModifyResponse 剥除，避免重复。
+//
+//	ServeMux 的路径参数注入（r.matches 私有字段仅 ServeMux.ServeHTTP 设置），
+//	导致所有 {id} 路径参数为空——reveal/吊销/头像等带参数端点全线 404。
+//	反代响应中的上游 CORS 头由 ReverseProxy ModifyResponse 剥除，避免重复。
 func corsGate(mux *http.ServeMux) http.Handler {
 	cors := func(w http.ResponseWriter) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -288,13 +289,13 @@ func jsonOut(w http.ResponseWriter, code int, v any) {
 // errTypes 标准错误码 → 错误类型（OpenAI 兼容口径：invalid_request_error /
 // authentication_error / rate_limit_error / insufficient_quota / api_error）
 var errTypes = map[string]string{
-	"bad_request":        "invalid_request_error",
-	"model_not_found":    "invalid_request_error",
-	"not_found":          "invalid_request_error",
-	"invalid_api_key":    "authentication_error",
-	"unauthorized":       "authentication_error",
+	"bad_request":         "invalid_request_error",
+	"model_not_found":     "invalid_request_error",
+	"not_found":           "invalid_request_error",
+	"invalid_api_key":     "authentication_error",
+	"unauthorized":        "authentication_error",
 	"invalid_credentials": "authentication_error",
-	"admin_disabled":     "permission_error",
+	"admin_disabled":      "permission_error",
 	"insufficient_quota":  "insufficient_quota",
 	"rate_limit_exceeded": "rate_limit_error",
 	"internal_error":      "api_error",
@@ -417,9 +418,9 @@ func (a *App) statusModelNorm() map[string]string {
 		}
 		for j := range l.Models {
 			u := up + "/" + l.Models[j].SiteID
-			m[up+"/"+l.Models[j].SiteID] = u                   // 统一前缀原文（aqua 线下架后 tide 承接，仍需恒等映射）
+			m[up+"/"+l.Models[j].SiteID] = u                      // 统一前缀原文（aqua 线下架后 tide 承接，仍需恒等映射）
 			m[config.ModelFullName(l.ID, l.Models[j].SiteID)] = u // 线前缀名 tide/xxx → aqua/xxx
-			m[l.Models[j].SiteID] = u                          // 裸名（旧网关口径）→ aqua/xxx
+			m[l.Models[j].SiteID] = u                             // 裸名（旧网关口径）→ aqua/xxx
 		}
 	}
 	return m
@@ -594,9 +595,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		mergedLines := a.linesSnap()
 		for i := range mergedLines {
 			l := &mergedLines[i]
-			if l.Mode == "free" || l.Mode == "official" || l.AuthStyle == "codex" {
-				// official（tlk 官方中转）/ codex（GPT 账号池）线不参与统一前缀合并：
-				// 专属前缀（线 id 即前缀）单独输出（下方）
+			if l.Mode == "free" || l.Mode == "official" || l.Mode == "per_token" || l.AuthStyle == "codex" {
+				// official（tlk 官方中转）/ codex（GPT 账号池）/ per_token（按量专线 tlinks 等）线
+				// 不参与统一前缀合并：专属前缀（线 id 即前缀）单独输出（下方），避免与 aqua/ 同 site_id 混价
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
@@ -745,7 +746,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				data = append(data, map[string]any{
 					"id": full, "object": "model",
 					"created": created, "owned_by": "acu", "paid": true,
-					"type": "chat",
+					"type":   "chat",
 					"groups": []string{"official"}, "mode": "official",
 					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
@@ -777,7 +778,40 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				data = append(data, map[string]any{
 					"id": full, "object": "model",
 					"created": created, "owned_by": "acu", "paid": true,
-					"type": "chat",
+					"type":   "chat",
+					"groups": []string{l.Mode}, "mode": l.Mode,
+					"floor_micro": p.FloorMicro,
+					"in_price":    float64(p.InRate10) / 10000,
+					"cache_price": float64(p.CacheRate10) / 10000,
+					"out_price":   float64(p.OutRate10) / 10000,
+					"description": pricingDescription(m, p),
+				})
+			}
+		}
+		// per_token 按量专线（tlinks 等，codex 已单独处理）：专属前缀（线 id/xxx）单独输出——
+		// 按量三段计价，任意登录密钥可调（线前缀显式直连，不经统一分组路由）
+		for i := range mergedLines {
+			l := &mergedLines[i]
+			if l.Mode != "per_token" || l.AuthStyle == "codex" {
+				continue
+			}
+			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			for j := range l.Models {
+				m := &l.Models[j]
+				full := config.ModelFullName(l.ID, m.SiteID)
+				p := a.pricingFor(full, "normal")
+				if p == nil {
+					continue
+				}
+				if vip {
+					if vp := a.pricingFor(full, "vip"); vp != nil {
+						p = vp
+					}
+				}
+				data = append(data, map[string]any{
+					"id": full, "object": "model",
+					"created": created, "owned_by": "acu", "paid": true,
+					"type":   "chat",
 					"groups": []string{l.Mode}, "mode": l.Mode,
 					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
@@ -885,7 +919,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			data = append(data, map[string]any{
 				"id": full, "object": "model",
 				"created": created, "owned_by": "acu", "paid": false,
-				"type": "chat",
+				"type":   "chat",
 				"groups": []string{"free", "crowd"}, "mode": "crowd",
 				"pool_billed": true,
 				"price_micro": p.PriceMicro, // 拿货价单次价（众筹池扣费口径）
