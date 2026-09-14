@@ -650,7 +650,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 				}
 				lineBytes := buf[:i]
 				buf = buf[i+1:]
-				out := sanitizeStreamLine(lineBytes, &u)
+				out := sanitizeStreamLine(lineBytes, &u, "")
 				_, _ = w.Write(out)
 				_, _ = w.Write([]byte("\n"))
 				flusher.Flush()
