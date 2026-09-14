@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { readdirSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-const HOST = 'vps' // 生产前端在 VPS（107.151.245.203 /data/aqua/frontend，nginx 443 直出）
+const HOST = 'aquaus' // 生产前端在美国机（192.204.56.83 /data/aqua/frontend，nginx 443 直出；ssh 别名见 ~/.ssh/config）
 const REMOTE = '/data/aqua/frontend'
 const DIST = new URL('../dist', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
@@ -32,5 +32,5 @@ run('scp', ['-q', join(DIST, 'index.html'), `${HOST}:${REMOTE}/index.html`])
 
 // 4) 线上验证
 console.log('=== 发布完成，线上验证 ===')
-run('ssh', [HOST, `curl -s -o /dev/null -w 'local8788 %{http_code}\\n' http://127.0.0.1:8788/ && curl -s -o /dev/null -w 'public %{http_code}\\n' -m 20 https://acu.ltzy.top/`])
+run('ssh', [HOST, `curl -s -o /dev/null -w 'nginx直出 %{http_code}\\n' http://127.0.0.1/ -H 'Host: acu.ltzy.top' && curl -s -o /dev/null -w 'public %{http_code}\\n' -m 20 https://acu.ltzy.top/`])
 console.log('✅ 零停机发布成功。如需回滚：npm run rollback')
