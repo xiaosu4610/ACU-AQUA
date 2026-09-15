@@ -933,7 +933,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			} else {
 				item["price_micro"] = p.PriceMicro
 				item["floor_micro"] = p.FloorMicro
-				item["description"] = fmt.Sprintf("众筹按官方原版定价计费：%s 元/次（每次成功请求扣一次公共站点额度，个人余额分文不动）", microToYuanStr(p.PriceMicro))
+				item["description"] = fmt.Sprintf("众筹按官方原版定价计费：%s 元/次（每次成功请求扣一次公共站点额度，与生成长度无关；充 1 元 = 2 元站点额度，个人余额分文不动）", microToYuanStr(p.PriceMicro))
 			}
 			data = append(data, item)
 		}
