@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { readdirSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-const HOST = 'aquacn' // 生产前端在美国机（211.101.244.228 /data/aqua/frontend，nginx 443 直出；ssh 别名见 ~/.ssh/config）
+const HOST = 'aquacn' // 生产前端 /data/aqua/frontend，nginx 443 直出；ssh 别名见 ~/.ssh/config（服务器信息不写入仓库）
 const REMOTE = '/data/aqua/frontend'
 const DIST = new URL('../dist', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
