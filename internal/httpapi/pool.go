@@ -1,9 +1,9 @@
 package httpapi
 
 // 众筹池（acu/ 公共算力池）：与个人余额物理隔离的共享钱包。
-// 计费口径（站点额度）：充值 1:1 到账，acu/ 模型按上游拿货价从池子扣账（pricing 表 acu/% normal = 拿货价档）
-// ——拿货价即站点真实成本，故取消充值翻倍补贴；池子归零即熔断（403 crowd_pool_empty），充值即复活；
-// 每一笔充值/扣费落 pool_flows 全透明可查，榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
+// 计费口径（站点额度）：充值翻倍到账（实付×2），acu/ 模型按官方原版定价从池子扣账
+// （pricing 表 acu/% 生效档，per_token 三段价 / per_call 单次价）；每一笔充值/扣费落 pool_flows 全透明可查，
+// 榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
 
 import (
 	"database/sql"
@@ -20,7 +20,7 @@ import (
 
 const (
 	poolID       = "acu"
-	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，拿货价口径 ¥2.00 站点额度）——防单人掏空公共池
+	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，官方原价口径 ¥2.00 站点额度）——防单人掏空公共池
 )
 
 var (
@@ -114,10 +114,10 @@ func (a *App) poolConsumeOnce(uid, final, rid int64, note string) error {
 	return tx.Commit()
 }
 
-// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——实付 amount，
-// 到账 amount（1:1 注入；扣池价=上游拿货价=站点真实成本，翻倍补贴已取消）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
+// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——充值翻倍到账
+// （实付 amount → 到账 2×amount 站点额度，官方原版定价扣池配套口径）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
 func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
-	credit := amount // 1:1 注入：实付 amount → 到账 amount 站点额度
+	credit := amount * 2 // 充值翻倍：实付 amount → 到账 2×amount 站点额度（官方原价扣池配套）
 	var prev int64
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&prev); err != nil {
 		if err != sql.ErrNoRows {
@@ -140,7 +140,7 @@ func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance); err != nil {
 		return err
 	}
-	flowNote := fmt.Sprintf("充值注入 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
+	flowNote := fmt.Sprintf("充值翻倍 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
 	_, err := tx.Exec(
 		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, revival, note, ts) VALUES (?, 'charge', ?, ?, ?, ?, ?)",
 		uid, credit, balance, revival, flowNote, time.Now().Unix())
@@ -523,7 +523,7 @@ func (a *App) handleAdminPoolSeed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	credit := req.AmountMicro // 1:1 注入（与用户充值口径一致）
+	credit := req.AmountMicro // 官方注入 1:1（站长自注不享用户侧翻倍优惠）
 	if _, err := tx.Exec("UPDATE pool_wallet SET balance_micro=balance_micro+?, charged_micro=charged_micro+?, updated_ts=? WHERE id=?",
 		credit, credit, time.Now().Unix(), poolID); err != nil {
 		_ = tx.Rollback()

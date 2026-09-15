@@ -901,7 +901,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		}
 	}
 
-	// acu/ 众筹专线：独立前缀输出——按拿货价走众筹池扣费，所有分组密钥（含纯免费）可见可调；
+	// acu/ 众筹专线：独立前缀输出——按官方原版定价从众筹池扣费，所有分组密钥（含纯免费）可见可调；
 	// 放在免费模型列表语义下（groups 含 free），池子归零时条目仍透出（调用端 403 引导充值）
 	crowdLines := a.linesSnap()
 	for i := range crowdLines {
@@ -916,19 +916,26 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			if p == nil {
 				continue
 			}
-			data = append(data, map[string]any{
+			item := map[string]any{
 				"id": full, "object": "model",
 				"created": created, "owned_by": "acu", "paid": false,
 				"type":   "chat",
 				"groups": []string{"free", "crowd"}, "mode": "crowd",
 				"pool_billed": true,
-				"price_micro": p.PriceMicro, // 拿货价单次价（众筹池扣费口径）
-				"floor_micro": p.FloorMicro,
-				"in_price":    float64(p.InRate10) / 10000,
-				"cache_price": float64(p.CacheRate10) / 10000,
-				"out_price":   float64(p.OutRate10) / 10000,
-				"description": fmt.Sprintf("众筹按次计费：%s 元/次（每次成功请求扣一次公共站点额度，个人余额分文不动）", microToYuanStr(p.PriceMicro)),
-			})
+			}
+			if p.Mode == "per_token" {
+				// 官方原版定价（三段价按量扣池）：成本/拿货价绝不外泄
+				item["floor_micro"] = p.FloorMicro
+				item["in_price"] = float64(p.InRate10) / 10000
+				item["cache_price"] = float64(p.CacheRate10) / 10000
+				item["out_price"] = float64(p.OutRate10) / 10000
+				item["description"] = "众筹按官方原版定价计费：输入/缓存/输出三段价从公共站点额度扣费，充 1 元 = 2 元站点额度，个人余额分文不动"
+			} else {
+				item["price_micro"] = p.PriceMicro
+				item["floor_micro"] = p.FloorMicro
+				item["description"] = fmt.Sprintf("众筹按官方原版定价计费：%s 元/次（每次成功请求扣一次公共站点额度，个人余额分文不动）", microToYuanStr(p.PriceMicro))
+			}
+			data = append(data, item)
 		}
 	}
 	return data

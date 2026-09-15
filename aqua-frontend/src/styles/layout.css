@@ -3,11 +3,11 @@
  * ============================================================ */
 
 /* ================= 门户壳 ================= */
+/* 性能：sticky 栏去 backdrop-filter（滚动每帧重算高斯模糊 = 滚动卡顿主因），
+   以更高不透明度实底替代玻璃效果 */
 .ptop {
   position: sticky; top: 0; z-index: 50;
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
-  background: color-mix(in srgb, var(--bg0) 72%, transparent);
+  background: color-mix(in srgb, var(--bg0) 94%, transparent);
   border-bottom: 1px solid var(--line);
 }
 .ptop-in {
@@ -25,7 +25,7 @@
   display: flex; align-items: center; gap: 6px;
   padding: 7px 13px; border-radius: var(--r-sm);
   color: var(--txt2); font-size: 13.5px; font-weight: 600;
-  transition: all var(--t-fast);
+  transition: var(--tr-ui);
 }
 .pnav a.nl:hover, .pnav a.nl.on { color: var(--txt0); background: var(--bg3); }
 .pnav a.nl.on::after { content: ''; position: absolute; left: 13px; right: 13px; bottom: -1px; height: 2px; background: var(--acc-grad); border-radius: 2px; }
@@ -34,7 +34,7 @@
   background: var(--bg2-solid); border: 1px solid var(--line); border-radius: var(--r-md);
   box-shadow: var(--shadow-2); padding: 7px; z-index: 60;
   opacity: 0; transform: translateY(6px); pointer-events: none;
-  transition: all var(--t-med);
+  transition: opacity var(--t-med), transform var(--t-med);
 }
 .pnav .item:hover .drop, .pnav .item:focus-within .drop { opacity: 1; transform: none; pointer-events: auto; }
 .pnav .drop a { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--r-sm); color: var(--txt1); font-size: 13px; }
@@ -75,8 +75,7 @@
   width: 218px; flex-shrink: 0;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg1) 82%, transparent);
-  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg1) 96%, transparent);
   display: flex; flex-direction: column;
   padding: 18px 13px;
   gap: 3px;
@@ -87,7 +86,7 @@
   display: flex; align-items: center; gap: 10px;
   padding: 9px 11px; border-radius: var(--r-sm);
   color: var(--txt2); font-size: 13.5px; font-weight: 600;
-  transition: all var(--t-fast);
+  transition: var(--tr-ui);
   position: relative;
 }
 .blink svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .8; }
@@ -114,8 +113,7 @@
   display: flex; align-items: center; gap: 12px;
   padding: 0 22px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg0) 70%, transparent);
-  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--bg0) 94%, transparent);
   position: sticky; top: 0; z-index: 40;
 }
 .btop .crumb { font-size: 13px; color: var(--txt2); }
@@ -155,7 +153,7 @@
   width: 34px; height: 34px; border-radius: var(--r-sm);
   border: 1px solid var(--line); background: var(--bg2); color: var(--txt2);
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-  transition: all var(--t-fast);
+  transition: var(--tr-ui);
 }
 .theme-btn:hover { color: var(--acc); border-color: var(--acc); transform: rotate(12deg); }
 

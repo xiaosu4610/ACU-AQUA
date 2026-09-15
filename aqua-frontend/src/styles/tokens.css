@@ -21,6 +21,8 @@
   --ease: cubic-bezier(.22, .61, .21, 1);
   --t-fast: .16s var(--ease);
   --t-med: .32s var(--ease);
+  /* 统一 UI 过渡（禁用 transition:all——避免布局属性参与过渡引发重排） */
+  --tr-ui: color var(--t-fast), background-color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
 
   color-scheme: dark;
 }

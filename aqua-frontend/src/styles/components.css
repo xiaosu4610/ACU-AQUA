@@ -15,10 +15,10 @@
 .page-head .ops { display: flex; gap: 9px; flex-wrap: wrap; }
 
 /* ---- 卡片 ---- */
+/* 性能：玻璃 blur 已移除——每页十余张卡各挂一层实时高斯模糊是全站卡顿主因，
+   --bg2 本身半透明，透出的仅背景氛围层，观感差异可忽略 */
 .card {
   background: var(--bg2);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   padding: 20px;
@@ -42,7 +42,7 @@
   color: var(--txt0);
   font-size: 13.5px; font-weight: 600;
   cursor: pointer; user-select: none;
-  transition: all var(--t-fast);
+  transition: var(--tr-ui);
   white-space: nowrap;
 }
 .btn:hover { border-color: var(--acc); color: var(--acc); background: var(--acc-soft); }
@@ -124,7 +124,6 @@
 .kpi {
   background: var(--bg2); border: 1px solid var(--line); border-radius: var(--r-md);
   padding: 15px 17px;
-  backdrop-filter: blur(var(--glass-blur));
   position: relative; overflow: hidden;
 }
 .kpi::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--acc-grad); opacity: .7; }
@@ -169,7 +168,7 @@
 .chip {
   padding: 7px 15px; border-radius: 99px; cursor: pointer; user-select: none;
   border: 1px solid var(--line); background: var(--bg2); color: var(--txt2);
-  font-size: 13px; font-weight: 600; transition: all var(--t-fast);
+  font-size: 13px; font-weight: 600; transition: var(--tr-ui);
 }
 .chip:hover { color: var(--acc); border-color: var(--acc); }
 .chip.on { background: var(--acc-grad); color: var(--on-acc); border-color: transparent; box-shadow: 0 4px 16px -6px rgba(46, 230, 214, .5); }

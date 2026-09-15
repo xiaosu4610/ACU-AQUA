@@ -20,6 +20,7 @@ body {
 }
 
 /* ---- 背景氛围：极光光谱 + 科技网格（仅暗色全开，亮色轻量） ---- */
+/* 性能：极光层常驻无限动画（fixed 大面积 + transform 每帧合成）已停用，静态渐变保留氛围 */
 body::before {
   content: '';
   position: fixed; inset: -20%;
@@ -28,7 +29,6 @@ body::before {
     radial-gradient(42% 34% at 16% 12%, var(--a1, rgba(46, 230, 214, .10)), transparent 70%),
     radial-gradient(46% 38% at 84% 18%, var(--a2, rgba(124, 140, 255, .10)), transparent 70%),
     radial-gradient(50% 42% at 50% 100%, var(--a3, rgba(56, 189, 248, .08)), transparent 72%);
-  animation: aurora 42s ease-in-out infinite alternate;
   pointer-events: none;
 }
 :root[data-theme='dark'] body::before {
