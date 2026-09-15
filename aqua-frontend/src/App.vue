@@ -209,6 +209,7 @@ async function doLogout() {
       <div class="foot-in">
         <div>{{ siteName }} · ACU 工程系列开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</div>
         <div class="row" style="justify-content: center; flex-wrap: wrap;">
+          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">浙ICP备2025174704号-2</a> ·
           <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> ·
           <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a> ·
           <router-link to="/finance">财务管理中心</router-link> ·
