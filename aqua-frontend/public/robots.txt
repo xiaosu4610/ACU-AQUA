@@ -1,4 +1,4 @@
-# AQUA api — https://acu.ltzy.top
+# AQUA api — https://aqua.zhuafs.com
 User-agent: *
 Allow: /
 Disallow: /admin
@@ -7,4 +7,4 @@ Disallow: /login
 Disallow: /usage
 Disallow: /finance
 
-Sitemap: https://acu.ltzy.top/sitemap.xml
+Sitemap: https://aqua.zhuafs.com/sitemap.xml

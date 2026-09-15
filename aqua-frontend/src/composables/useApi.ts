@@ -1,6 +1,6 @@
 /* 统一 API 封装：网关地址自动探测 + 结构化错误（中文消息）+ 剪贴板 */
 export function detectGateway(): string {
-  // 前台 acu.ltzy.top 与网关 api.ltzy.top 同级约定：acu → api
+  // 前台 aqua.zhuafs.com 与网关 aqua.zhuafs.com 同级约定：acu → api
   if (location.hostname.startsWith('acu.')) return 'https://api.' + location.hostname.slice(4) + '/v1'
   // 局域网部署：前端 8788 / API 8787
   if (location.port === '8788') return `${location.protocol}//${location.hostname}:8787/v1`

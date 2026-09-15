@@ -19,7 +19,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/v1': { target: 'https://api.ltzy.top', changeOrigin: true },
+      '/v1': { target: 'https://aqua.zhuafs.com', changeOrigin: true },
     },
   },
   build: {

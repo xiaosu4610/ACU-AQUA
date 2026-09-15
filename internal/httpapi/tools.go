@@ -641,7 +641,7 @@ func (a *App) handleToolTokenCount(w http.ResponseWriter, r *http.Request) {
 // 开发者工具：短链 / Webhook 收集器
 // ---------------------------------------------------------------------------
 
-const shortLinkBase = "https://acu.ltzy.top"
+const shortLinkBase = "https://aqua.zhuafs.com"
 
 // handleToolShorten POST /v1/tools/shorten
 func (a *App) handleToolShorten(w http.ResponseWriter, r *http.Request) {
@@ -737,8 +737,8 @@ func (a *App) handleToolWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOut(w, 200, map[string]any{
 			"id":    id,
-			"url":   "https://api.ltzy.top/hook/" + id,
-			"usage": fmt.Sprintf("向 https://api.ltzy.top/hook/%s 发送任意方法的请求即被记录，用 action=list 查看（保留 24 小时）", id),
+			"url":   "https://aqua.zhuafs.com/hook/" + id,
+			"usage": fmt.Sprintf("向 https://aqua.zhuafs.com/hook/%s 发送任意方法的请求即被记录，用 action=list 查看（保留 24 小时）", id),
 		})
 	case "list":
 		id := strings.TrimSpace(strOf(v, "id"))
@@ -822,7 +822,7 @@ func (a *App) handleHookCollect(w http.ResponseWriter, r *http.Request) {
 		hookID, method, path, string(hj), body, ts)
 	jsonOut(w, 200, map[string]any{
 		"ok":   true,
-		"hint": fmt.Sprintf("请求已记录。在 https://acu.ltzy.top 工具箱查看，或 POST /v1/tools/web {\"action\":\"list\",\"id\":\"%s\"}", hookID),
+		"hint": fmt.Sprintf("请求已记录。在 https://aqua.zhuafs.com 工具箱查看，或 POST /v1/tools/web {\"action\":\"list\",\"id\":\"%s\"}", hookID),
 	})
 }
 

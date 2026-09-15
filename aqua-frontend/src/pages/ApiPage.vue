@@ -7,17 +7,17 @@ import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
 
 /* ================= 复制文本常量（与旧版逐字一致） ================= */
-const codeQuickCurl = `curl https://api.ltzy.top/v1/chat/completions \\
+const codeQuickCurl = `curl https://aqua.zhuafs.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model": "gpt-oss-20b", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`
 
-const codePaidCurl = `curl https://api.ltzy.top/v1/chat/completions \\
+const codePaidCurl = `curl https://aqua.zhuafs.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model": "aqua/deepseek-v4-flash", "messages": [{"role": "user", "content": "你好"}]}'`
 
-const codeVolCurl = `curl https://api.ltzy.top/v1/chat/completions \\
+const codeVolCurl = `curl https://aqua.zhuafs.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model": "aqua/glm-5.3-flash", "messages": [{"role": "user", "content": "你好"}], "max_tokens": 2048}'`
@@ -26,7 +26,7 @@ const codeQuickPy = `from openai import OpenAI
 
 client = OpenAI(
     api_key="sk-你的密钥",                                # 官网控制台创建
-    base_url="https://api.ltzy.top/v1",                   # 注意结尾带 /v1
+    base_url="https://aqua.zhuafs.com/v1",                   # 注意结尾带 /v1
 )
 r = client.chat.completions.create(
     model="gpt-oss-20b",                            # 去模型中心随便抄一个
@@ -38,7 +38,7 @@ const codeQuickJs = `import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: "sk-你的密钥",                                  // 官网控制台创建
-  baseURL: "https://api.ltzy.top/v1",                     // 结尾带 /v1
+  baseURL: "https://aqua.zhuafs.com/v1",                     // 结尾带 /v1
 });
 const r = await client.chat.completions.create({
   model: "gpt-oss-20b",
@@ -66,7 +66,7 @@ for chunk in stream:                      # 每次循环 = 一小段
     print(piece, end="", flush=True)     # 逐段打印，肉眼可见的打字机`
 
 const codeStreamJs = `// JS（浏览器原生 SSE，无需任何库）
-const res = await fetch("https://api.ltzy.top/v1/chat/completions", {
+const res = await fetch("https://aqua.zhuafs.com/v1/chat/completions", {
   method: "POST",
   headers: { "Content-Type": "application/json", "Authorization": "Bearer sk-你的密钥" },
   body: JSON.stringify({ model: "gpt-oss-20b", stream: true,
@@ -97,7 +97,7 @@ const codeApiModelsResp = `{"object": "list",
     "owned_by": "nvidia"
   }]}`
 
-const codeApiModelsCurl = `curl https://api.ltzy.top/v1/models
+const codeApiModelsCurl = `curl https://aqua.zhuafs.com/v1/models
   -H "Authorization: Bearer sk-****"`
 
 const codeApiChatBody = `{"model": "gpt-oss-20b",
@@ -110,21 +110,21 @@ const codeApiChatBody = `{"model": "gpt-oss-20b",
 }`
 
 const codeApiChatPy = `from openai import OpenAI
-client = OpenAI(api_key="sk-****", base_url="https://api.ltzy.top/v1")
+client = OpenAI(api_key="sk-****", base_url="https://aqua.zhuafs.com/v1")
 r = client.chat.completions.create(
   model="gpt-oss-20b",
   messages=[{"role": "user", "content": "你好"}])
 print(r.choices[0].message.content)`
 
-const codeApiMod = `curl https://api.ltzy.top/v1/moderations \\
+const codeApiMod = `curl https://aqua.zhuafs.com/v1/moderations \\
   -H "Content-Type: application/json" \\
   -d '{"model": "llama-3.1-nemoguard-8b-content-safety", "input": "待检测文本"}'`
 
-const codeApiImg = `curl https://api.ltzy.top/v1/images/generations \\
+const codeApiImg = `curl https://aqua.zhuafs.com/v1/images/generations \\
   -H "Content-Type: application/json" \\
   -d '{"model": "aqua/文生图模型ID", "prompt": "一只坐在沙发上的橘猫", "size": "1024x1024"}'`
 
-const codeApiAsset = `curl https://api.ltzy.top/assets/2026/08/abc123.png \\
+const codeApiAsset = `curl https://aqua.zhuafs.com/assets/2026/08/abc123.png \\
   -H "Authorization: Bearer sk-****"`
 
 const codeApiErr = `{"error": {
@@ -132,8 +132,8 @@ const codeApiErr = `{"error": {
   "type": "aqua_api_error",
   "code": "RATE_LIMITED",
   "status": 429,
-  "hint": "如需帮助：加入 QQ 频道 pd57362562（https://pd.qq.com/s/e4ktxw1b8）反馈，或访问官网 https://acu.ltzy.top",
-  "help": { "site": "https://acu.ltzy.top", "docs": "https://acu.ltzy.top/#/api",
+  "hint": "如需帮助：加入 QQ 频道 pd57362562（https://pd.qq.com/s/e4ktxw1b8）反馈，或访问官网 https://aqua.zhuafs.com",
+  "help": { "site": "https://aqua.zhuafs.com", "docs": "https://aqua.zhuafs.com/#/api",
             "qq_guild": "pd57362562", "qq_guild_url": "https://pd.qq.com/s/e4ktxw1b8",
             "qq_guild_invite": "公告与支持见 QQ 频道（频道号 pd57362562）；注册登录后在官网控制台创建 API 密钥",
             "qq_group": 1103667832, "qq_group2": 1006740220, "qq_group2_url": "https://qm.qq.com/q/o8QDbza2Ge" }
@@ -223,7 +223,7 @@ function jump(id: string) {
    │  ④ 端菜：JSON 回复               │  ◄─────────────  原样转交        │
    │  「你好！很高兴见到你」 ◄─────────│                                │
    ▼</pre>
-          <p class="desc">所以对接 AQUA api 你只需要记三样东西：<b>① 接口地址</b>（本站 <code>https://api.ltzy.top/v1</code>）；<b>② 密钥</b>（控制台创建）；<b>③ 模型 ID</b>（去「模型中心」抄）。往下看，三分钟跑通第一条请求。</p>
+          <p class="desc">所以对接 AQUA api 你只需要记三样东西：<b>① 接口地址</b>（本站 <code>https://aqua.zhuafs.com/v1</code>）；<b>② 密钥</b>（控制台创建）；<b>③ 模型 ID</b>（去「模型中心」抄）。往下看，三分钟跑通第一条请求。</p>
         </section>
 
         <!-- ===== 三分钟跑通 ===== -->
@@ -232,7 +232,7 @@ function jump(id: string) {
           <p class="desc">注册一个账号、创建一把密钥，不用充值、不用等审核。跟着做，三步出结果。</p>
           <h3>第 1 步：准备两样东西</h3>
           <ul class="tips">
-            <li><b>接口地址</b>：<code>https://api.ltzy.top/v1</code>（自部署的同学换成你自己的网关域名）</li>
+            <li><b>接口地址</b>：<code>https://aqua.zhuafs.com/v1</code>（自部署的同学换成你自己的网关域名）</li>
             <li><b>密钥</b>：<router-link to="/login">注册登录</router-link>后，在<router-link to="/console">个人控制台</router-link>创建——形如 <code>sk-****</code></li>
           </ul>
           <h3>第 2 步：挑一种你喜欢的方式，复制 → 运行</h3>
@@ -257,7 +257,7 @@ function jump(id: string) {
 }</pre>
           <h3>新手最容易踩的三个坑</h3>
           <ul class="tips">
-            <li><b>base_url 忘了带 <code>/v1</code></b>：写成 <code>https://api.ltzy.top</code> 会 404。SDK 的 base_url 要以 <code>/v1</code> 结尾。</li>
+            <li><b>base_url 忘了带 <code>/v1</code></b>：写成 <code>https://aqua.zhuafs.com</code> 会 404。SDK 的 base_url 要以 <code>/v1</code> 结尾。</li>
             <li><b>密钥没填或填错</b>：密钥是控制台创建的 <code>sk-****</code>，一字不差地复制；每个密钥创建时只完整展示一次，丢了就吊销重建。</li>
             <li><b>模型 ID 抄错</b>：ID 要一字不差（区分大小写），拿不准就去「模型中心 · 模型列表」复制，或调 <code>GET /v1/models</code> 查。</li>
           </ul>
@@ -503,7 +503,7 @@ function jump(id: string) {
                 <tr><td><code>/v1/tools/url-code</code></td><td>POST</td><td><code>{"text":"...","mode":"encode"}</code></td><td>URL 百分号编解码（mode: encode/decode）</td></tr>
                 <tr><td><code>/v1/tools/token-count</code></td><td>POST</td><td><code>{"text":"..."}</code></td><td>Token 近似估算（中文≈0.6字/token，英文≈4字符/token）</td></tr>
                 <tr><td><code>/v1/tools/uuid-bulk</code></td><td>POST</td><td><code>{"count":10}</code></td><td>批量 UUID v4 生成（count 1-100）</td></tr>
-                <tr><td><code>/v1/tools/shorten</code></td><td>POST</td><td><code>{"url":"https://..."}</code></td><td>短链生成：返回 <code>acu.ltzy.top/s/码</code>，90 天无访问自动清理</td></tr>
+                <tr><td><code>/v1/tools/shorten</code></td><td>POST</td><td><code>{"url":"https://..."}</code></td><td>短链生成：返回 <code>aqua.zhuafs.com/s/码</code>，90 天无访问自动清理</td></tr>
                 <tr><td><code>/v1/tools/webhook</code></td><td>POST</td><td><code>{"action":"create|list|clear","id":"..."}</code></td><td>Webhook 收集器：create 得到 /hook/{id} 地址，list 查看收到的请求，clear 清空</td></tr>
               </tbody>
             </table>
@@ -559,7 +559,7 @@ function jump(id: string) {
             <table class="table">
               <thead><tr><th>要素</th><th>填什么</th><th>备注</th></tr></thead>
               <tbody>
-                <tr><td>接口地址<br>（API Host / Base URL）</td><td><code>https://api.ltzy.top</code></td><td><b>注意：有的软件要带 <code>/v1</code>，有的不带</b>——规则见下方「翻车对照表」第 1 条</td></tr>
+                <tr><td>接口地址<br>（API Host / Base URL）</td><td><code>https://aqua.zhuafs.com</code></td><td><b>注意：有的软件要带 <code>/v1</code>，有的不带</b>——规则见下方「翻车对照表」第 1 条</td></tr>
                 <tr><td>API Key</td><td>控制台创建的 <code>sk-****</code></td><td>注册登录 → 个人控制台创建，完整密钥只展示一次</td></tr>
                 <tr><td>模型（Model）</td><td>去「模型中心」抄，如 <code>deepseek-v4-flash</code></td><td>一字不差，区分大小写</td></tr>
               </tbody>
@@ -567,10 +567,10 @@ function jump(id: string) {
           </div>
           <h3>常见客户端配置示例</h3>
           <ul class="tips">
-            <li><b>ChatGPT Next Web（NextChat）</b>：设置 → 自定义接口：API 地址填 <code>https://api.ltzy.top</code>（不带 /v1），API Key 填控制台创建的密钥，模型手动输入模型 ID。</li>
-            <li><b>LobeChat / Open WebUI</b>：语言模型 → OpenAI 兼容：API 代理地址填 <code>https://api.ltzy.top/v1</code>（带 /v1），Key 填你的密钥，添加模型 ID。</li>
-            <li><b>沉浸式翻译</b>：翻译服务 → OpenAI：APIKEY 填你的密钥，自定义模型接口地址 <code>https://api.ltzy.top/v1/chat/completions</code>（填到端点），模型填 ID。</li>
-            <li><b>IDE 编程助手（Continue / Cline 等）</b>：provider 选 openai，apiBase 填 <code>https://api.ltzy.top/v1</code>，apiKey 填你的密钥，model 填 ID。</li>
+            <li><b>ChatGPT Next Web（NextChat）</b>：设置 → 自定义接口：API 地址填 <code>https://aqua.zhuafs.com</code>（不带 /v1），API Key 填控制台创建的密钥，模型手动输入模型 ID。</li>
+            <li><b>LobeChat / Open WebUI</b>：语言模型 → OpenAI 兼容：API 代理地址填 <code>https://aqua.zhuafs.com/v1</code>（带 /v1），Key 填你的密钥，添加模型 ID。</li>
+            <li><b>沉浸式翻译</b>：翻译服务 → OpenAI：APIKEY 填你的密钥，自定义模型接口地址 <code>https://aqua.zhuafs.com/v1/chat/completions</code>（填到端点），模型填 ID。</li>
+            <li><b>IDE 编程助手（Continue / Cline 等）</b>：provider 选 openai，apiBase 填 <code>https://aqua.zhuafs.com/v1</code>，apiKey 填你的密钥，model 填 ID。</li>
             <li><b>通用口诀</b>：不确定带不带 <code>/v1</code> 时，两种都试一遍——密钥自助创建、随时重建，试错零成本。</li>
           </ul>
           <h3>对接翻车对照表（症状 → 病因 → 处方）</h3>
@@ -580,7 +580,7 @@ function jump(id: string) {
               <tbody>
                 <tr><td>404 Not Found / 401</td><td>base_url 的 <code>/v1</code> 多了或少了</td><td>OpenAI SDK 类填<b>带 <code>/v1</code></b>（它自己再拼 /chat/completions）；NextChat 等「填域名」类填<b>不带</b>。两种各试一次</td></tr>
                 <tr><td><code>MODEL_NOT_FOUND</code></td><td>模型 ID 抄错（大小写、多空格、前缀漏了）</td><td>去模型中心复制完整 ID，如 <code>aqua/deepseek-v4-flash</code> 不能只写 <code>deepseek-v4-flash</code></td></tr>
-                <tr><td>连不上 / 超时</td><td>域名写错、本地网络拦截</td><td>核对 <code>api.ltzy.top</code>；浏览器先开 <code>https://api.ltzy.top/v1/models</code> 能看到 JSON 说明网络通</td></tr>
+                <tr><td>连不上 / 超时</td><td>域名写错、本地网络拦截</td><td>核对 <code>aqua.zhuafs.com</code>；浏览器先开 <code>https://aqua.zhuafs.com/v1/models</code> 能看到 JSON 说明网络通</td></tr>
                 <tr><td><code>INVALID_JSON</code></td><td>请求体不是合法 JSON（多了逗号、用了单引号）</td><td>用 JSON 校验器检查；字符串一律双引号</td></tr>
                 <tr><td>中文显示乱码</td><td>没按 UTF-8 解码</td><td>响应头是 <code>charset=utf-8</code>；自写代码请用 UTF-8 读流</td></tr>
                 <tr><td><code>RATE_LIMITED</code> / 429</td><td>上游限流或触发站点速率保护</td><td>等 10 秒再试；程序里加退避重试；换一个模型</td></tr>

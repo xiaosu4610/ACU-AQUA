@@ -124,10 +124,10 @@ func TestShortenAndWebhookFlow(t *testing.T) {
 	// 短链：创建 → /s/{code} 302
 	_, out := doJSON(t, h, "POST", "/v1/tools/shorten", "", map[string]any{"url": "https://example.com/a?q=1"})
 	short := out["short"].(string)
-	if !strings.HasPrefix(short, "https://acu.ltzy.top/s/") {
+	if !strings.HasPrefix(short, "https://aqua.zhuafs.com/s/") {
 		t.Fatalf("shorten 错误: %v", out)
 	}
-	code := strings.TrimPrefix(short, "https://acu.ltzy.top/s/")
+	code := strings.TrimPrefix(short, "https://aqua.zhuafs.com/s/")
 	rec, _ := doJSON(t, h, "GET", "/s/"+code, "", nil)
 	if rec.Code != 302 || rec.Header().Get("Location") != "https://example.com/a?q=1" {
 		t.Fatalf("短链 302 错误: %d %v", rec.Code, rec.Header().Get("Location"))

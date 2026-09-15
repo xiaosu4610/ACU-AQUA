@@ -321,7 +321,7 @@ func TestCORSAndAdminProxy(t *testing.T) {
 	app.Cfg.Server.LegacyUpstreamURL = up.URL
 	h := app.Routes()
 
-	// 原生路由（Go 处理）必须带 CORS 头——SPA 跨域（acu.ltzy.top → api.ltzy.top）依赖
+	// 原生路由（Go 处理）必须带 CORS 头——SPA 跨域（aqua.zhuafs.com → aqua.zhuafs.com）依赖
 	req := httptest.NewRequest("GET", "/v1/meta", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -365,7 +365,7 @@ func TestOptionsPreflight(t *testing.T) {
 		"/v1/not-exist-at-all", "/", "/v1/chat/completions",
 	} {
 		req := httptest.NewRequest("OPTIONS", path, nil)
-		req.Header.Set("Origin", "https://acu.ltzy.top")
+		req.Header.Set("Origin", "https://aqua.zhuafs.com")
 		req.Header.Set("Access-Control-Request-Method", "POST")
 		req.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
 		rec := httptest.NewRecorder()

@@ -16,7 +16,7 @@
 ## 已有基建（必须复用，勿重复造）
 ```ts
 // @/composables/useApi
-GATEWAY                       // 网关基址（如 https://api.ltzy.top/v1），拼接路径用 GATEWAY + '/xxx'
+GATEWAY                       // 网关基址（如 https://aqua.zhuafs.com/v1），拼接路径用 GATEWAY + '/xxx'
 apiJson<T>(path, { method?, body?, key?, signal? })  // 自动 JSON 头/Bearer/错误中文化；失败 throw {status, code, message}
 errText(e)                    // 取中文错误消息
 copyText(text): Promise<boolean>

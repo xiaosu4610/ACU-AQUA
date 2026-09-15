@@ -65,7 +65,7 @@ const router = createRouter({
 
 /* SEO：SPA 单壳 HTML 的逐页搜索引擎适配——每次路由切换同步
  * title / description / canonical / og:* / robots(noindex)。 */
-const SITE = 'https://acu.ltzy.top'
+const SITE = 'https://aqua.zhuafs.com'
 const SEO_TITLE = 'AQUA api — 免费 AI API 网关 · ACU 工程系列'
 const SEO_DESC = 'AQUA api — ACU 工程系列开源旗舰项目。免费 AI API 网关，OpenAI 兼容，多模型聚合，注册即用。'
 
@@ -90,7 +90,7 @@ router.afterEach((to) => {
   upsertMeta('og:title', title, 'property')
   upsertMeta('og:description', desc, 'property')
   upsertMeta('og:url', to.path === '/home' ? `${SITE}/` : `${SITE}${to.path}`, 'property')
-  // canonical：/home 归一到站点根（对外分享的都是 acu.ltzy.top/）
+  // canonical：/home 归一到站点根（对外分享的都是 aqua.zhuafs.com/）
   let link = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]')
   if (!link) {
     link = document.createElement('link')
