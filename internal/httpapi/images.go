@@ -24,6 +24,11 @@ var (
 // handleImages 图片生成（按张计费：n×单价预扣 → 上游 → URL 重写站内中转 → 结算）
 func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	// 通道防刷：per-IP 滑窗限流（与 chat 同一口径，挡在打上游之前）
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")

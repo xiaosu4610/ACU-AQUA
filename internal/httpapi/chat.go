@@ -49,6 +49,11 @@ type usageJSON struct {
 //	→ 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	// 通道防刷：per-IP 滑窗限流（挡在打上游之前，保 kabuai 上游不被刷满殃及正常计费线）
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")
@@ -107,6 +112,14 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			errOut(w, sc, code, msg)
 			return
 		}
+		// 防刷：每用户在途并发上限（失败请求不占配额，无并发闸会让单用户无限打上游）
+		rel, ok := guard.crowdEnter(actx.UserID)
+		if !ok {
+			a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "crowd_busy", 429)
+			errOut(w, 429, "crowd_busy", "当前调用过于频繁（众筹模型每用户同时最多 3 路请求），请等待在途请求完成后再试")
+			return
+		}
+		defer rel()
 	}
 	if unified {
 		// 统一前缀：按密钥计费分组选线；未分组旧密钥按配置默认分组
