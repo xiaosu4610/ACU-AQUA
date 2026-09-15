@@ -360,9 +360,18 @@ func upstreamErrOut(w http.ResponseWriter, upstreamStatus int, body []byte) {
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Unix() - 3600
 	models := []map[string]any{}
+	// 口径（与 handleModelsStatus 对齐）：
+	//   - 数据源用 requests 表（全线路真实请求；model_health 仅免费线写入，会导致收费模型缺席/误显 0%）
+	//   - 分母剔除 4xx（400~499：参数错/未鉴权/限流 429/面值 402/防刷拦截等用户侧与网关侧拒绝——
+	//     模型本身健康与否与此类失败无关），仅 5xx/网络错（status_code=0）计为真实失败
+	//   - 平均时延只取成功请求（失败请求的耗时反映的是熔断/拒绝速度，不是模型速度）
 	rows, err := a.DB.Query(
-		`SELECT model, COUNT(*) calls, SUM(ok)*1.0/COUNT(*) succ, COALESCE(AVG(latency_ms),0) lat
-		 FROM model_health WHERE ts>=? GROUP BY model ORDER BY calls DESC`, since)
+		`SELECT model, COUNT(*) calls, SUM(ok)*1.0/COUNT(*) succ,
+		        COALESCE(AVG(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms END),0) lat
+		 FROM requests
+		 WHERE ts>=? AND endpoint IN ('chat','images')
+		   AND status_code NOT BETWEEN 400 AND 499
+		 GROUP BY model HAVING calls>0 ORDER BY calls DESC`, since)
 	if err == nil {
 		for rows.Next() {
 			var model string
