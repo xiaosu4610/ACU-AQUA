@@ -1334,7 +1334,7 @@ async function doUserKeyRevoke(kid: number) {
               <span class="trend">{{ poolStatus ? (poolStatus.balance_micro > 0 ? '供血中' : '已熔断 · acu/ 调用被拒') : '加载中…' }}</span>
             </div>
             <div class="kpi"><span>累计充值（净到手）</span><b>¥{{ yuan(poolStatus?.charged_micro) }}</b><span class="trend">用户充值 {{ poolStatus ? poolStatus.consumers : 0 }} 人共用消耗</span></div>
-            <div class="kpi"><span>累计消耗（五折口径）</span><b>¥{{ yuan(poolStatus?.used_micro) }}</b><span class="trend">今日消耗 ¥{{ yuan(poolStatus?.today_used_micro) }} · 上游按 3.75 折烧，沉淀 ≈25% 毛利</span></div>
+            <div class="kpi"><span>累计消耗</span><b>¥{{ yuan(poolStatus?.used_micro) }}</b><span class="trend">今日消耗 ¥{{ yuan(poolStatus?.today_used_micro) }} · 按普通渠道零售价扣池</span></div>
           </div>
           <div class="card accent">
             <b><AqIcon name="plus" :size="16" /> 官方注入（写 seed 流水，二次密码确认）</b>

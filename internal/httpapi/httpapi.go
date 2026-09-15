@@ -924,16 +924,14 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				"pool_billed": true,
 			}
 			if p.Mode == "per_token" {
-				// 官方原版定价（三段价按量扣池）：成本/拿货价绝不外泄
 				item["floor_micro"] = p.FloorMicro
 				item["in_price"] = float64(p.InRate10) / 10000
 				item["cache_price"] = float64(p.CacheRate10) / 10000
 				item["out_price"] = float64(p.OutRate10) / 10000
-				item["description"] = "众筹按官方原版定价计费：输入/缓存/输出三段价从公共站点额度扣费，充 1 元 = 2 元站点额度，个人余额分文不动"
+				item["description"] = "众筹按次计费：从公共站点额度扣费，个人余额分文不动"
 			} else {
-				item["price_micro"] = p.PriceMicro
-				item["floor_micro"] = p.FloorMicro
-				item["description"] = fmt.Sprintf("众筹按官方原版定价计费：%s 元/次（每次成功请求扣一次公共站点额度，与生成长度无关；充 1 元 = 2 元站点额度，个人余额分文不动）", microToYuanStr(p.PriceMicro))
+				// 众筹扣池价不对外下发具体数字（内部拿货价口径；制度 v5 §3.3：前端众筹卡隐藏价目，成本/拿货字样绝不外泄）
+				item["description"] = "众筹按次计费：每次成功请求扣一次公共站点额度，与生成长度无关，个人余额分文不动"
 			}
 			data = append(data, item)
 		}

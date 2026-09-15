@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* 众筹公共算力池（acu/）：资金池驾驶舱 + 众筹模型一览 + 充值翻倍注入 + 四大榜单 + 透明流水 + 个人注入记录
+/* 众筹公共算力池（acu/）：资金池驾驶舱 + 众筹模型一览 + 充值注入 + 四大榜单 + 透明流水 + 个人注入记录
  * 铁律：本页零上游调用——只打本网关 /v1/pool/* /v1/pay/* /v1/my/pool/* 接口 */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AqIcon from '@/components/AqIcon.vue'
@@ -50,8 +50,8 @@ interface MyPool {
   items?: MyPoolFlow[]
 }
 
-/* ===== 众筹模型一览（/v1/models acu/ 前缀，官方原版定价：per_token 三段价 / per_call 单次价） ===== */
-interface CrowdModel { id: string; price_micro?: number | null; in_price?: number; cache_price?: number; out_price?: number; description?: string }
+/* ===== 众筹模型一览（/v1/models acu/ 前缀，扣池价不对外展示——制度 v5 §3.3） ===== */
+interface CrowdModel { id: string; description?: string }
 const crowdModels = ref<CrowdModel[]>([])
 const crowdModelsMsg = ref('')
 async function loadCrowdModels() {
@@ -62,10 +62,6 @@ async function loadCrowdModels() {
     crowdModelsMsg.value = errText(e)
     crowdModels.value = []
   }
-}
-function microYuan(v?: number | null): string {
-  if (v == null) return '--'
-  return (v / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
 }
 
 /* ===== 池子状态与公开流水 ===== */
@@ -185,10 +181,8 @@ function yuan(v?: number | null): string {
   return (v / 1e6).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
 }
 const topupMicro = computed(() => Math.round((Number(topupAmt.value) || 0) * 1_000_000))
-const giftYuan = computed(() => yuan((Number(topupAmt.value) || 0) * 2_000_000)) // 充值翻倍：到账 = 实付 × 2
+const giftYuan = computed(() => yuan((Number(topupAmt.value) || 0) * 1_000_000)) // 1:1 注入：到账 = 实付
 const alive = computed(() => !!status.value && status.value.balance_micro > 0)
-/* 额度换算：¥1 站点额度 ≈ 50 万输入 tokens（acu/deepseek-v4-flash 官方原价 ¥2/1M 口径） */
-const estTokens = computed(() => (status.value ? Math.floor(status.value.balance_micro / 2) : 0))
 
 async function createTopup() {
   if (!isLoggedIn()) {
@@ -233,7 +227,7 @@ function startPolling() {
       )
       if (j.status === 'paid') {
         payOk.value = true
-        payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 翻倍到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
+        payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}），感谢扩充公共算力！`
         stopPolling()
         payingOrder.value = null
         payOpen.value = false
@@ -262,7 +256,7 @@ async function manualCheck() {
     )
     if (j.status === 'paid') {
       payOk.value = true
-      payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 翻倍到账 ¥${yuan(j.amount_micro * 2)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
+      payMsg.value = `充值成功：实付 ¥${yuan(j.amount_micro)} → 到账 ¥${yuan(j.amount_micro)} 站点额度（当前站点额度 ¥${yuan(j.pool_balance_micro)}）`
       stopPolling()
       payingOrder.value = null
       payOpen.value = false
@@ -316,7 +310,7 @@ onMounted(async () => {
         <div>
           <h1><AqIcon name="coin" :size="24" />众筹公共算力池</h1>
           <div class="sub">
-            acu/ 前缀众筹模型按<b>官方原版定价</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。站点额度由大家共同充值维持（<b>充 1 元 = 2 元站点额度</b>翻倍到账），见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
+            acu/ 前缀众筹模型<b>按次</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。站点额度由大家共同充值维持（<b>充值 1:1 注入站点额度</b>），见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
           </div>
         </div>
         <div class="ops">
@@ -336,7 +330,7 @@ onMounted(async () => {
         </div>
         <template v-else-if="status">
           <div class="row between wrap">
-            <span class="dim"><AqIcon name="droplet" :size="14" /> 当前站点额度<template v-if="estTokens > 0"> ≈ 可供 {{ (estTokens / 10000).toLocaleString(undefined, { maximumFractionDigits: 0 }) }} 万输入 tokens（acu/deepseek-v4-flash 官方原价口径）</template></span>
+            <span class="dim"><AqIcon name="droplet" :size="14" /> 当前站点额度（众筹模型按次从公共额度扣费）</span>
           </div>
           <div class="pool-balance grad-text">¥{{ yuan(status.balance_micro) }}</div>
         </template>
@@ -349,16 +343,16 @@ onMounted(async () => {
 
       <!-- 四 KPI -->
       <div class="kpis mt16">
-        <div class="kpi"><span>累计充值</span><b>{{ status ? '¥' + yuan(status.charged_micro) : '--' }}</b><span class="trend">充值翻倍到账站点额度</span></div>
-        <div class="kpi"><span>累计消耗</span><b>{{ status ? '¥' + yuan(status.used_micro) : '--' }}</b><span class="trend">按官方原版定价扣费</span></div>
+        <div class="kpi"><span>累计充值</span><b>{{ status ? '¥' + yuan(status.charged_micro) : '--' }}</b><span class="trend">1:1 注入站点额度</span></div>
+        <div class="kpi"><span>累计消耗</span><b>{{ status ? '¥' + yuan(status.used_micro) : '--' }}</b><span class="trend">众筹模型按次从池扣费</span></div>
         <div class="kpi"><span>今日消耗</span><b>{{ status ? '¥' + yuan(status.today_used_micro) : '--' }}</b><span class="trend">每天 0 点重置</span></div>
         <div class="kpi"><span>共同使用人数</span><b>{{ status ? status.consumers : '--' }}</b><span class="trend">无需充值即可调用</span></div>
       </div>
 
       <!-- 众筹模型一览 -->
       <div class="card mt16">
-        <b><AqIcon name="server" :size="16" /> 众筹模型一览（acu/ 前缀 · 按官方原版定价扣池）</b>
-        <p class="msg info mt12" style="margin: 0;">以下模型<b>所有分组密钥均可调用</b>（含纯免费），按下方<b>官方原版定价</b>从公共站点额度扣费（充值翻倍到账），个人余额分文不动；失败请求全额退回池子。</p>
+        <b><AqIcon name="server" :size="16" /> 众筹模型一览（acu/ 前缀 · 按次扣池）</b>
+        <p class="msg info mt12" style="margin: 0;">以下模型<b>所有分组密钥均可调用</b>（含纯免费），每次成功请求从公共站点额度扣一次（与生成长度无关），个人余额分文不动；失败请求全额退回池子。</p>
         <p v-if="crowdModelsMsg" class="msg bad mt12">{{ crowdModelsMsg }}</p>
         <div v-else-if="!crowdModels.length" class="empty" style="padding: 18px 0;">
           <b>模型列表加载中或暂未上架</b>
@@ -366,15 +360,11 @@ onMounted(async () => {
         </div>
         <div v-else class="tbl-wrap mt12">
           <table class="table">
-            <thead><tr><th>模型 ID</th><th class="num">官方原版定价</th><th>计费说明</th></tr></thead>
+            <thead><tr><th>模型 ID</th><th>计费说明</th></tr></thead>
             <tbody>
               <tr v-for="m in crowdModels" :key="m.id">
                 <td><code class="crowd-id">{{ m.id }}</code> <CopyBtn :text="m.id" size="xs" /></td>
-                <td class="num">
-                  <template v-if="m.in_price != null"><b class="grad-text">¥{{ m.in_price }}</b><span class="dim"> 输入</span> / <b class="grad-text">¥{{ m.cache_price }}</b><span class="dim"> 缓存</span> / <b class="grad-text">¥{{ m.out_price }}</b><span class="dim"> 输出 · 元/百万 tokens</span></template>
-                  <template v-else><b class="grad-text">¥{{ microYuan(m.price_micro) }}</b><span class="dim"> / 次</span></template>
-                </td>
-                <td class="dim">{{ m.description || '按官方原版定价从公共站点额度扣费，个人余额分文不动' }}</td>
+                <td class="dim">{{ m.description || '众筹按次计费：从公共站点额度扣费，个人余额分文不动' }}</td>
               </tr>
             </tbody>
           </table>
@@ -423,7 +413,7 @@ onMounted(async () => {
       <div class="card mt16">
         <b><AqIcon name="plus" :size="16" /> 充值 · 扩充站点额度</b>
         <p class="dim mt8" style="max-width: 72ch;">
-          <b>充 1 元 = 2 元站点额度（翻倍到账）</b>，注入公共池由所有人共用消耗，<b style="color: var(--warn);">不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。
+          <b>充值 1:1 注入站点额度</b>，注入公共池由所有人共用消耗，<b style="color: var(--warn);">不可退、不可转个人余额</b>；无最低充值限制。救场者（额度归零后第一笔充值）将登上荣誉墙。
         </p>
         <div class="chips mt12">
           <button v-for="a in AMTS" :key="a" type="button" class="chip" :class="{ on: topupAmt === a }" @click="topupAmt = a">¥{{ a }}</button>

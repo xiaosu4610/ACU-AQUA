@@ -121,14 +121,14 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if grp == "official" {
 			// 官方中转分组密钥：官方中转通道已并入众筹池（tlk 线下架），引导直调众筹模型
-			errOut(w, 403, "official_grp_scope", "官方中转通道已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，如 acu/glm-5.3，按官方原价扣站点额度）；按量模型请使用按量分组密钥")
+			errOut(w, 403, "official_grp_scope", "官方中转通道已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，如 acu/glm-5.3，按次扣站点额度）；按量模型请使用按量分组密钥")
 			return
 		}
 		line = a.lineForModel(grp, siteID) // 模型感知：分组默认线无此模型时在同模式其他线定位（如 gpt 线）
 		if line == nil {
 			if grp == "per_call" {
 				// 按次线下架并入众筹池（admin_lines.enabled=0）：引导众筹池/按量分组
-				errOut(w, 403, "per_call_suspended", "按次计费已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，按官方原价扣站点额度，充 1 元 = 2 元额度）；按量模型请切换「按量计费」分组（免费模型不受影响）")
+				errOut(w, 403, "per_call_suspended", "按次计费已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，按次扣站点额度）；按量模型请切换「按量计费」分组（免费模型不受影响）")
 				return
 			}
 			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")

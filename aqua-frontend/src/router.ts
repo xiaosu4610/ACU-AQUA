@@ -52,7 +52,7 @@ const router = createRouter({
       desc: 'AQUA api 是半公益项目，赞助帮助我们覆盖上游算力成本，让免费额度持续下去。' } },
     { path: '/pool', component: () => import('@/pages/PoolPage.vue'), meta: {
       title: '公共众筹池 — 半公益 AI 算力',
-      desc: 'AQUA api 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按官方原版定价从池扣费，个人余额分文不动。' } },
+      desc: 'AQUA api 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按次从池扣费，个人余额分文不动。' } },
     { path: '/login', component: () => import('@/pages/LoginPage.vue'), meta: {
       title: '登录 / 注册', noindex: true } },
     { path: '/console', component: () => import('@/pages/ConsolePage.vue'), meta: {

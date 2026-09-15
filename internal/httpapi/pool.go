@@ -1,8 +1,8 @@
 package httpapi
 
 // 众筹池（acu/ 公共算力池）：与个人余额物理隔离的共享钱包。
-// 计费口径（站点额度）：充值翻倍到账（实付×2），acu/ 模型按官方原版定价从池子扣账
-// （pricing 表 acu/% 生效档，per_token 三段价 / per_call 单次价）；每一笔充值/扣费落 pool_flows 全透明可查，
+// 计费口径（站点额度）：充值 1:1 到账，acu/ 模型按次从池子扣账（pricing 表 acu/% 生效档）；
+// 扣池价不对外展示具体数字（制度 v5 §3.3：前端众筹卡隐藏价目）；每一笔充值/扣费落 pool_flows 全透明可查，
 // 榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
 
 import (
@@ -20,7 +20,7 @@ import (
 
 const (
 	poolID       = "acu"
-	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，官方原价口径 ¥2.00 站点额度）——防单人掏空公共池
+	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，¥2.00 站点额度）——防单人掏空公共池
 )
 
 var (
@@ -72,7 +72,7 @@ func poolQuotaAdd(uid, amount int64) {
 	poolQuotaMu.Unlock()
 }
 
-// poolConsume 众筹池结算扣账（acu/ 请求响应后按实际 usage 以官方原价口径扣站点额度；final<=0 不扣）。
+// poolConsume 众筹池结算扣账（acu/ 请求响应后按实际 usage 以普通渠道零售价扣站点额度；final<=0 不扣）。
 // 允许轻微透支至 0 以下（下一笔 gate 熔断），账实相符；失败重试 2 次后落错误中心。
 func (a *App) poolConsume(uid, final, rid int64, note string) {
 	if final <= 0 {
@@ -114,10 +114,10 @@ func (a *App) poolConsumeOnce(uid, final, rid int64, note string) error {
 	return tx.Commit()
 }
 
-// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——充值翻倍到账
-// （实付 amount → 到账 2×amount 站点额度，官方原版定价扣池配套口径）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
+// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——1:1 到账
+// （实付 amount → 到账 amount 站点额度）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
 func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
-	credit := amount * 2 // 充值翻倍：实付 amount → 到账 2×amount 站点额度（官方原价扣池配套）
+	credit := amount // 1:1 注入：实付 amount → 到账 amount 站点额度
 	var prev int64
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&prev); err != nil {
 		if err != sql.ErrNoRows {
@@ -140,7 +140,7 @@ func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance); err != nil {
 		return err
 	}
-	flowNote := fmt.Sprintf("充值翻倍 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
+	flowNote := fmt.Sprintf("充值注入 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
 	_, err := tx.Exec(
 		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, revival, note, ts) VALUES (?, 'charge', ?, ?, ?, ?, ?)",
 		uid, credit, balance, revival, flowNote, time.Now().Unix())

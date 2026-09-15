@@ -91,7 +91,7 @@ func FaceCostMicro(u Usage, inCostRate10, cacheCostRate10, outCostRate10 int64) 
 // UserPriceGrp 用户在某条线上的价格组（站长逐用户逐线授权）
 func UserPriceGrp(d *sql.DB, userID int64, lineMode string) string {
 	if lineMode == "crowd" {
-		return "normal" // 众筹池（acu/）不分 VIP：全体统一五折口径，与个人价格组无关
+		return "normal" // 众筹池（acu/）不分 VIP：全体统一按普通渠道零售价扣池，与个人价格组无关
 	}
 	col := "price_grp_token"
 	if lineMode == "per_call" {
