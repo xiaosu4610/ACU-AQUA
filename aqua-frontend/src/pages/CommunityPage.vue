@@ -12,8 +12,8 @@ onMounted(() => { loadMeta() })
 
 /* /v1/meta 下发 qq_group / qq_group_url / qq_group2 / qq_group_url2，缺省回退内置兜底（与页脚同源） */
 const groups = computed<GroupInfo[]>(() => [
-  { name: 'QQ 一群', no: meta.value?.qq_group || '1103667832', url: meta.value?.qq_group_url || 'https://qm.qq.com/q/qoe6XbsVge', desc: '主群 · 人数较多，优先加入' },
-  { name: 'QQ 二群', no: meta.value?.qq_group2 || '1006740220', url: meta.value?.qq_group_url2 || 'https://qm.qq.com/q/o8QDbza2Ge', desc: '满员分流群 · 主群加不进再进二群' },
+  { name: 'QQ 一群', no: meta.value?.qq_group || '1103667832', url: meta.value?.qq_group_url || 'https://qm.qq.com/q/qoe6XbsVge', desc: '千人主群 · 容量 1000 人，技术交流主阵地，优先加入' },
+  { name: 'QQ 二群', no: meta.value?.qq_group2 || '1006740220', url: meta.value?.qq_group_url2 || 'https://qm.qq.com/q/o8QDbza2Ge', desc: '500 人大群 · 长期开放，鼓励与一群同时加入，消息不漏' },
 ])
 const channel = computed(() => ({ name: 'QQ 频道', no: 'pd57362562', url: 'https://pd.qq.com/s/e4ktxw1b8' }))
 const cards = computed<GroupInfo[]>(() => [...groups.value, { ...channel.value, desc: '官方 QQ 频道 · 话题讨论与公告聚合' }])

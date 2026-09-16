@@ -137,6 +137,7 @@ const qqNum = computed(() => meta.value?.qq_group || '1103667832')
           <AqIcon name="layout" :size="15" />进入我的控制台
         </router-link>
         <router-link class="btn" to="/api"><AqIcon name="book" :size="15" />查看 API 文档</router-link>
+        <router-link class="btn" to="/community"><AqIcon name="chat" :size="15" />加入交流群</router-link>
       </div>
 
       <!-- 实时数据条：/v1/status（30 秒轮询） -->
