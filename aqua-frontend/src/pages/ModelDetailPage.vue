@@ -583,9 +583,7 @@ const priceTag = computed(() => {
   if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
     return {
       text: '收费 · 按量 ¥' + perMYuan(r.in_price) + '/百万tokens 起' + (isTide.value ? '' : (r.subsidized ? ' · 限时补贴' : '')),
-      title: isTide.value
-        ? '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明'
-        : '按量计费：输入/缓存命中/输出分段计价，单次设最低消费，详见下方计费说明',
+      title: '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明',
     }
   }
   if (r.price_micro || r.per_image != null) {
@@ -604,7 +602,7 @@ const priceRows = computed<[string, string][] | null>(() => {
   if (!r?.paid) return null
   if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
     return [
-      ['计费方式', isTide.value ? '按量三段价 · 无保底，用多少付多少' : '按量三段价 · 单次最低消费 ¥' + microYuan(r.floor_micro)],
+      ['计费方式', '按量三段价 · 用多少付多少'],
       ['输入', '¥' + perMYuan(r.in_price) + ' / 百万 tokens'],
       ['缓存命中', '¥' + perMYuan(r.cache_price) + ' / 百万 tokens'],
       ['输出', '¥' + perMYuan(r.out_price) + ' / 百万 tokens'],

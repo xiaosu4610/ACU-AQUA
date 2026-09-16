@@ -204,6 +204,9 @@ func (a *App) Routes() http.Handler {
 	// 系统更新（gitee 发行版源；config [update] enabled=true 才开放）
 	mux.HandleFunc("GET /v1/admin/update/check", a.handleAdminUpdateCheck)
 	mux.HandleFunc("POST /v1/admin/update/apply", a.handleAdminUpdateApply)
+	// 全员邮件通知（计费变更公告等站点级通知；逐人单独发信 + 限速 + 进度查询）
+	mux.HandleFunc("POST /v1/admin/notify/mail", a.handleAdminNotifyMail)
+	mux.HandleFunc("GET /v1/admin/notify/mail/status", a.handleAdminNotifyMailStatus)
 	mux.HandleFunc("GET /v1/admin/settings", a.handleAdminSettingsGet)
 	mux.HandleFunc("POST /v1/admin/settings", a.handleAdminSettingsSave)
 
@@ -628,7 +631,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					if _, ok := merged[m.SiteID]; !ok {
 						order = append(order, m.SiteID)
 					}
-					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p, nil})
+					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{p.Mode, m, p, nil})
 					continue
 				}
 				if _, ok := merged[m.SiteID]; !ok {
@@ -637,11 +640,11 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				if vip {
 					if vp := a.pricingFor(full, "vip"); vp != nil {
 						// VIP 拿货价为主 + 附原价（normal），前端底部展示对比
-						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, vp, p})
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{vp.Mode, m, vp, p})
 						continue
 					}
 				}
-				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{l.Mode, m, p, nil})
+				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{p.Mode, m, p, nil})
 			}
 		}
 		for _, site := range order {
@@ -665,7 +668,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			item["groups"] = modes
 			item["mode"] = modes[0] // 兼容旧读法：首个可用计费模式
 			if pt != nil {
-				item["floor_micro"] = pt.p.FloorMicro
+				// floor_micro 不对外下发（单次保底属计费兜底机制，前端不得展示——20260916 站长指示）
 				item["in_price"] = float64(pt.p.InRate10) / 10000
 				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
 				item["out_price"] = float64(pt.p.OutRate10) / 10000
@@ -760,7 +763,6 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"created": created, "owned_by": "acu", "paid": true,
 					"type":   "chat",
 					"groups": []string{"official"}, "mode": "official",
-					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
 					"cache_price": float64(p.CacheRate10) / 10000,
 					"out_price":   float64(p.OutRate10) / 10000,
@@ -792,7 +794,6 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"created": created, "owned_by": "acu", "paid": true,
 					"type":   "chat",
 					"groups": []string{l.Mode}, "mode": l.Mode,
-					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
 					"cache_price": float64(p.CacheRate10) / 10000,
 					"out_price":   float64(p.OutRate10) / 10000,
@@ -825,7 +826,6 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"created": created, "owned_by": "acu", "paid": true,
 					"type":   "chat",
 					"groups": []string{l.Mode}, "mode": l.Mode,
-					"floor_micro": p.FloorMicro,
 					"in_price":    float64(p.InRate10) / 10000,
 					"cache_price": float64(p.CacheRate10) / 10000,
 					"out_price":   float64(p.OutRate10) / 10000,
@@ -862,7 +862,6 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"description": pricingDescription(m, p),
 				}
 				if p.Mode == "per_token" {
-					item["floor_micro"] = p.FloorMicro
 					item["in_price"] = float64(p.InRate10) / 10000
 					item["cache_price"] = float64(p.CacheRate10) / 10000
 					item["out_price"] = float64(p.OutRate10) / 10000
@@ -936,14 +935,13 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				"pool_billed": true,
 			}
 			if p.Mode == "per_token" {
-				item["floor_micro"] = p.FloorMicro
 				item["in_price"] = float64(p.InRate10) / 10000
 				item["cache_price"] = float64(p.CacheRate10) / 10000
 				item["out_price"] = float64(p.OutRate10) / 10000
-				item["description"] = "众筹按次计费：从公共站点额度扣费，个人余额分文不动"
+				item["description"] = "众筹按量计费：按 tokens 从公共站点额度扣费（缓存命中价更低），个人余额分文不动"
 			} else {
 				// 众筹扣池价不对外下发具体数字（内部拿货价口径；制度 v5 §3.3：前端众筹卡隐藏价目，成本/拿货字样绝不外泄）
-				item["description"] = "众筹按次计费：每次成功请求扣一次公共站点额度，与生成长度无关，个人余额分文不动"
+				item["description"] = "众筹按量计费：每次成功请求按实际 tokens 从公共站点额度扣费，个人余额分文不动"
 			}
 			data = append(data, item)
 		}
@@ -955,9 +953,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 func pricingDescription(m *config.Model, p *billing.PricingInfo) string {
 	if p.Mode == "per_token" {
 		return fmt.Sprintf(
-			"按量计费：输入 %s / 缓存命中 %s / 输出 %s 元每百万 tokens（先付后用：余额充足方可调用，可在请求中调小 max_tokens 降低单次预扣，单次保底 %s 元）",
+			"按量计费：输入 %s / 缓存命中 %s / 输出 %s 元每百万 tokens（先付后用：余额充足方可调用，可在请求中调小 max_tokens 降低单次预扣）",
 			trimPrice(float64(p.InRate10)/10000), trimPrice(float64(p.CacheRate10)/10000),
-			trimPrice(float64(p.OutRate10)/10000), microToYuanStr(p.FloorMicro))
+			trimPrice(float64(p.OutRate10)/10000))
 	}
 	if m.Image {
 		return fmt.Sprintf("%s 元/张，按张计费（先付后用，n 参数控制张数）", microToYuanStr(p.PriceMicro))

@@ -768,7 +768,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                   <div><i>缓存命中</i><b class="num">¥{{ perMYuan(m.cachePrice) }}</b><s v-if="m.baseCachePrice != null" title="官方原价">¥{{ perMYuan(m.baseCachePrice) }}</s><em>/M</em></div>
                   <div><i>输出</i><span class="tag grad num">¥{{ perMYuan(m.outPrice) }}</span><s v-if="m.baseOutPrice != null" title="官方原价">¥{{ perMYuan(m.baseOutPrice) }}</s><em>/M</em></div>
                 </div>
-                <div class="dim mt8" style="font-size: 11.5px;">先付后用 · 用多少付多少 · 缓存命中更省<span v-if="m.floor"> · 单次最低消费 ¥{{ microYuan(m.floor) }}</span><span v-if="m.id === 'tlinks/deepseek-flash'"> · DeepSeek V4.1 Flash 同源极速通道</span></div>
+                <div class="dim mt8" style="font-size: 11.5px;">先付后用 · 用多少付多少 · 缓存命中更省</div>
               </template>
               <div class="pmetrics mt8">
                 <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
