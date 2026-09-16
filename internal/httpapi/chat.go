@@ -358,6 +358,10 @@ func (a *App) fakeStreamOn() bool { return a.settingsGet("fake_stream") == "1" }
 // fakeStreamFor 模型级伪流式判定（20260917 站长指令：仅 V4 Flash / V4 Pro 上游非流式，
 // 其余模型流式正常透传）。总开关 fake_stream=1 不变；fake_stream_models=逗号分隔裸名白名单，
 // 空 = 全部模型（兼容 20260916 全站行为）。匹配按去线前缀（aqua/ acu/ 等）后的裸名精确比对。
+// ⚠️ 20260917 复盘：kabuai 上游对非流式请求【不命中前缀缓存】——伪流式开启期间
+// v4-flash/v4-pro 的 cached_tokens/prompt 从 83~92% 崩到 0~3%（长上下文用户每轮全量重算，
+// first 恶化到 8.3s+/90s+），已关闭总开关（fake_stream=0）恢复全部真流式透传。
+// 机制保留但再次开启前务必先用 cached_tokens 数据验证该模型在非流式下仍有缓存命中。
 func (a *App) fakeStreamFor(siteModel string) bool {
 	if !a.fakeStreamOn() {
 		return false
