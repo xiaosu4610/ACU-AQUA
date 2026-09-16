@@ -107,7 +107,11 @@ func (a *App) freeForwardPath(w http.ResponseWriter, r *http.Request, body []byt
 	}
 
 	start := time.Now()
-	client := a.clientFor(line.ID)
+	client, cerr := a.clientFor(line.ID)
+	if cerr != nil {
+		errOut(w, 503, "service_unavailable", "线路配置刚刚更新，请稍后重试")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	resp, _, err := client.Do(ctx, body, false, path)

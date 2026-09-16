@@ -195,12 +195,18 @@ type Client struct {
 // 连接/TLS 快速失败：上游 CDN 拦截（TLS 握手挂死）场景 10 秒内报错进入重试/冷却，
 // 而非拖满整段请求超时
 func NewClient(l *config.Line) *Client {
+	if l == nil {
+		l = &config.Line{} // 防御：热重载竞态下线被删时调用方兜底，绝不 panic
+	}
 	tr := &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 10 * time.Second,
-		MaxIdleConns:        64,
-		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     90 * time.Second,
+		// 上游已建连但迟迟不回响应头（黑洞/排队挂死）：120s 判死进重试/冷却。
+		// 与 Client 整体超时解耦——流式长响应的 body 读取不受此限制
+		ResponseHeaderTimeout: 120 * time.Second,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
 	}
 	// 线路级出站代理：gpt 线经本机 sing-box 出美国口（OpenAI 地域风控），其余线直连
 	if l.Proxy != "" {
@@ -212,7 +218,9 @@ func NewClient(l *config.Line) *Client {
 		Line: l,
 		Pool: NewKeyPool(l.Keys, l.KeyFaceMicro, 300),
 		HTTP: &http.Client{
-			Timeout:   300 * time.Second,
+			// 不设整体 Timeout：Client.Timeout 含响应体读取，长文流式生成会在
+			// 300s 被硬切断（上游侧正常完成计费，本站表现为 stream_incomplete）。
+			// 总时长由各请求 ctx（非流式 300s / 流式 600s）+ 上述分阶段超时兜底
 			Transport: tr,
 		},
 	}

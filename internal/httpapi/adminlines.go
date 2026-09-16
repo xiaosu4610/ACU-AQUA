@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"acu-aqua/gateway/internal/config"
+	"acu-aqua/gateway/internal/upstream"
 )
 
 // ———————— 存储层：DB ↔ config.Line ————————
@@ -173,7 +174,9 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	return out, nil
 }
 
-// reloadLines 热重载：DB → 替换 Lines + 清空客户端池（下次请求按新配置重建）。
+// reloadLines 热重载：DB → 替换 Lines + 清空客户端池 + 清空 codex 令牌缓存
+// （下次请求按新配置重建）。不清 codexToks 的后果：管理台更换账号 RT 后旧账号
+// 的 AT 残留至过期（最长 ~55min），新钥完全不生效。
 // 锁序固定 clientsMu → linesMu（与 clientFor 一致），全程原子替换，读快照安全。
 func (a *App) reloadLines() error {
 	ls, err := linesFromDB(a.DB.DB)
@@ -186,6 +189,7 @@ func (a *App) reloadLines() error {
 	a.clients = nil
 	a.linesMu.Unlock()
 	a.clientsMu.Unlock()
+	upstream.ResetCodexTokens()
 	return nil
 }
 

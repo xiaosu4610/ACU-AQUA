@@ -31,16 +31,35 @@ const codexUserAgent = "codex_cli_rs/0.55.0"
 
 // codexTok 一个账号的令牌态
 type codexTok struct {
-	at  string    // access_token
-	exp time.Time // 过期时刻（提前 5 分钟判过期）
-	rt  string    // 当前 refresh_token（上游轮换后更新并持久化）
+	at     string    // access_token
+	exp    time.Time // 过期时刻（提前 5 分钟判过期）
+	rt     string    // 当前 refresh_token（上游轮换后更新并持久化）
+	origin string    // 令牌链锚点 = 取号时的 DB RT（k.Key）；管理台换钥后缓存即刻失效
 }
 
 // codexToks 全局令牌表：key = lineID + "/" + keyIdx
 var codexToks sync.Map
 
+// ResetCodexTokens 清空全部 codex 令牌缓存（线路热重载时调用）。
+// 不清的后果：管理台更换账号 RT 后，旧账号的 AT 残留至过期（最长 ~55min），
+// 期间新钥完全不生效——上游（旧账号）零异常持续被调，新账号零用量。
+func ResetCodexTokens() {
+	codexToks.Range(func(k, v any) bool {
+		codexToks.Delete(k)
+		return true
+	})
+}
+
 // codexRTMu 新 refresh_token 持久化文件锁
 var codexRTMu sync.Mutex
+
+// codexSavedEntry 持久化文件条目（v2）：rt=轮换后最新 RT，origin=令牌链锚点（产生该链的 DB RT）。
+// origin 用于识别「同链轮换」与「管理台换钥」：仅同链的 saved RT 才优先于 DB RT 重试，
+// 换钥后旧链残留 RT 不再劫持新钥。
+type codexSavedEntry struct {
+	RT     string `json:"rt"`
+	Origin string `json:"origin,omitempty"`
+}
 
 // codexRTFile 轮换后的 refresh_token 持久化文件（DB 里的原 RT 保留不动，
 // 文件里存最新 RT，重启后优先生效；env AQUA_CODEX_RT_FILE 可覆盖）
@@ -54,29 +73,36 @@ func codexRTFile() string {
 	return "codex-rt.json"
 }
 
-// codexLoadSavedRT 读取轮换后的新 RT（无则空串）
-func codexLoadSavedRT(lineID string, idx int) string {
+// codexLoadSavedRT 读取轮换后的新 RT（无则空串）。兼容 v1 旧格式（纯字符串 map，origin 视为未知）。
+func codexLoadSavedRT(lineID string, idx int) (rt, origin string) {
 	b, err := os.ReadFile(codexRTFile())
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	var m map[string]string
-	if json.Unmarshal(b, &m) != nil {
-		return ""
+	key := fmt.Sprintf("%s/%d", lineID, idx)
+	var v2 map[string]codexSavedEntry
+	if json.Unmarshal(b, &v2) == nil {
+		if e, ok := v2[key]; ok && e.RT != "" {
+			return e.RT, e.Origin
+		}
 	}
-	return m[fmt.Sprintf("%s/%d", lineID, idx)]
+	var v1 map[string]string // 旧格式回退
+	if json.Unmarshal(b, &v1) == nil {
+		return v1[key], ""
+	}
+	return "", ""
 }
 
-// codexSaveRT 轮换后的 RT 覆盖持久化
-func codexSaveRT(lineID string, idx int, rt string) {
+// codexSaveRT 轮换后的 RT 覆盖持久化（v2 格式：携带令牌链锚点）
+func codexSaveRT(lineID string, idx int, rt, origin string) {
 	codexRTMu.Lock()
 	defer codexRTMu.Unlock()
 	p := codexRTFile()
-	m := map[string]string{}
+	m := map[string]codexSavedEntry{}
 	if b, err := os.ReadFile(p); err == nil {
-		_ = json.Unmarshal(b, &m)
+		_ = json.Unmarshal(b, &m) // v1 旧条目解析失败即丢弃，首次成功刷新后整体迁移 v2
 	}
-	m[fmt.Sprintf("%s/%d", lineID, idx)] = rt
+	m[fmt.Sprintf("%s/%d", lineID, idx)] = codexSavedEntry{RT: rt, Origin: origin}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err == nil {
 		if b, err := json.MarshalIndent(m, "", "  "); err == nil {
 			_ = os.WriteFile(p, b, 0o600)
@@ -130,30 +156,38 @@ func refreshCodexToken(ctx context.Context, hc *http.Client, rt string) (*codexT
 	return &codexTok{at: out.AccessToken, exp: time.Now().Add(time.Duration(expSec-300) * time.Second), rt: newRT}, nil
 }
 
-// getAT 取账号 access_token：内存缓存 → 持久化新 RT → 原始 RT，逐级回退
+// getAT 取账号 access_token：内存缓存 → 持久化新 RT（仅同链轮换）→ 原始 RT，逐级回退。
+// 缓存/持久化 RT 均携带令牌链锚点（origin = 取号时的 DB RT）：管理台换钥（k.Key 变化）后
+// 旧链缓存即刻作废，绝不再用旧账号的 AT/RT 冒充新钥——否则新账号零用量、旧账号持续被调。
 func (c *Client) getAT(ctx context.Context, k *KeyState) (string, error) {
 	cacheKey := fmt.Sprintf("%s/%d", c.Line.ID, k.Idx)
 	if v, ok := codexToks.Load(cacheKey); ok {
 		t := v.(*codexTok)
-		if time.Now().Before(t.exp) {
+		if t.origin == k.Key && time.Now().Before(t.exp) {
 			return t.at, nil
 		}
+		codexToks.Delete(cacheKey) // 钥已更换（管理台换号）或已过期：作废
 	}
-	rt := k.Key
-	if saved := codexLoadSavedRT(c.Line.ID, k.Idx); saved != "" && saved != k.Key {
+	saved, savedOrigin := codexLoadSavedRT(c.Line.ID, k.Idx)
+	if saved != "" && saved != k.Key && (savedOrigin == k.Key || savedOrigin == "") {
+		// 仅「同链轮换 RT」（saved 链起始于当前 DB 钥）或 v1 旧格式（origin 未知，兼容存量）
+		// 才优先于 DB 钥刷新：上游逐次轮换后旧 RT 可能已失效，避免重放。
+		// 换钥后旧链残留 RT（savedOrigin ≠ k.Key）直接跳过，新钥立即生效。
 		if t, err := refreshCodexToken(ctx, c.codexAuthClient(), saved); err == nil {
+			t.origin = k.Key
 			codexToks.Store(cacheKey, t)
-			codexSaveRT(c.Line.ID, k.Idx, t.rt)
+			codexSaveRT(c.Line.ID, k.Idx, t.rt, k.Key)
 			return t.at, nil
 		}
 		log.Printf("[codex] line=%s key=%d 持久化 RT 失效，回退原始 RT", c.Line.ID, k.Idx)
 	}
-	t, err := refreshCodexToken(ctx, c.codexAuthClient(), rt)
+	t, err := refreshCodexToken(ctx, c.codexAuthClient(), k.Key)
 	if err != nil {
 		return "", err
 	}
+	t.origin = k.Key
 	codexToks.Store(cacheKey, t)
-	codexSaveRT(c.Line.ID, k.Idx, t.rt)
+	codexSaveRT(c.Line.ID, k.Idx, t.rt, k.Key)
 	return t.at, nil
 }
 

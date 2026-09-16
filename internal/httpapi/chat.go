@@ -41,6 +41,10 @@ type usageJSON struct {
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
+	// 缓存命中兼容字段：部分上游不用 OpenAI 标准结构（缺失时缓存 token 按全价输入
+	// 计费——用户被超收）。DeepSeek 旧口径 / Anthropic 网关透传口径
+	PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens"`
+	CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
 }
 
 // handleChat /v1/chat/completions 主入口：
@@ -54,7 +58,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		guardReject(w)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")
 		return
@@ -211,8 +215,21 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 上游转发
-	client := a.clientFor(line.ID)
-	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
+	// 预算：非流式 300s；流式 600s（长文生成合理时长——旧口径 300s 会把仍在正常
+	// 生成的长响应硬切断，上游侧正常完成计费，本站却表现为 stream_incomplete）
+	client, cerr := a.clientFor(line.ID)
+	if cerr != nil {
+		// 线刚被热重载停用/删除：预扣全额退回，503 快速失败（旧实现此处 panic）
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "line_removed")
+		a.failRequest(rid, "line_removed", 503)
+		errOut(w, 503, "service_unavailable", "线路配置刚刚更新，请稍后重试")
+		return
+	}
+	budget := 300 * time.Second
+	if req.Stream {
+		budget = 600 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
@@ -502,7 +519,8 @@ func sanitizeStreamLine(line []byte, u *billing.Usage) []byte {
 	return []byte("data: " + string(out))
 }
 
-// usageFromJSON JSON usage → billing.Usage（缓存命中兼容两种字段）
+// usageFromJSON JSON usage → billing.Usage（缓存命中兼容三种字段：OpenAI 标准结构 /
+// DeepSeek 旧口径 prompt_cache_hit_tokens / Anthropic 口径 cache_read_input_tokens）
 func usageFromJSON(j *usageJSON) billing.Usage {
 	if j == nil {
 		return billing.Usage{}
@@ -510,6 +528,15 @@ func usageFromJSON(j *usageJSON) billing.Usage {
 	cached := int64(0)
 	if j.PromptTokensDetails != nil {
 		cached = j.PromptTokensDetails.CachedTokens
+	}
+	if cached == 0 {
+		cached = j.PromptCacheHitTokens
+	}
+	if cached == 0 {
+		cached = j.CacheReadInputTokens
+	}
+	if cached > j.PromptTokens {
+		cached = j.PromptTokens // 防御：缓存命中不可能超过 prompt 总量
 	}
 	return billing.Usage{PromptTokens: j.PromptTokens, CompletionTokens: j.CompletionTokens, CachedTokens: cached}
 }
@@ -647,20 +674,25 @@ func boolToInt(b bool) int64 {
 	return 0
 }
 
-// clientFor 线客户端缓存（每线一个 KeyPool）
-func (a *App) clientFor(lineID string) *upstream.Client {
+// clientFor 线客户端缓存（每线一个 KeyPool）。
+// 线已被热重载停用/删除（调用方持有旧快照）时返回错误：调用方应 503 快速失败——
+// 旧实现拿 nil 线构造客户端会直接 panic（请求连接被重置且上游无任何日志）。
+func (a *App) clientFor(lineID string) (*upstream.Client, error) {
 	a.clientsMu.Lock()
 	defer a.clientsMu.Unlock()
 	if a.clients == nil {
 		a.clients = map[string]*upstream.Client{}
 	}
 	if c, ok := a.clients[lineID]; ok {
-		return c
+		return c, nil
 	}
 	l := a.lineByID(lineID)
+	if l == nil {
+		return nil, fmt.Errorf("line_removed(%s)", lineID)
+	}
 	c := upstream.NewClient(l)
 	a.clients[lineID] = c
-	return c
+	return c, nil
 }
 
 // dbErr 检查（占位：统一错误检查）

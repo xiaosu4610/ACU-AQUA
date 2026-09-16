@@ -153,9 +153,10 @@ func TestCodexEndToEnd(t *testing.T) {
 	defer upSrv.Close()
 
 	// 换票路径依赖 auth.openai.com 常量端点，单测里直接预置 AT 缓存绕过；
+	// 缓存校验按令牌链锚点（origin = DB 钥）匹配，预置时须带上真实钥
 	// RT 刷新逻辑由服务器端真实凭据验证
 	t.Setenv("AQUA_CODEX_RT_FILE", t.TempDir()+"/rt.json")
-	codexToks.Store("gpt-test/0", &codexTok{at: "AT_TEST", exp: time.Now().Add(time.Hour), rt: "rt.1.x"})
+	codexToks.Store("gpt-test/0", &codexTok{at: "AT_TEST", exp: time.Now().Add(time.Hour), rt: "rt.1.x", origin: "rt.1.AAA"})
 
 	l := &config.Line{
 		ID: "gpt-test", AuthStyle: "codex",

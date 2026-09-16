@@ -535,7 +535,11 @@ func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line 
 	if err != nil {
 		return nil, func() {}, "network_error"
 	}
-	client := a.clientFor(line.ID)
+	client, cerr := a.clientFor(line.ID)
+	if cerr != nil {
+		logFreeErr(line.ID, upID, cerr)
+		return nil, func() {}, "network_error"
+	}
 	// 非流式 45s：上游黑洞（请求被静默挂起）时让用户尽快拿到明确报错，而非干等
 	// 流式 600s：长生成合理，黑洞场景由 retired 摘除兜底
 	timeout := 45 * time.Second

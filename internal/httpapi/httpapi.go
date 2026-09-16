@@ -347,6 +347,9 @@ func upstreamErrOut(w http.ResponseWriter, upstreamStatus int, body []byte) {
 		errOut(w, 404, "model_not_found", "上游不存在该模型，请联系站长核对模型映射")
 	case upstreamStatus == 401 || upstreamStatus == 403:
 		errOut(w, 502, "upstream_error", "上游鉴权异常，已通知站长处理")
+	case upstreamStatus == 413:
+		// 上游对请求体大小有硬限制（超长上下文/图片场景）：给用户明确指引而非笼统报错
+		errOut(w, 413, "context_too_long", "请求内容过长：请缩短对话上下文或减小附件大小后重试")
 	case upstreamStatus == 429:
 		errOut(w, 429, "rate_limit_exceeded", "上游繁忙，请稍后重试")
 	case upstreamStatus >= 500:

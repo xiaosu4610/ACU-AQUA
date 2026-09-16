@@ -29,7 +29,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		guardReject(w)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		errOut(w, 400, "bad_request", "请求体读取失败")
 		return
@@ -125,7 +125,14 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
 	}
-	client := a.clientFor(line.ID)
+	client, cerr := a.clientFor(line.ID)
+	if cerr != nil {
+		// 线刚被热重载停用/删除：预扣全额退回（旧实现此处 panic）
+		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "line_removed")
+		a.failRequest(rid, "line_removed", 503)
+		errOut(w, 503, "service_unavailable", "线路配置刚刚更新，请稍后重试")
+		return
+	}
 	ctx, cancel := contextWithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
 	resp, key, err := client.DoKey(ctx, upBody, false, "/images/generations", model.KeyIdx)
@@ -216,7 +223,11 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
 	}
-	client := a.clientFor(fline.ID)
+	client, cerr := a.clientFor(fline.ID)
+	if cerr != nil {
+		errOut(w, 503, "service_unavailable", "线路配置刚刚更新，请稍后重试")
+		return
+	}
 	ctx, cancel := contextWithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
 	resp, _, err := client.Do(ctx, upBody, false, "/images/generations")
