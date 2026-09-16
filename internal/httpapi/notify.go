@@ -33,7 +33,7 @@ func (a *App) handleAdminNotifyMail(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return
 	}
-	if a.Mail == nil {
+	if a.Mail == nil && (a.MailPool == nil || a.MailPool.activeCount(a.DB.DB) == 0) {
 		errAdmin(w, 503, "mail_unconfigured", "SMTP 未配置，无法发送邮件")
 		return
 	}
@@ -87,7 +87,7 @@ func (a *App) handleAdminNotifyMail(w http.ResponseWriter, r *http.Request) {
 
 	throttle := req.ThrottleMs
 	if throttle <= 0 {
-		throttle = 50 // 默认 50ms/封：阿里云 DM 友好 + 1333 人约 8~12 分钟
+		throttle = 1500 // 默认 1.5s/封：微软池单号 60s 冷却 × 轮询的全局安全吞吐（1337 封约 33 分钟）
 	}
 
 	notifyJob.mu.Lock()
@@ -101,11 +101,15 @@ func (a *App) handleAdminNotifyMail(w http.ResponseWriter, r *http.Request) {
 
 	body := req.Body
 	subject := req.Subject
-	sender := a.Mail
+	// 微软池轮询摊量（站长定稿）：群发全走 SendAny（选择器 last_ok_ts 最早优先=轮询；每号 60s 冷却+日限 40 天然摊量）
+	sendOne := func(to, subj, body string) error {
+		_, _, err := a.SendAny(to, subj, body)
+		return err
+	}
 	go func() {
 		defer notifyJob.running.Store(false)
 		for i, to := range rcpts {
-			if err := sender.Send(to, subject, body); err != nil {
+			if err := sendOne(to, subject, body); err != nil {
 				notifyJob.mu.Lock()
 				notifyJob.failed++
 				if len(notifyJob.errs) < 20 {

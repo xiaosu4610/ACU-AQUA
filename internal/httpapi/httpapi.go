@@ -162,6 +162,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/lines", a.handleAdminLines)
 	mux.HandleFunc("POST /v1/admin/nvidia/sync", a.handleAdminNvidiaSync) // NVIDIA 动态目录手动同步
 	mux.HandleFunc("POST /v1/admin/lines/reload", a.handleAdminLinesReload)
+	// —— 微软邮箱发信池（站长定稿 20260916：全域主线路）——
+	mux.HandleFunc("POST /v1/admin/mailpool/import", a.handleAdminMailpoolImport)
+	mux.HandleFunc("GET /v1/admin/mailpool", a.handleAdminMailpoolList)
+	mux.HandleFunc("POST /v1/admin/mailpool/probe", a.handleAdminMailpoolProbe)
+	mux.HandleFunc("POST /v1/admin/mailpool/test", a.handleAdminMailpoolTest)
 	mux.HandleFunc("POST /v1/admin/lines", a.handleAdminLineCreate)
 	mux.HandleFunc("POST /v1/admin/lines/{line}", a.handleAdminLineUpdate)
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}", a.handleAdminLineDelete)

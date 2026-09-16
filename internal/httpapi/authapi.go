@@ -126,7 +126,7 @@ func (a *App) sendCodeFor(w http.ResponseWriter, r *http.Request, purpose string
 		jsonOut(w, 200, map[string]any{"ok": true, "message": "重置验证码已发送"})
 		return
 	}
-	if a.Mail == nil {
+	if a.Mail == nil && (a.MailPool == nil || a.MailPool.activeCount(a.DB.DB) == 0) {
 		errOut(w, 500, "service_unavailable", "邮件服务未配置，请联系站长")
 		return
 	}
@@ -142,11 +142,16 @@ func (a *App) sendCodeFor(w http.ResponseWriter, r *http.Request, purpose string
 		subject = "AQUA 密码找回验证码"
 		body = "您正在重置密码，验证码：" + code + "，10 分钟内有效。如非本人操作请立即检查账号安全。"
 	}
-	if err := a.Mail.Send(email, subject, body); err != nil {
+	// 统一发信入口：微软池主线路（连败→阿里云试探→回池；单封失败阿里云兜底；全灭阿里云接管）
+	channel, sender, err := a.SendAny(email, subject, body)
+	if err != nil {
 		log.Printf("[mail] 发送失败 to=%s err=%v", email, err)
 		errOut(w, 500, "internal_error", "验证码发送失败，请稍后重试")
 		return
 	}
+	_, _ = a.DB.Exec("UPDATE email_codes SET sender=?, channel=? WHERE email=? AND purpose=?",
+		sender, channel, email, purpose)
+	log.Printf("[mail] 验证码已发 to=%s channel=%s sender=%s purpose=%s", email, channel, sender, purpose)
 	jsonOut(w, 200, map[string]any{"ok": true, "message": "验证码已发送"})
 }
 

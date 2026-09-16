@@ -65,3 +65,5 @@ config.toml
 *.db-shm
 *.db-wal
 aqua-gateway-go-new
+
+accounts_MS*.txt

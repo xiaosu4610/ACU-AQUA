@@ -15,7 +15,9 @@ import (
 type App struct {
 	Cfg  *config.Cfg
 	DB   *db.DBx
-	Mail *mail.Sender // 验证码发信（未配置为 nil，注册/找回不可用）
+	Mail *mail.Sender // 阿里云 SMTP（兜底通道：试探/全灭接管）
+
+	MailPool *MailPool // 微软邮箱发信池（站长定稿 20260916：全域主线路）
 
 	AvatarsDir string // 用户头像目录（<db目录>/avatars，文件名 <uid>.<ext>）
 
@@ -39,7 +41,7 @@ func New(c *config.Cfg, d *db.DBx) *App {
 		// 种子/加载失败不阻断启动：保留 toml 配置继续服务
 		log.Printf("[lines] 上游线路 DB 加载失败（回退 toml 配置）: %v", err)
 	}
-	app := &App{Cfg: c, DB: d, Mail: mail.New(c.SMTP), AvatarsDir: avatars}
+	app := &App{Cfg: c, DB: d, Mail: mail.New(c.SMTP), AvatarsDir: avatars, MailPool: newMailPool()}
 	// 诊断 D2：站点 5xx 统一落错误中心（error_events）
 	errSink = func(kind, detail string) { app.logError("api_"+kind, "", 0, 0, detail) }
 	// 诊断 D1：资金补偿任务（悬空预扣退款 / orphan billed 补台账）
@@ -48,6 +50,8 @@ func New(c *config.Cfg, d *db.DBx) *App {
 	app.startNvidiaSyncer()
 	// Codex 代理保活探测 + 自动换线（启动 15s 后首跑 + 每 5 分钟，codexops.go）
 	app.startCodexProbe()
+	// 微软发信池活体巡检（启动 1min 后首跑 + 每 6h，mailpool.go）
+	app.StartMailProbe()
 	return app
 }
 

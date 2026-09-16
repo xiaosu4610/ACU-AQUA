@@ -170,6 +170,20 @@ func InitTables(d *sql.DB) error {
 			fails INTEGER NOT NULL DEFAULT 0,
 			expire_ts INTEGER NOT NULL,
 			PRIMARY KEY (email, purpose))`,
+		// —— 微软邮箱发信池（站长定稿 20260916：全域主线路，阿里云仅试探/全灭兜底）——
+		`CREATE TABLE IF NOT EXISTS mail_accounts (
+			email TEXT PRIMARY KEY,
+			client_id TEXT NOT NULL DEFAULT '',
+			refresh_token TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			dead_reason TEXT NOT NULL DEFAULT '',
+			access_token TEXT NOT NULL DEFAULT '',
+			token_exp_ts INTEGER NOT NULL DEFAULT 0,
+			sent_today INTEGER NOT NULL DEFAULT 0,
+			sent_total INTEGER NOT NULL DEFAULT 0,
+			sent_date TEXT NOT NULL DEFAULT '',
+			fail_streak INTEGER NOT NULL DEFAULT 0,
+			last_ok_ts INTEGER NOT NULL DEFAULT 0)`,
 		// —— 免费线三表（与 Rust 版同构，生产库已存在，此处仅兜底新建）——
 		`CREATE TABLE IF NOT EXISTS model_health (
 			model TEXT NOT NULL,
@@ -306,6 +320,8 @@ func InitTables(d *sql.DB) error {
 		{"admin_line_keys", "used_pct", "REAL NOT NULL DEFAULT -1"},     // codex 官方实时用量百分比（响应头 x-codex-primary-used-percent，-1=未知）
 		{"admin_line_keys", "reset_at", "INTEGER NOT NULL DEFAULT 0"},   // codex 官方用量窗口重置时间（unix 秒）
 		{"admin_line_keys", "plan_type", "TEXT NOT NULL DEFAULT ''"},    // codex 账号套餐（free/pro；响应头 x-codex-plan-type，周限号在此辨析）
+		{"email_codes", "sender", "TEXT NOT NULL DEFAULT ''"},           // 验证码实际发信账号（微软池/阿里云台账）
+		{"email_codes", "channel", "TEXT NOT NULL DEFAULT ''"},          // 验证码发信通道（mspool/aliyun_probe/aliyun_fallback/aliyun）
 	}
 	for _, a := range alters {
 		var n int

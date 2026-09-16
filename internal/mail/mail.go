@@ -5,8 +5,10 @@ package mail
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/smtp"
 	"strconv"
+	"time"
 
 	"acu-aqua/gateway/internal/config"
 )
@@ -30,10 +32,12 @@ func New(c config.SMTP) *Sender {
 	return &Sender{Cfg: c}
 }
 
-// Send 发送纯文本邮件（to 支持逗号分隔多地址）
+// Send 发送纯文本邮件（to 支持逗号分隔多地址）。
+// 超时护栏：dial 10s + 会话整体 45s——兜底通道绝不允许无限挂起拖死调用方 handler。
 func (s *Sender) Send(to, subject, body string) error {
 	addr := s.Cfg.Host + ":" + strconv.Itoa(s.Cfg.Port)
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: s.Cfg.Host})
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	conn, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{ServerName: s.Cfg.Host})
 	if err != nil {
 		return fmt.Errorf("SMTP 连接失败: %w", err)
 	}
@@ -42,6 +46,7 @@ func (s *Sender) Send(to, subject, body string) error {
 		return fmt.Errorf("SMTP 客户端失败: %w", err)
 	}
 	defer cli.Close()
+	_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
 	auth := smtp.PlainAuth("", s.Cfg.User, s.Cfg.Pass, s.Cfg.Host)
 	if err := cli.Auth(auth); err != nil {
 		return fmt.Errorf("SMTP 认证失败: %w", err)
