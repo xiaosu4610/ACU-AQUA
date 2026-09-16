@@ -184,6 +184,24 @@ func InitTables(d *sql.DB) error {
 			sent_date TEXT NOT NULL DEFAULT '',
 			fail_streak INTEGER NOT NULL DEFAULT 0,
 			last_ok_ts INTEGER NOT NULL DEFAULT 0)`,
+		// —— 邀请返利（精算定稿 20260917：门槛¥5/奖¥2/返10%）——
+		`CREATE TABLE IF NOT EXISTS invite_codes (
+			code TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL UNIQUE,
+			created_ts INTEGER NOT NULL,
+			disabled INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS invite_relations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			inviter_id INTEGER NOT NULL,
+			invitee_id INTEGER NOT NULL UNIQUE,
+			code TEXT NOT NULL DEFAULT '',
+			created_ts INTEGER NOT NULL,
+			invitee_ip TEXT NOT NULL DEFAULT '',
+			first_pay_ts INTEGER NOT NULL DEFAULT 0,
+			reward_ts INTEGER NOT NULL DEFAULT 0,
+			rebate_month TEXT NOT NULL DEFAULT '',
+			rebate_month_micro INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE INDEX IF NOT EXISTS idx_invrel_inviter ON invite_relations(inviter_id)`,
 		// —— 免费线三表（与 Rust 版同构，生产库已存在，此处仅兜底新建）——
 		`CREATE TABLE IF NOT EXISTS model_health (
 			model TEXT NOT NULL,

@@ -177,13 +177,14 @@ func (a *App) verifyCode(email, purpose, code string) bool {
 	return true
 }
 
-// authRegister POST /v1/auth/register {email, code, username, password}
+// authRegister POST /v1/auth/register {email, code, username, password, invite_code?}
 func (a *App) authRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email    string `json:"email"`
-		Code     string `json:"code"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Email      string `json:"email"`
+		Code       string `json:"code"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		InviteCode string `json:"invite_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errOut(w, 400, "bad_request", "请求体格式错误")
@@ -197,6 +198,10 @@ func (a *App) authRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errOut(w, 400, "bad_request", err.Error())
 		return
+	}
+	// 邀请关系绑定（静默失败不阻断注册；防刷闸在 inviteBind 内）
+	if strings.TrimSpace(req.InviteCode) != "" {
+		a.inviteBind(uid, req.InviteCode, clientIP(r))
 	}
 	// 注册即发默认密钥（Rust 版行为：用户注册后可立即调用 API；未分组，走默认计费分组）
 	keyPlain, err := auth.CreateAPIKey(a.DB.DB, uid, "默认密钥", "")

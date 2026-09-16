@@ -832,6 +832,8 @@ func (a *App) epaySettle(outTradeNo, tradeNo string) {
 		return
 	}
 	_ = tx.Commit()
+	// 邀请返利钩子：被邀请人首充达标（≥¥5）→ 邀请人 ¥2 奖 + 被邀请人加赠 10%（幂等，invite.go）
+	a.inviteOnFirstPay(uid, amount)
 }
 
 // epaySubmitURL 构造易支付跳转链接（MD5 签名，参数排序拼接）

@@ -55,6 +55,8 @@ const router = createRouter({
       desc: 'AQUA api 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按次从池扣费，个人余额分文不动。' } },
     { path: '/login', component: () => import('@/pages/LoginPage.vue'), meta: {
       title: '登录 / 注册', noindex: true } },
+    // /register 兼容重定向：注册是 /login 页内的 tab，老邀请链接与直链透传 code / mode
+    { path: '/register', redirect: (to) => ({ path: '/login', query: { ...to.query, mode: 'register' } }) },
     { path: '/console', component: () => import('@/pages/ConsolePage.vue'), meta: {
       title: '控制台', noindex: true } },
     { path: '/admin', component: () => import('@/pages/AdminPage.vue'), meta: {

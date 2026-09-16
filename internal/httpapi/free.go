@@ -513,6 +513,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp = nil
 	}
 	if resp == nil {
+		a.failRequest0(uid, keyHash, req.Model, req.Stream, "upstream_error", 502)
 		errOut(w, 502, "upstream_error",
 			"智能路由的候选模型这会儿全部没有响应（上游波动），请稍后重试，或直接指定一个模型——GET /v1/models 可查可用列表")
 		return

@@ -52,6 +52,8 @@ func New(c *config.Cfg, d *db.DBx) *App {
 	app.startCodexProbe()
 	// 微软发信池活体巡检（启动 1min 后首跑 + 每 6h，mailpool.go）
 	app.StartMailProbe()
+	// 邀请返利结算器（消费计费成功队列，invite.go）
+	app.StartInviteRebater()
 	return app
 }
 

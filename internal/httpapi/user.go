@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"acu-aqua/gateway/internal/auth"
@@ -16,9 +17,10 @@ var _ = time.Now
 // handleRegister 注册
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Email      string `json:"email"`
+		Password   string `json:"password"`
+		InviteCode string `json:"invite_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errOut(w, 400, "bad_request", "请求体格式错误")
@@ -28,6 +30,10 @@ func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errOut(w, 400, "bad_request", err.Error())
 		return
+	}
+	// 邀请关系绑定（静默失败不阻断注册；同 IP 24h ≥3 静默跳过，防刷闸在 inviteBind 内）
+	if strings.TrimSpace(req.InviteCode) != "" {
+		a.inviteBind(uid, req.InviteCode, clientIP(r))
 	}
 	tok, err := auth.CreateUserSession(a.DB.DB, uid)
 	if err != nil {

@@ -9,13 +9,15 @@ import { forgotPassword, login, register, resetPassword, sendCode } from '@/comp
 const router = useRouter()
 const route = useRoute()
 type Mode = 'login' | 'register' | 'forgot'
-const mode = ref<Mode>('login')
+// 邀请链接 /login?mode=register&code=XXX 直达注册 tab
+const mode = ref<Mode>(route.query.mode === 'register' ? 'register' : route.query.mode === 'forgot' ? 'forgot' : 'login')
 
 /* ===== 表单状态 ===== */
 const email = ref('')
 const code = ref('')
 const username = ref('')
 const password = ref('')
+const inviteCode = ref(String(route.query.code || '').trim().toUpperCase())
 const busy = ref(false)
 const msg = ref('')
 const msgOk = ref(false)
@@ -52,7 +54,7 @@ async function doSendCode() {
 async function doRegister() {
   busy.value = true; show('')
   try {
-    const j = await register(email.value.trim().toLowerCase(), code.value.trim(), username.value.trim(), password.value)
+    const j = await register(email.value.trim().toLowerCase(), code.value.trim(), username.value.trim(), password.value, inviteCode.value || undefined)
     show('注册成功！默认密钥已生成，请到控制台复制保存', true)
     setTimeout(() => goConsole(), 1200)
     if (j?.api_key) { try { localStorage.setItem('aqua_default_key', j.api_key) } catch { /* 忽略 */ } }
@@ -199,6 +201,10 @@ function goConsole() {
               <label>密码</label>
               <input v-model="password" class="input" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="8~72 位，需包含字母和数字" required />
             </div>
+            <div class="field">
+              <label>邀请码 <span class="opt">选填</span></label>
+              <input v-model="inviteCode" class="input" maxlength="16" placeholder="好友邀请码，填写后双方均有奖励" />
+            </div>
             <button class="btn primary block" type="submit" :disabled="busy || !email || !code || !username || !password">
               {{ busy ? '注册中…' : '注册并登录' }}
             </button>
@@ -231,6 +237,7 @@ function goConsole() {
 .form { display: flex; flex-direction: column; gap: 14px; }
 .grow { flex: 1; min-width: 0; }
 .code-btn { white-space: nowrap; padding: 0 14px; font-size: 13px; }
+.opt { font-size: 11px; color: var(--txt3); font-weight: normal; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
 .center { text-align: center; }
 .foot { margin-top: 16px; font-size: 11.5px; color: var(--txt3); }
 </style>

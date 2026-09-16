@@ -948,6 +948,8 @@ func (a *App) okRequestGen(rid int64, u billing.Usage, amount int64, face int64,
 	_, _ = a.DB.Exec(
 		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=?, tps=?, first_ms=? WHERE rowid=?",
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, tps, ttftMs, rid)
+	// 邀请返利：异步队列结算（热路径零阻塞；acu/crowd 等范围过滤在结算器内，invite.go）
+	a.inviteEnqueue(rid)
 }
 
 // genMs 生成阶段耗时（毫秒）：首帧未到达（无有效输出）返回 0，由调用方回退总耗时

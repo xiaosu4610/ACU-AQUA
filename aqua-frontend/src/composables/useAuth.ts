@@ -56,8 +56,10 @@ export async function sendCode(email: string): Promise<void> {
   await apiJson('/auth/send-code', { method: 'POST', body: { email } })
 }
 
-export async function register(email: string, code: string, username: string, password: string) {
-  const j = await apiJson<any>('/auth/register', { method: 'POST', body: { email, code, username, password } })
+export async function register(email: string, code: string, username: string, password: string, inviteCode?: string) {
+  const body: Record<string, string> = { email, code, username, password }
+  if (inviteCode) body.invite_code = inviteCode.trim().toUpperCase()
+  const j = await apiJson<any>('/auth/register', { method: 'POST', body })
   setToken(j.token || '')
   await loadMe()
   return j

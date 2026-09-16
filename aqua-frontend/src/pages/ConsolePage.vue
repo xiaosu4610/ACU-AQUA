@@ -17,19 +17,20 @@ const route = useRoute()
 onMounted(async () => {
   if (!isLoggedIn()) { router.replace('/login'); return }
   await loadMe()
-  await Promise.all([loadKeys(), loadUsage(), loadCheckup(), loadHistory(), loadBalance(), loadPayOrders(), loadBalanceAlert()])
+  await Promise.all([loadKeys(), loadUsage(), loadCheckup(), loadHistory(), loadBalance(), loadPayOrders(), loadBalanceAlert(), loadInvite()])
 })
 
 /* ===== 顶部 tab（记忆于 aqua_console_view；兼容 /console?view= 直达） ===== */
-type View = 'dashboard' | 'keys' | 'history' | 'topup' | 'settings'
+type View = 'dashboard' | 'keys' | 'history' | 'topup' | 'invite' | 'settings'
 const TABS: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: '总览', icon: 'layout' },
   { id: 'keys', label: 'API 密钥', icon: 'key' },
   { id: 'history', label: '请求历史', icon: 'clock' },
   { id: 'topup', label: '余额充值', icon: 'spark' },
+  { id: 'invite', label: '邀请返利', icon: 'send' },
   { id: 'settings', label: '账号设置', icon: 'settings' },
 ]
-const VIEWS: View[] = ['dashboard', 'keys', 'history', 'topup', 'settings']
+const VIEWS: View[] = ['dashboard', 'keys', 'history', 'topup', 'invite', 'settings']
 
 function savedView(): View {
   const q = String(route.query.view || '')
@@ -394,6 +395,34 @@ function doSaveAlert() {
 }
 
 function disableAlert() { alertYuan.value = ''; saveBalanceAlert(0) }
+
+/* ===== 邀请返利（好友首充 ≥¥5 你得 ¥2 + 好友加赠 10%；此后消费永久返 10%） ===== */
+interface InviteItem { username: string; email: string; created_ts: number; qualified: boolean }
+interface InviteInfo {
+  code: string; link: string; invited: number; qualified: number
+  earned_micro: number; reward_each_micro: number; first_pay_min_micro: number; rebate_pct: number
+  list?: InviteItem[]
+}
+const invite = ref<InviteInfo | null>(null)
+const inviteMsg = ref('')
+const inviteOk = ref(false)
+const rotating = ref(false)
+const inviteLink = computed(() => invite.value?.link ? location.origin + invite.value.link : '')
+
+async function loadInvite() {
+  try { invite.value = await apiJson<InviteInfo>('/invite/me', { session: true }) } catch (e) { inviteMsg.value = errText(e) }
+}
+
+async function rotateInvite() {
+  if (!confirm('确认重置邀请码？旧码立即失效（已填旧码的注册不受影响），已建立的邀请关系与返利照常。')) return
+  rotating.value = true; inviteMsg.value = ''
+  try {
+    await apiJson('/invite/rotate', { method: 'POST', session: true })
+    await loadInvite()
+    inviteMsg.value = '邀请码已重置，旧码立即失效'; inviteOk.value = true
+  } catch (e) { inviteMsg.value = errText(e); inviteOk.value = false }
+  rotating.value = false
+}
 
 /* ===== 改密码 ===== */
 const oldPw = ref('')
@@ -783,6 +812,90 @@ function fmtTime(ts: number): string {
         </div>
       </div>
 
+      <!-- ▼▼▼ 邀请返利 ▼▼▼ -->
+      <div v-show="view === 'invite'">
+        <div class="banner acc">
+          <AqIcon name="send" :size="14" />
+          <span>邀请好友，双方得利：好友用你的链接注册并首充 ≥<b>¥{{ yuan(invite?.first_pay_min_micro) }}</b>，你得 <b>¥{{ yuan(invite?.reward_each_micro) }}</b> 邀请奖、好友额外得 <b>{{ invite?.rebate_pct || 10 }}% 充值加赠</b>；此后好友每笔 aqua/ 模型消费，你永久返 <b>{{ invite?.rebate_pct || 10 }}%</b>（直接发到余额）。奖励仅入余额用于调用；同 IP 短时间多次注册等刷单行为会被风控拦截。</span>
+        </div>
+
+        <!-- 邀请码 + 链接 -->
+        <div class="card mt16">
+          <div class="row between wrap">
+            <b><AqIcon name="send" :size="16" /> 我的邀请码</b>
+            <div class="row wrap">
+              <button class="btn sm" :disabled="rotating" @click="rotateInvite"><AqIcon name="refresh" :size="13" /> 重置邀请码</button>
+              <button class="btn sm" :disabled="rotating" @click="loadInvite"><AqIcon name="refresh" :size="13" /> 刷新</button>
+            </div>
+          </div>
+          <div class="form-grid mt12">
+            <div class="field">
+              <label>邀请码</label>
+              <div class="row wrap">
+                <code class="inv-code">{{ invite?.code || '…' }}</code>
+                <CopyBtn v-if="invite?.code" :text="invite.code" label="复制邀请码" />
+              </div>
+            </div>
+            <div class="field">
+              <label>邀请链接（好友打开自动填码直达注册）</label>
+              <div class="row wrap">
+                <code class="inv-link">{{ inviteLink || '…' }}</code>
+                <CopyBtn v-if="inviteLink" :text="inviteLink" label="复制链接" />
+              </div>
+            </div>
+          </div>
+          <p v-if="inviteMsg" class="msg mt12" :class="inviteOk ? 'ok' : 'bad'">{{ inviteMsg }}</p>
+        </div>
+
+        <!-- 统计 KPI -->
+        <div class="kpis mt16">
+          <div class="kpi">
+            <span>累计邀请</span>
+            <b>{{ fmt(invite?.invited || 0) }} 人</b>
+            <span class="trend">好友注册即计入</span>
+          </div>
+          <div class="kpi">
+            <span>达标人数</span>
+            <b>{{ fmt(invite?.qualified || 0) }} 人</b>
+            <span class="trend">首充 ≥¥{{ yuan(invite?.first_pay_min_micro) }} 发奖</span>
+          </div>
+          <div class="kpi">
+            <span>累计奖励收入</span>
+            <b>¥{{ yuan(invite?.earned_micro) }}</b>
+            <span class="trend">邀请奖 + 消费返利，已入余额</span>
+          </div>
+        </div>
+
+        <!-- 明细 -->
+        <div class="card mt16">
+          <b><AqIcon name="list" :size="16" /> 邀请明细</b>
+          <div v-if="!invite?.list?.length" class="empty">
+            <div class="big"><AqIcon name="send" :size="34" /></div>
+            <b>还没有邀请记录</b>
+            <div class="dim">复制上面的链接发给好友，TA 注册首充后奖励自动到账</div>
+          </div>
+          <div v-else class="tbl-wrap mt12">
+            <table class="table">
+              <thead><tr><th>好友</th><th>注册时间</th><th>状态</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr v-for="(it, i) in invite.list" :key="it.email + '-' + i">
+                  <td>
+                    <div>{{ it.username || '—' }}</div>
+                    <div class="dim" style="font-size: 12px;">{{ it.email }}</div>
+                  </td>
+                  <td class="dim nowrap">{{ fmtTime(it.created_ts) }}</td>
+                  <td>
+                    <span v-if="it.qualified" class="tag ok">已达标 · 奖励已发</span>
+                    <span v-else class="tag warn">待首充 ≥¥{{ yuan(invite?.first_pay_min_micro) }}</span>
+                  </td>
+                  <td class="dim">达标后 TA 的每笔消费你返 {{ invite?.rebate_pct || 10 }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- ▼▼▼ 账号设置 ▼▼▼ -->
       <div v-show="view === 'settings'" class="grid2">
         <!-- 个人资料 -->
@@ -922,6 +1035,9 @@ tr.row-fail td { background: var(--bad-soft); }
 .name-input { width: 180px; }
 .alert-input { width: 110px; font-variant-numeric: tabular-nums; }
 .pay-help { font-size: 12px; line-height: 1.7; }
+.banner.acc { background: var(--acc-soft); color: var(--acc); }
+.inv-code { font-size: 18px; font-weight: 800; letter-spacing: 2px; color: var(--acc); padding: 4px 10px; border: 1px dashed var(--acc); border-radius: var(--r-sm); }
+.inv-link { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; color: var(--txt1); }
 @media (max-width: 640px) {
   .tabbar .jump { margin-left: 0; }
 }

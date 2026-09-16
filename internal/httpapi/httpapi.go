@@ -167,6 +167,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/mailpool", a.handleAdminMailpoolList)
 	mux.HandleFunc("POST /v1/admin/mailpool/probe", a.handleAdminMailpoolProbe)
 	mux.HandleFunc("POST /v1/admin/mailpool/test", a.handleAdminMailpoolTest)
+	// —— 邀请返利（精算定稿 20260917：门槛¥5/奖¥2/返10%）——
+	mux.HandleFunc("GET /v1/invite/me", a.handleInviteMe)
+	mux.HandleFunc("POST /v1/invite/rotate", a.handleInviteRotate)
+	mux.HandleFunc("GET /v1/admin/invites", a.handleAdminInvites)
 	mux.HandleFunc("POST /v1/admin/lines", a.handleAdminLineCreate)
 	mux.HandleFunc("POST /v1/admin/lines/{line}", a.handleAdminLineUpdate)
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}", a.handleAdminLineDelete)
