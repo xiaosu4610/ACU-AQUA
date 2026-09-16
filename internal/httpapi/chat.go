@@ -101,6 +101,12 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
 	}
+	// 秒败风暴断路器：该密钥连续快速上游失败已触发冷却 → 429 拦截（保护上游配额，逼迫客户端退避）
+	if !stormCheck(actx.KeyHash) {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "storm_cooldown", 429)
+		errOut(w, 429, "rate_limited", "请求频率过高：你的客户端在连续快速失败后仍在重试，已临时限流 60 秒——请为程序增加失败退避（如指数重试）后再试")
+		return
+	}
 	if line != nil && line.Mode == "official" {
 		// tlk 官方中转线（线前缀直连）：仅官方中转分组密钥可调（独占高速模型，官方原价 6 折计费）
 		kg := actx.KeyGrp
@@ -252,7 +258,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if fake {
 		// 伪流式：网关内自管拨号/重拨/转帧/结算（上游非流式），不走下方真流式管道
-		a.serveFakeStreamChat(w, r, ctx, actx.UserID, prehold, rid, client, line, model, start, req, upBody, includeUsage)
+		a.serveFakeStreamChat(w, r, ctx, actx.UserID, prehold, rid, client, line, model, start, req, upBody, includeUsage, actx.KeyHash)
 		return
 	}
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
@@ -266,11 +272,13 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
+		stormFail(actx.KeyHash)
 		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 		return
 	}
 	defer resp.Body.Close()
+	stormReset(actx.KeyHash) // 上游拨号成功：清零秒败计数
 	if key != nil {
 		a.setRequestKeyIdx(rid, key.Idx) // codex 账号粒度记账：记实际使用的钥池序（换号后以最终为准）
 	}
@@ -298,6 +306,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			if probe == 2 {
 				log.Printf("[chat] 首帧前断流 model=%s line=%s，重试耗尽", req.Model, line.ID)
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				stormFail(actx.KeyHash)
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 				return
@@ -315,6 +324,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
+				stormFail(actx.KeyHash)
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 				return
@@ -388,7 +398,7 @@ func forceNonStream(body []byte) ([]byte, error) {
 // client_cancel（499），与模型健康无关；计费与真流式同口径（usage actual 优先，
 // 缺失按保底/单价，面值台账照记）。首字（first_ms）= 完整响应到手时刻——伪流式下
 // 用户真实等待时长，如实记录。
-func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx context.Context, uid, prehold, rid int64, c *upstream.Client, line *config.Line, m *config.Model, start time.Time, req chatReq, upBody []byte, includeUsage bool) {
+func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx context.Context, uid, prehold, rid int64, c *upstream.Client, line *config.Line, m *config.Model, start time.Time, req chatReq, upBody []byte, includeUsage bool, keyHash string) {
 	var raw []byte
 	var key *upstream.KeyState
 	for attempt := 0; ; attempt++ {
@@ -402,10 +412,12 @@ func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx co
 				return
 			}
 			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
+			stormFail(keyHash)
 			a.failRequest(rid, "upstream_error", 502)
 			errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 			return
 		}
+		stormReset(keyHash) // 上游拨号成功：清零秒败计数
 		if k != nil {
 			key = k
 			a.setRequestKeyIdx(rid, k.Idx)
