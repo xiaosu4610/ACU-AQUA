@@ -28,10 +28,13 @@ type readerBody struct {
 
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
-	Model     string          `json:"model"`
-	Stream    bool            `json:"stream"`
-	MaxTokens json.Number     `json:"max_tokens,omitempty"`
-	Raw       json.RawMessage `json:"-"`
+	Model         string      `json:"model"`
+	Stream        bool        `json:"stream"`
+	MaxTokens     json.Number `json:"max_tokens,omitempty"`
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
+	Raw json.RawMessage `json:"-"`
 }
 
 // usage JSON（上游响应内）
@@ -177,6 +180,20 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 伪流式（20260916 站长指令）：上游非流式链路快且稳（免 300s 流式硬切/首帧前断流），
+	// 客户端要流式时向上游发非流式请求，完整返回后转换为标准 OpenAI SSE 帧序列——
+	// 对客户端完全透明。codex 协议线（RT→AT 转换依赖上游 SSE 事件流）不适用；settings 表 fake_stream=1 总开关。
+	fake := false
+	includeUsage := false
+	if req.Stream && line.AuthStyle != "codex" && a.fakeStreamOn() {
+		fake = true
+		includeUsage = req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		if upBody, err = forceNonStream(upBody); err != nil {
+			errOut(w, 500, "internal_error", "请求处理失败")
+			return
+		}
+	}
+
 	// 价格组与生效价目（pricing 键 = 目标线全名，与密钥分组解耦）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, line.Mode)
 	pricing, err := billing.CurrentPricing(a.DB.DB, fullID, grp)
@@ -231,6 +248,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
+	if fake {
+		// 伪流式：网关内自管拨号/重拨/转帧/结算（上游非流式），不走下方真流式管道
+		a.serveFakeStreamChat(w, r, ctx, actx.UserID, prehold, rid, client, line, model, start, req, upBody, includeUsage)
+		return
+	}
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
@@ -312,6 +334,266 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model, start)
+}
+
+// ---------------------------------------------------------------------------
+// 伪流式：上游非流式 → 客户端流式（20260916）
+// ---------------------------------------------------------------------------
+
+// fakeStreamOn 全站伪流式总开关（settings 表 fake_stream=1；默认关。codex 协议线代码级排除）
+func (a *App) fakeStreamOn() bool { return a.settingsGet("fake_stream") == "1" }
+
+// forceNonStream 伪流式前置：请求体 stream 置 false 并剥除 stream_options
+// （部分上游在 stream=false 时携带 stream_options 会拒绝请求）
+func forceNonStream(body []byte) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	m["stream"] = []byte("false")
+	delete(m, "stream_options")
+	return json.Marshal(m)
+}
+
+// serveFakeStreamChat 伪流式主路径：向上游发非流式请求，完整响应到手后转换为
+// 标准 OpenAI chat.completion.chunk SSE 流回放给客户端（首帧 role → reasoning →
+// content 分片 → tool_calls → finish_reason → [可选 usage 帧] → [DONE]）。
+// 稳定性：拨号失败/畸形响应自动换钥重拨一次（Do 内部已含同钥退避+换钥重试与
+// 渠道级快速失败，此处只兜 200-但-内容畸形的尾部的尾部）；客户端在等待期断开记
+// client_cancel（499），与模型健康无关；计费与真流式同口径（usage actual 优先，
+// 缺失按保底/单价，面值台账照记）。首字（first_ms）= 完整响应到手时刻——伪流式下
+// 用户真实等待时长，如实记录。
+func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx context.Context, uid, prehold, rid int64, c *upstream.Client, line *config.Line, m *config.Model, start time.Time, req chatReq, upBody []byte, includeUsage bool) {
+	var raw []byte
+	var key *upstream.KeyState
+	for attempt := 0; ; attempt++ {
+		rp, k, derr := c.DoKey(ctx, upBody, false, "/chat/completions", m.KeyIdx)
+		if derr != nil {
+			log.Printf("[chat] 伪流式上游失败 model=%s line=%s err=%v", req.Model, line.ID, derr)
+			if ctxDone(r.Context()) || errors.Is(derr, context.Canceled) {
+				// 客户端在等待上游响应期间主动断开：与模型健康无关
+				a.settleFor(line, uid, prehold, 0, rid, 0, "client_cancel")
+				a.failRequest(rid, "client_cancel", 499)
+				return
+			}
+			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
+			a.failRequest(rid, "upstream_error", 502)
+			errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+			return
+		}
+		if k != nil {
+			key = k
+			a.setRequestKeyIdx(rid, k.Idx)
+		}
+		if rp.StatusCode != 200 {
+			// 非最终 200（Do 已完成同钥退避/换钥/渠道级快速失败）：错误转译透传
+			eb, _ := io.ReadAll(io.LimitReader(rp.Body, 64<<10))
+			_ = rp.Body.Close()
+			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(rp.StatusCode))
+			a.failRequest(rid, "upstream_status", rp.StatusCode)
+			upstreamErrOut(w, rp.StatusCode, eb)
+			return
+		}
+		rw, rerr := io.ReadAll(io.LimitReader(rp.Body, 32<<20))
+		_ = rp.Body.Close()
+		if rerr == nil && fakeParse(rw) {
+			raw = rw
+			break
+		}
+		// 畸形响应（200 但非合法 JSON / 缺 choices）：换钥重拨一次
+		if attempt == 0 && !ctxDone(r.Context()) {
+			log.Printf("[chat] 伪流式响应畸形 model=%s line=%s，换钥重拨", req.Model, line.ID)
+			c.Pool.Advance()
+			select {
+			case <-ctx.Done():
+			case <-time.After(300 * time.Millisecond):
+			}
+			continue
+		}
+		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_malformed")
+		a.failRequest(rid, "upstream_malformed", 502)
+		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
+		return
+	}
+
+	// —— 解析完整响应 ——
+	var jr struct {
+		ID      string `json:"id"`
+		Created int64  `json:"created"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Role             string           `json:"role"`
+				Content          json.RawMessage  `json:"content"`
+				ReasoningContent string           `json:"reasoning_content"`
+				ToolCalls        []map[string]any `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason json.RawMessage `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *usageJSON `json:"usage"`
+	}
+	_ = json.Unmarshal(raw, &jr)
+
+	// —— 计费（与 serveJSONChat 同口径）——
+	u := usageFromJSON(jr.Usage)
+	p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
+	final, face := int64(0), int64(0)
+	src := "estimated"
+	if jr.Usage != nil {
+		src = "actual"
+		if p != nil && p.Mode == "per_call" {
+			final = p.PriceMicro
+		} else {
+			final = billing.MeterTokens(u, p)
+		}
+		face = billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
+	} else if p != nil {
+		if p.Mode == "per_call" {
+			final = p.PriceMicro
+		} else {
+			final = p.FloorMicro
+		}
+	}
+	a.settleFor(line, uid, prehold, final, rid, final, "billed")
+	if face > 0 && key != nil {
+		c.Pool.ReportFace(key, face)
+		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
+	}
+	waitMs := time.Since(start).Milliseconds()
+	a.okRequestGen(rid, u, final, face, src, waitMs, 200, waitMs, waitMs)
+
+	// —— 转换为 SSE 帧序列 ——
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(200)
+	flusher, _ := w.(http.Flusher)
+
+	id := jr.ID
+	if id == "" {
+		id = fmt.Sprintf("chatcmpl-fake-%d", rid)
+	}
+	created := jr.Created
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	mdl := jr.Model
+	if mdl == "" {
+		mdl = req.Model
+	}
+	chunk := func(delta map[string]any, finish any, usage map[string]any) {
+		frame := map[string]any{
+			"id": id, "object": "chat.completion.chunk", "created": created, "model": mdl,
+			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
+		}
+		if usage != nil {
+			frame["usage"] = usage
+			frame["choices"] = []any{} // OpenAI 口径：usage 终帧 choices 为空数组
+		}
+		b, _ := json.Marshal(frame)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	var msg *struct {
+		Role             string           `json:"role"`
+		Content          json.RawMessage  `json:"content"`
+		ReasoningContent string           `json:"reasoning_content"`
+		ToolCalls        []map[string]any `json:"tool_calls"`
+	}
+	if len(jr.Choices) > 0 {
+		msg = &jr.Choices[0].Message
+	}
+	chunk(map[string]any{"role": "assistant", "content": ""}, nil, nil) // 首帧 role（SDK 兼容基线）
+	if msg != nil {
+		if rc := msg.ReasoningContent; rc != "" {
+			for _, s := range chunkText(rc, 48) {
+				chunk(map[string]any{"reasoning_content": s}, nil, nil)
+			}
+		}
+		if content := fakeContentText(msg.Content); content != "" {
+			for _, s := range chunkText(content, 48) {
+				chunk(map[string]any{"content": s}, nil, nil)
+			}
+		}
+		if len(msg.ToolCalls) > 0 {
+			// 完整 tool_calls 单帧下发（补 index 供客户端按位聚合）
+			for i := range msg.ToolCalls {
+				msg.ToolCalls[i]["index"] = i
+			}
+			chunk(map[string]any{"tool_calls": msg.ToolCalls}, nil, nil)
+		}
+	}
+	finish := any(nil)
+	if len(jr.Choices) > 0 {
+		var fr string
+		if json.Unmarshal(jr.Choices[0].FinishReason, &fr) == nil && fr != "" {
+			finish = fr
+		}
+	}
+	chunk(map[string]any{}, finish, nil)
+	if includeUsage {
+		uf := map[string]any{
+			"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
+			"total_tokens": u.PromptTokens + u.CompletionTokens,
+		}
+		if u.CachedTokens > 0 {
+			uf["prompt_tokens_details"] = map[string]any{"cached_tokens": u.CachedTokens}
+		}
+		chunk(nil, nil, uf)
+	}
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+// fakeParse 伪流式形状探测：合法 JSON 且带 choices（兼容上游错误体带 error 字段的场景交由上层转译，这里只认 200+choices）
+func fakeParse(raw []byte) bool {
+	var probe struct {
+		Choices []json.RawMessage `json:"choices"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return false
+	}
+	return len(probe.Choices) > 0
+}
+
+// fakeContentText message.content 归一化为文本（string | null | [{type:text,text}] 数组）
+func fakeContentText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var b strings.Builder
+		for _, pt := range parts {
+			b.WriteString(pt.Text)
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// chunkText 按 rune 分片（伪流式回放粒度，48 字符/帧——渐进可见且帧数可控）
+func chunkText(s string, n int) []string {
+	rs := []rune(s)
+	if len(rs) <= n {
+		return []string{s}
+	}
+	out := []string{}
+	for i := 0; i < len(rs); i += n {
+		e := i + n
+		if e > len(rs) {
+			e = len(rs)
+		}
+		out = append(out, string(rs[i:e]))
+	}
+	return out
 }
 
 // serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写
@@ -418,7 +700,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
 			}
 			a.settleFor(line, uid, prehold, final, rid, final, "billed")
-			a.okRequestGen(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200, genMs(firstByte))
+			a.okRequestGen(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200, genMs(firstByte), ttftOf(firstByte, start))
 		} else if interrupted {
 			// 一帧有效内容都没有且上游异常中断：全额退回
 			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
@@ -431,7 +713,7 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				final = p.FloorMicro
 			}
 			a.settleFor(line, uid, prehold, final, rid, final, "billed")
-			a.okRequest(rid, u, final, faceTotal, "estimated", time.Since(start).Milliseconds(), 200)
+			a.okRequestGen(rid, u, final, faceTotal, "estimated", time.Since(start).Milliseconds(), 200, genMs(firstByte), ttftOf(firstByte, start))
 		} else {
 			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
 			a.failRequest(rid, "stream_incomplete", 502)
@@ -648,12 +930,13 @@ func (a *App) setRequestKeyIdx(rid int64, idx int) {
 // src=usage 来源口径（actual=上游实发 / estimated=保底估算）；latMs/sc 回写观测口径，
 // tps=输出 tokens/秒（生成速度，非流式为总耗时口径）；消除生产旧表列默认值造成的统计失真
 func (a *App) okRequest(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int) {
-	a.okRequestGen(rid, u, amount, face, src, latMs, sc, latMs)
+	a.okRequestGen(rid, u, amount, face, src, latMs, sc, latMs, 0)
 }
 
 // okRequestGen 成功回写（生成阶段口径）：genMs=生成阶段耗时（流式为首字之后；≤0 时回退总耗时）
-// tps 按 genMs 计——等待（建连/prompt 处理/首字）不计入生成速度，latency_ms 仍按总耗时口径
-func (a *App) okRequestGen(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int, genMs int64) {
+// tps 按 genMs 计——等待（建连/prompt 处理/首字）不计入生成速度，latency_ms 仍按总耗时口径，
+// ttftMs=首字延迟（请求起点→首帧到达；用户感知的"响应速度"，≤0 记 0，状态卡优先展示它）
+func (a *App) okRequestGen(rid int64, u billing.Usage, amount int64, face int64, src string, latMs int64, sc int, genMs int64, ttftMs int64) {
 	tpsMs := genMs
 	if tpsMs <= 0 {
 		tpsMs = latMs
@@ -663,8 +946,8 @@ func (a *App) okRequestGen(rid int64, u billing.Usage, amount int64, face int64,
 		tps = float64(u.CompletionTokens) * 1000 / float64(tpsMs)
 	}
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=?, tps=? WHERE rowid=?",
-		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, tps, rid)
+		"UPDATE requests SET ok=1, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=1, bill_amount_micro=?, unit_price_micro=?, face_cost_micro=?, bill_state='billed', usage_source=?, latency_ms=?, status_code=?, tps=?, first_ms=? WHERE rowid=?",
+		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, amount, amount, face, src, latMs, sc, tps, ttftMs, rid)
 }
 
 // genMs 生成阶段耗时（毫秒）：首帧未到达（无有效输出）返回 0，由调用方回退总耗时
@@ -673,6 +956,14 @@ func genMs(firstByte time.Time) int64 {
 		return 0
 	}
 	return time.Since(firstByte).Milliseconds()
+}
+
+// ttftMs 首字延迟（毫秒）：请求起点→首帧到达；首帧未到达返回 0（非流式/无输出）
+func ttftOf(firstByte, start time.Time) int64 {
+	if firstByte.IsZero() {
+		return 0
+	}
+	return firstByte.Sub(start).Milliseconds()
 }
 
 // failRequest 失败回写（诊断 D2：reason 必填区分失败原因，status_code 回写真实状态码供统计）

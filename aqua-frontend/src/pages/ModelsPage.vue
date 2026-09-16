@@ -45,7 +45,7 @@ onUnmounted(() => {
 function retry() { load(true) }
 
 /* ================= 实时状态：/v1/models/status 最近 200 次请求推断（20 秒自动刷新） ================= */
-type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
+type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_first_ms?: number; avg_tps?: number; last_ts: number }
 const liveRows = ref<LiveRow[]>([])
 const liveTs = ref(0)
 const liveLoading = ref(false)
@@ -59,6 +59,11 @@ async function loadLive() {
   liveLoading.value = false
 }
 const liveMap = computed(() => { const m: Record<string, LiveRow> = {}; for (const r of liveRows.value) m[r.model] = r; return m })
+/* 展示口径：优先首字延迟（用户感知的响应速度），旧数据无首字段时回退总耗时 */
+function latOf(r?: LiveRow): number {
+  if (!r) return 0
+  return r.avg_first_ms || r.avg_latency_ms || 0
+}
 function fmtLat(ms?: number): string {
   if (!ms) return '--'
   return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
@@ -771,7 +776,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="dim mt8" style="font-size: 11.5px;">先付后用 · 用多少付多少 · 缓存命中更省</div>
               </template>
               <div class="pmetrics mt8">
-                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span :class="{ dim: !latOf(liveMap[m.id]) }"><i>首字</i><b>{{ latOf(liveMap[m.id]) ? fmtLat(latOf(liveMap[m.id])) : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
               </div>
@@ -827,7 +832,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               </div>
               <div class="dim mt8" style="font-size: 11.5px;">Codex 账号池专线 · 缓存命中更省 · 先付后用</div>
               <div class="pmetrics mt8">
-                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span :class="{ dim: !latOf(liveMap[m.id]) }"><i>首字</i><b>{{ latOf(liveMap[m.id]) ? fmtLat(latOf(liveMap[m.id])) : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
               </div>
@@ -861,7 +866,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               </div>
               <div class="dim mt8" style="font-size: 11.5px;">官方中转专线 · 官方原价 6 折 · 先付后用</div>
               <div class="pmetrics mt8">
-                <span :class="{ dim: !liveMap[m.id]?.avg_latency_ms }"><i>时延</i><b>{{ liveMap[m.id]?.avg_latency_ms ? fmtLat(liveMap[m.id].avg_latency_ms) : '--' }}</b></span>
+                <span :class="{ dim: !latOf(liveMap[m.id]) }"><i>首字</i><b>{{ latOf(liveMap[m.id]) ? fmtLat(latOf(liveMap[m.id])) : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id]?.avg_tps }"><i>速度</i><b>{{ liveMap[m.id]?.avg_tps ? liveMap[m.id].avg_tps.toFixed(1) + ' tok/s' : '--' }}</b></span>
                 <span :class="{ dim: !liveMap[m.id] }"><i>成功率</i><b>{{ liveMap[m.id] ? fmtRate(liveMap[m.id].ok_rate) : '--' }}</b></span>
               </div>

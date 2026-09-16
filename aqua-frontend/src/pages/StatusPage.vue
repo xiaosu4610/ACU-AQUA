@@ -6,7 +6,7 @@ import { apiJson, fmt } from '@/composables/useApi'
 import { useModels } from '@/composables/useModels'
 import AqIcon from '@/components/AqIcon.vue'
 
-interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number }
+interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number; avg_first_ms?: number }
 interface LiveRow { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; last_ts: number }
 
 const { models, loading: modelsLoading, load: loadModels } = useModels()
@@ -67,7 +67,7 @@ async function loadStatus(ac: AbortController) {
         const c = m.calls_1h || 0
         tc += c
         wRate += (m.success_rate || 0) * c
-        wLat += (m.avg_latency_ms || 0) * c
+        wLat += (m.avg_first_ms || m.avg_latency_ms || 0) * c // 展示口径：优先首字延迟（用户感知），回退总耗时
       })
       kpi.value = {
         calls: tc ? fmt(tc) : '0',
@@ -149,7 +149,7 @@ onUnmounted(() => {
     <div v-else class="kpis kpis-xl">
       <div class="kpi"><span>近 1h 总调用</span><b>{{ kpi.calls }}</b></div>
       <div class="kpi"><span>近 1h 成功率</span><b>{{ kpi.rate }}</b></div>
-      <div class="kpi"><span>近 1h 平均延迟</span><b>{{ kpi.lat }}</b></div>
+      <div class="kpi"><span>近 1h 平均首字延迟</span><b>{{ kpi.lat }}</b></div>
       <div class="kpi"><span>在线模型数</span><b>{{ onlineShow }}</b></div>
     </div>
 

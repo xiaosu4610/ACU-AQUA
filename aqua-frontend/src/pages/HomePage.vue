@@ -21,7 +21,7 @@ const { meta, loadMeta } = useMeta()
 loadMeta()
 
 /* ---- /v1/status 实时数据条 ---- */
-interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number }
+interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number; avg_first_ms?: number }
 interface StatusResp { version?: string; uptime_sec?: number; window?: string; models?: StatusModel[] }
 const statusLoading = ref(true)
 const statusErr = ref(false)
@@ -47,7 +47,7 @@ async function loadStatus() {
     stUptime.value = j.uptime_sec ? fmtUptime(j.uptime_sec) : '--'
     if (list.length) {
       const avgRate = list.reduce((s, m) => s + (m.success_rate || 0), 0) / list.length
-      const avgLat = list.reduce((s, m) => s + (m.avg_latency_ms || 0), 0) / list.length
+      const avgLat = list.reduce((s, m) => s + (m.avg_first_ms || m.avg_latency_ms || 0), 0) / list.length // 展示口径：优先首字延迟（用户感知）
       stOkRate.value = avgRate.toFixed(1) + '%'
       stLatency.value = (avgLat / 1000).toFixed(2) + ' s'
     }
@@ -157,7 +157,7 @@ const qqNum = computed(() => meta.value?.qq_group || '1103667832')
           <b v-else class="num">{{ stOkRate }}</b>
         </div>
         <div class="li">
-          <span>平均时延</span>
+          <span>平均首字时延</span>
           <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 64px;"></b>
           <b v-else class="num">{{ stLatency }}</b>
         </div>

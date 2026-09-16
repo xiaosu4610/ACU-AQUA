@@ -375,7 +375,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	//   - 平均时延只取成功请求（失败请求的耗时反映的是熔断/拒绝速度，不是模型速度）
 	rows, err := a.DB.Query(
 		`SELECT model, COUNT(*) calls, SUM(ok)*1.0/COUNT(*) succ,
-		        COALESCE(AVG(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms END),0) lat
+		        COALESCE(AVG(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms END),0) lat,
+		        COALESCE(AVG(CASE WHEN ok=1 AND first_ms>0 THEN first_ms END),0) ttft
 		 FROM requests
 		 WHERE ts>=? AND endpoint IN ('chat','images')
 		   AND status_code NOT BETWEEN 400 AND 499
@@ -386,13 +387,17 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var model string
 			var calls int64
-			var succ, lat float64
-			if rows.Scan(&model, &calls, &succ, &lat) == nil {
-				models = append(models, map[string]any{
+			var succ, lat, ttft float64
+			if rows.Scan(&model, &calls, &succ, &lat, &ttft) == nil {
+				mm := map[string]any{
 					"model": model, "calls_1h": calls,
 					"success_rate":   round1(succ * 100),
 					"avg_latency_ms": round1(lat),
-				})
+				}
+				if ttft > 0 {
+					mm["avg_first_ms"] = round1(ttft) // 首字均延迟（用户感知口径，前端优先展示）
+				}
+				models = append(models, mm)
 			}
 		}
 		rows.Close()
@@ -469,13 +474,15 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		           OR (status_code=200 AND error='')) THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN 1 ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND first_ms>0 THEN first_ms ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=1 AND first_ms>0 THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN tps ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN 1 ELSE 0 END),0),
 		       MAX(ts)
 		FROM (
-			SELECT model, ok, latency_ms, tps, ts, status_code, error,
+			SELECT model, ok, latency_ms, tps, ts, status_code, error, first_ms,
 			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY rowid DESC) rn
-			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code, error
+			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code, error, first_ms
 		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != ''
 		        AND ts > strftime('%s','now') - 21600
 		      ORDER BY rowid DESC LIMIT 50000)
@@ -489,14 +496,15 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	type stAgg struct {
 		total, okN, userErr, latN, tpsN, lastTs int64
 		latSum, tpsSum                          float64
+		firstSum, firstN                        int64
 	}
 	agg := map[string]*stAgg{}
 	order := []string{}
 	for rows.Next() {
 		var model string
-		var total, okN, userErr, latN, tpsN, lastTs int64
+		var total, okN, userErr, latN, tpsN, lastTs, firstSum, firstN int64
 		var latSum, tpsSum float64
-		if rows.Scan(&model, &total, &okN, &userErr, &latSum, &latN, &tpsSum, &tpsN, &lastTs) != nil {
+		if rows.Scan(&model, &total, &okN, &userErr, &latSum, &latN, &firstSum, &firstN, &tpsSum, &tpsN, &lastTs) != nil {
 			continue
 		}
 		name, ok := norm[model]
@@ -514,6 +522,8 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		g.userErr += userErr
 		g.latSum += latSum
 		g.latN += latN
+		g.firstSum += firstSum
+		g.firstN += firstN
 		g.tpsSum += tpsSum
 		g.tpsN += tpsN
 		if lastTs > g.lastTs {
@@ -550,6 +560,9 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		if g.latN > 0 {
 			it["avg_latency_ms"] = int64(math.Round(g.latSum / float64(g.latN)))
+		}
+		if g.firstN > 0 {
+			it["avg_first_ms"] = int64(math.Round(float64(g.firstSum) / float64(g.firstN)))
 		}
 		if g.tpsN > 0 {
 			it["avg_tps"] = g.tpsSum / float64(g.tpsN)

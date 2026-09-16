@@ -540,7 +540,12 @@ const exLang = ref<'curl' | 'python' | 'js'>('curl')
 const exCode = computed(() => (exLang.value === 'python' ? exPy.value : exLang.value === 'js' ? exJs.value : exCurl.value))
 
 /* ---- 实时状态 + 会话内健康趋势（/v1/models/status，20 秒采样，静默失败） ---- */
-type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_tps?: number; last_ts: number }
+type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_first_ms?: number; avg_tps?: number; last_ts: number }
+/* 展示口径：优先首字延迟（用户感知的响应速度），旧数据无首字段时回退总耗时 */
+function latOf(r?: LiveRow): number {
+  if (!r) return 0
+  return r.avg_first_ms || r.avg_latency_ms || 0
+}
 const live = ref<LiveRow | null>(null)
 const trendPts = ref<{ t: number; rate: number; lat: number }[]>([])
 let liveTimer = 0
@@ -552,7 +557,7 @@ async function loadLive() {
       live.value = r
       const last = trendPts.value[trendPts.value.length - 1]
       if (!last || last.t !== (r.last_ts || j.generated_ts)) {
-        trendPts.value.push({ t: r.last_ts || j.generated_ts, rate: Math.round(r.ok_rate * 100), lat: r.avg_latency_ms || 0 })
+        trendPts.value.push({ t: r.last_ts || j.generated_ts, rate: Math.round(r.ok_rate * 100), lat: latOf(r) })
         if (trendPts.value.length > 12) trendPts.value.shift()
       }
     }
@@ -758,7 +763,7 @@ const priceRows = computed<[string, string][] | null>(() => {
                   <span v-if="live" class="dim" style="margin-left: auto; font-size: 11px;">近 {{ live.samples }} 次 · 最近活动 {{ live.last_ts ? new Date(live.last_ts * 1000).toLocaleTimeString() : '--' }}</span>
                 </div>
                 <div class="row wrap mt8" style="gap: 6px;">
-                  <span class="tag">时延 {{ live?.avg_latency_ms ? fmtLat(live.avg_latency_ms) : '--' }}</span>
+                  <span class="tag">首字 {{ live ? fmtLat(latOf(live)) : '--' }}</span>
                   <span class="tag">速度 {{ live?.avg_tps ? live.avg_tps.toFixed(1) + ' tok/s' : '--' }}</span>
                   <span class="tag">成功率 {{ live ? (live.ok_rate * 100).toFixed(1) + '%' : '--' }}</span>
                 </div>
