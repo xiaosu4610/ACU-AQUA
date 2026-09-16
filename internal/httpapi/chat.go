@@ -182,10 +182,12 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 伪流式（20260916 站长指令）：上游非流式链路快且稳（免 300s 流式硬切/首帧前断流），
 	// 客户端要流式时向上游发非流式请求，完整返回后转换为标准 OpenAI SSE 帧序列——
-	// 对客户端完全透明。codex 协议线（RT→AT 转换依赖上游 SSE 事件流）不适用；settings 表 fake_stream=1 总开关。
+	// 对客户端完全透明。codex 协议线（RT→AT 转换依赖上游 SSE 事件流）不适用；
+	// settings fake_stream=1 总开关 + fake_stream_models 裸名白名单
+	// （20260917 站长指令：仅 V4 Flash / V4 Pro 上游非流式，其余模型真流式透传）。
 	fake := false
 	includeUsage := false
-	if req.Stream && line.AuthStyle != "codex" && a.fakeStreamOn() {
+	if req.Stream && line.AuthStyle != "codex" && a.fakeStreamFor(req.Model) {
 		fake = true
 		includeUsage = req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 		if upBody, err = forceNonStream(upBody); err != nil {
@@ -342,6 +344,29 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // fakeStreamOn 全站伪流式总开关（settings 表 fake_stream=1；默认关。codex 协议线代码级排除）
 func (a *App) fakeStreamOn() bool { return a.settingsGet("fake_stream") == "1" }
+
+// fakeStreamFor 模型级伪流式判定（20260917 站长指令：仅 V4 Flash / V4 Pro 上游非流式，
+// 其余模型流式正常透传）。总开关 fake_stream=1 不变；fake_stream_models=逗号分隔裸名白名单，
+// 空 = 全部模型（兼容 20260916 全站行为）。匹配按去线前缀（aqua/ acu/ 等）后的裸名精确比对。
+func (a *App) fakeStreamFor(siteModel string) bool {
+	if !a.fakeStreamOn() {
+		return false
+	}
+	list := strings.TrimSpace(a.settingsGet("fake_stream_models"))
+	if list == "" {
+		return true
+	}
+	m := strings.ToLower(strings.TrimSpace(siteModel))
+	if i := strings.IndexByte(m, '/'); i >= 0 {
+		m = m[i+1:]
+	}
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" && m == s {
+			return true
+		}
+	}
+	return false
+}
 
 // forceNonStream 伪流式前置：请求体 stream 置 false 并剥除 stream_options
 // （部分上游在 stream=false 时携带 stream_options 会拒绝请求）
