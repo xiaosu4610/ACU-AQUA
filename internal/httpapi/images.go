@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -137,6 +139,12 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	resp, key, err := client.DoKey(ctx, upBody, false, "/images/generations", model.KeyIdx)
 	if err != nil {
+		if ctxDone(r.Context()) || errors.Is(err, context.Canceled) {
+			// 客户端在等待上游响应期间主动断开：与模型健康无关
+			a.settleSafely(actx.UserID, prehold, 0, rid, 0, "client_cancel")
+			a.failRequest(rid, "client_cancel", 499)
+			return
+		}
 		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")

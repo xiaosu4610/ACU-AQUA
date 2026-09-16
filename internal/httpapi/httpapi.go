@@ -368,8 +368,10 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	models := []map[string]any{}
 	// 口径（与 handleModelsStatus 对齐）：
 	//   - 数据源用 requests 表（全线路真实请求；model_health 仅免费线写入，会导致收费模型缺席/误显 0%）
-	//   - 分母剔除 4xx（400~499：参数错/未鉴权/限流 429/面值 402/防刷拦截等用户侧与网关侧拒绝——
-	//     模型本身健康与否与此类失败无关），仅 5xx/网络错（status_code=0）计为真实失败
+	//   - 分母剔除 4xx（400~499：参数错/未鉴权/限流 429/面值 402/请求体过大 413/客户端断开 499/防刷拦截等
+	//     用户侧与网关侧拒绝——模型本身健康与否与此类失败无关），仅 5xx/网络错（status_code=0）计为真实失败；
+	//     另剔除 compensated_prehold（网关补偿流水）、stream_incomplete（上游长生成 300s 硬切，内容多数已送达）、
+	//     client_cancel（客户端等待期间主动断开）、在途未结算行（ok=0 且 status_code=200 且 error=''）——均非模型健康信号
 	//   - 平均时延只取成功请求（失败请求的耗时反映的是熔断/拒绝速度，不是模型速度）
 	rows, err := a.DB.Query(
 		`SELECT model, COUNT(*) calls, SUM(ok)*1.0/COUNT(*) succ,
@@ -377,6 +379,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		 FROM requests
 		 WHERE ts>=? AND endpoint IN ('chat','images')
 		   AND status_code NOT BETWEEN 400 AND 499
+		   AND NOT (ok=0 AND error IN ('stream_incomplete','compensated_prehold','client_cancel'))
+		   AND NOT (ok=0 AND status_code=200 AND error='')
 		 GROUP BY model HAVING calls>0 ORDER BY calls DESC`, since)
 	if err == nil {
 		for rows.Next() {
@@ -446,8 +450,13 @@ func (a *App) statusModelNorm() map[string]string {
 // 平均输出速度（tok/s）为流式生成阶段口径（首字之后），并剔除 <3 tok/s 异常样本（短输出/保底估算/非流式总耗时口径）。
 // 只统计收费线流量（resolved_line 非空）：免费分发流量（裸名走免费上游、resolved_line 为空）
 // 的上游故障与收费模型健康无关，不得计入（避免免费上游 NIM 故障污染收费模型状态）。
-// 成功率剔除与模型健康无关的失败：400/404/422（调用方参数错）、429（高峰限流，模型本身正常）、
-// 402（密钥面值耗尽，钥已判死）——只统计真实服务端失败（5xx/断流/网络错）。
+// 成功率剔除与模型健康无关的失败（仅作用 ok=0 行）：
+// 400/404/422/429/402（调用方参数错/限流/面值耗尽）、413（请求体过大，上游拒绝）、
+// 499/client_cancel（客户端等待期间主动断开）——用户侧问题；
+// compensated_prehold（悬空预扣补偿退款，网关侧流水修补）；
+// stream_incomplete（上游对长生成 300s 硬切：上游侧正常完成计费、内容多数已送达，渠道固有行为
+// 而非模型故障——真正反映健康的是 upstream_error/5xx/网络错）；
+// status_code=200 且 error='' 且 ok=0（在途未结算/进程重启被斩的僵尸行，非真实失败）。
 // 6h 窗口（rc20）：低频模型的历史失败不再永久拖累状态——窗口外请求自然过期，无近期流量则不出现在列表（前端显示待命中）。
 // 状态判定（rc20 放宽）：样本≥10 时 ≥99.5% 状态极佳 / ≥95% 正常 / ≥85% 部分异常 / 其余故障；
 // 小样本有失败最多判"部分异常"，不下重判。
@@ -455,16 +464,18 @@ func (a *App) statusModelNorm() map[string]string {
 func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(`
 		SELECT model, COUNT(*), COALESCE(SUM(ok),0),
-		       COALESCE(SUM(CASE WHEN status_code IN (400,404,422,429,402) THEN 1 ELSE 0 END),0),
+		       COALESCE(SUM(CASE WHEN ok=0 AND (status_code IN (400,404,422,429,402,413,499)
+		           OR error IN ('compensated_prehold','stream_incomplete','client_cancel')
+		           OR (status_code=200 AND error='')) THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN latency_ms ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND latency_ms>0 THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN tps ELSE 0 END),0),
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN 1 ELSE 0 END),0),
 		       MAX(ts)
 		FROM (
-			SELECT model, ok, latency_ms, tps, ts, status_code,
+			SELECT model, ok, latency_ms, tps, ts, status_code, error,
 			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY rowid DESC) rn
-			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code
+			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code, error
 		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != ''
 		        AND ts > strftime('%s','now') - 21600
 		      ORDER BY rowid DESC LIMIT 50000)

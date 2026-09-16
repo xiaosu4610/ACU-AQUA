@@ -234,6 +234,13 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
+		if ctxDone(r.Context()) || errors.Is(err, context.Canceled) {
+			// 客户端在等待上游响应期间主动断开（刷新/取消/SDK 超时）：与模型健康无关，
+			// 记 client_cancel（499），状态口径剔除，不再误判为模型故障
+			a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "client_cancel")
+			a.failRequest(rid, "client_cancel", 499)
+			return
+		}
 		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
 		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
@@ -277,6 +284,12 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			resp, key, err = client.DoKey(ctx, upBody, true, "/chat/completions", model.KeyIdx)
 			if err != nil {
 				log.Printf("[chat] 重试仍失败 model=%s line=%s err=%v", req.Model, line.ID, err)
+				if ctxDone(r.Context()) || errors.Is(err, context.Canceled) {
+					// 客户端在重试等待期间主动断开：与模型健康无关
+					a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "client_cancel")
+					a.failRequest(rid, "client_cancel", 499)
+					return
+				}
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 				a.failRequest(rid, "upstream_error", 502)
 				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
