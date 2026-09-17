@@ -378,16 +378,17 @@ func (a *App) myUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	recent := []map[string]any{}
 	rows2, err := a.DB.Query(
-		`SELECT endpoint, model, ok, latency_ms, ts FROM requests WHERE user_id=? ORDER BY ts DESC LIMIT 50`,
+		`SELECT endpoint, model, ok, latency_ms, ts, bill_amount_micro FROM requests WHERE user_id=? ORDER BY ts DESC LIMIT 50`,
 		actx.UserID)
 	if err == nil {
 		defer rows2.Close()
 		for rows2.Next() {
 			var endpoint, model string
-			var ok, lat, ts int64
-			_ = rows2.Scan(&endpoint, &model, &ok, &lat, &ts)
+			var ok, lat, ts, bill int64
+			_ = rows2.Scan(&endpoint, &model, &ok, &lat, &ts, &bill)
 			recent = append(recent, map[string]any{
 				"endpoint": endpoint, "model": model, "ok": ok == 1, "latency_ms": lat, "ts": ts,
+				"bill_amount_micro": bill,
 			})
 		}
 	}

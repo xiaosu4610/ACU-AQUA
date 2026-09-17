@@ -124,7 +124,7 @@ function grpTagCls(g?: string) {
   return g === 'per_call' ? 'ok' : g === 'free' ? 'acc' : g === 'per_token' || g === 'official' ? 'warn' : ''
 }
 function grpTitle(g?: string) {
-  if (g === 'per_call') return '免费 + 收费分组：免费模型随便调，收费模型（aqua/）每次成功请求扣一次余额、失败全额退回'
+  if (g === 'per_call') return '免费 + 收费分组：免费模型随便调，众筹模型（acu/）每次成功请求按单价扣站点公共额度、失败不计费'
   if (g === 'per_token') return '按量分组已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
   if (g === 'official') return '官方中转线路已下架，调用收费模型将失败——建议切换为「免费 + 收费」分组'
   if (g === 'free') return '纯免费分组：仅可调用免费模型，调收费模型直接拒绝'
@@ -506,7 +506,7 @@ function fmtTime(ts: number): string {
         <div class="grid2 mt16">
           <div class="card hoverable">
             <b><AqIcon name="spark" :size="16" /> 余额充值</b>
-            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。余额只影响收费模型 aqua/ 收费专线（按次计费），acu/ 众筹模型扣站点额度，其余模型完全免费。</div>
+            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。充值用于众筹池续力：acu/ 众筹模型按次计费扣站点公共额度，其余模型完全免费。</div>
             <div class="row wrap mt12">
               <button class="btn primary sm" @click="go('topup')"><AqIcon name="spark" :size="13" /> 立即充值</button>
               <span class="tag acc">今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
@@ -571,7 +571,7 @@ function fmtTime(ts: number): string {
         <!-- 创建表单 -->
         <div class="card">
           <b><AqIcon name="key" :size="16" /> 创建密钥</b>
-          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。「免费 + 收费」分组免费模型随便调、收费模型（aqua/ 前缀）按次扣余额；「纯免费」密钥只可调免费模型，绝不产生扣费。</p>
+          <p class="dim mt8">密钥原文仅在创建后展示一次，之后可随时在列表「复制 / 查看原文」，请妥善保管。「免费 + 收费」分组免费模型随便调、众筹模型（acu/ 前缀）按次扣站点公共额度；「纯免费」密钥只可调免费模型，绝不产生扣费。</p>
           <div class="form-grid mt12">
             <div class="field">
               <label>密钥名称</label>
@@ -742,7 +742,7 @@ function fmtTime(ts: number): string {
       <div v-show="view === 'topup'">
         <div class="banner warn">
           <AqIcon name="info" :size="14" />
-          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值余额用于收费模型（aqua/ 前缀）扣费，免费模型不受影响。acu/ 众筹公共模型扣<b>站点额度</b>不动余额——想为公共算力扩容请到 <router-link to="/pool">众筹池充值</router-link>（充值 1:1 注入站点额度）。</span>
+          <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；充值注入众筹公共额度，用于 acu/ 众筹模型（按次计费）扣费，免费模型不受影响——<router-link to="/pool">众筹池充值</router-link> 1:1 注入站点额度。</span>
         </div>
 
         <!-- 在线充值 -->
@@ -816,7 +816,7 @@ function fmtTime(ts: number): string {
       <div v-show="view === 'invite'">
         <div class="banner acc">
           <AqIcon name="send" :size="14" />
-          <span>邀请好友，双方得利：好友用你的链接注册并首充 ≥<b>¥{{ yuan(invite?.first_pay_min_micro) }}</b>，你得 <b>¥{{ yuan(invite?.reward_each_micro) }}</b> 邀请奖、好友额外得 <b>{{ invite?.rebate_pct || 10 }}% 充值加赠</b>；此后好友每笔 aqua/ 模型消费，你永久返 <b>{{ invite?.rebate_pct || 10 }}%</b>（直接发到余额）。奖励仅入余额用于调用；同 IP 短时间多次注册等刷单行为会被风控拦截。</span>
+          <span>邀请好友，双方得利：好友用你的链接注册并首充 ≥<b>¥{{ yuan(invite?.first_pay_min_micro) }}</b>，你得 <b>¥{{ yuan(invite?.reward_each_micro) }}</b> 邀请奖、好友额外得 <b>{{ invite?.rebate_pct || 10 }}% 充值加赠</b>；此后好友每笔 acu/ 模型消费，你永久返 <b>{{ invite?.rebate_pct || 10 }}%</b>（直接发到余额）。奖励仅入余额用于调用；同 IP 短时间多次注册等刷单行为会被风控拦截。</span>
         </div>
 
         <!-- 邀请码 + 链接 -->

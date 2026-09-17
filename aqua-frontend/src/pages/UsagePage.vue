@@ -9,12 +9,17 @@ interface UsageResp {
   today: { calls: number; ok_rate: number }
   week: { calls: number; ok_rate: number }
   by_model?: { model: string; calls: number }[]
-  recent?: { ok: boolean; endpoint: string; model: string; ts: number; latency_ms: number }[]
+  recent?: { ok: boolean; endpoint: string; model: string; ts: number; latency_ms: number; bill_amount_micro?: number }[]
 }
 interface ModelRow { model: string; width: number; val: string }
-interface RecentRow { ok: boolean; endpoint: string; model: string; time: string; ms: number }
+interface RecentRow { ok: boolean; endpoint: string; model: string; time: string; ms: number; amount: number | null }
 
 const cards = ref({ today: '--', todayRate: '--', week: '--', weekRate: '--' })
+
+/** 微元 → 元（去掉尾零，最多 5 位小数） */
+function microYuan(m: number): string {
+  return (m / 1e6).toFixed(5).replace(/0+$/, '').replace(/\.$/, '')
+}
 const modelRows = ref<ModelRow[]>([])
 const recentRows = ref<RecentRow[]>([])
 const msg = ref('')
@@ -54,6 +59,7 @@ async function loadUsage() {
       model: r.model || '',
       time: new Date(r.ts * 1000).toLocaleString(),
       ms: r.latency_ms,
+      amount: r.bill_amount_micro && r.bill_amount_micro > 0 ? r.bill_amount_micro : null,
     }))
     loaded.value = true
   } catch (e) {
@@ -148,7 +154,7 @@ onUnmounted(() => {
           </div>
           <div v-else class="tbl-wrap mt12">
             <table class="table">
-              <thead><tr><th>状态</th><th>端点</th><th>模型</th><th>时间</th><th class="num">延迟</th></tr></thead>
+              <thead><tr><th>状态</th><th>端点</th><th>模型</th><th>时间</th><th class="num">延迟</th><th class="num">本次扣费</th></tr></thead>
               <tbody>
                 <tr v-for="(r, i) in recentRows" :key="i">
                   <td><span class="tag" :class="r.ok ? 'ok' : 'bad'">{{ r.ok ? 'OK' : 'ERR' }}</span></td>
@@ -156,6 +162,13 @@ onUnmounted(() => {
                   <td><span class="cell-clip" :title="r.model">{{ r.model || '—' }}</span></td>
                   <td class="dim nowrap">{{ r.time }}</td>
                   <td class="num">{{ r.ms }}ms</td>
+                  <td class="num">
+                    <template v-if="r.amount != null">
+                      <b>¥{{ microYuan(r.amount) }}</b>
+                      <span v-if="r.model.startsWith('acu/')" class="dim" title="众筹模型按次计费：每次成功请求扣一次单价，从站点公共额度扣除，与生成长度无关"> · 按次</span>
+                    </template>
+                    <template v-else><span class="dim">免费</span></template>
+                  </td>
                 </tr>
               </tbody>
             </table>

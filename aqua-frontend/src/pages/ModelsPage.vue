@@ -230,6 +230,7 @@ const crowdModels = computed(() => orderedModels.value
     health: healthOf(m),
     st: statusOf(m),
     link: modelLink(m.id),
+    price: m.price_micro ?? null,
   })))
 const CROWD_DESC: Record<string, { t: string; d: string }> = {
   'acu/deepseek-v4-flash': { t: 'DeepSeek 极速轻旗舰', d: '秒回级响应，高频轻任务首选' },
@@ -649,6 +650,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               </div>
               <div class="row wrap mt8" style="gap: 6px;">
                 <span class="tag grad">按次计费</span>
+                <span v-if="m.price" class="tag grad num" title="每次成功请求按此单价从站点公共额度扣除，与生成长度无关">¥{{ microYuan(m.price) }}<em>/次</em></span>
                 <span v-if="m.health" class="tag"><span class="dot" :class="m.health.dot"></span>健康 {{ m.health.score }}</span>
                 <span v-if="m.st" class="tag bad" :title="m.st.title">{{ m.st.text }}</span>
               </div>
@@ -741,7 +743,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-if="loading" class="grid3">
             <div v-for="i in 3" :key="i"><div class="skeleton" style="min-height: 120px;"></div></div>
           </div>
-          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>收费模型加载中或暂未在售</b><div class="dim">在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
+          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>按次模型加载中或暂未在售</b><div class="dim">acu/ 众筹模型见上方众筹专区 · 在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
         </div>
 
         <!-- 按量计费分组 -->
@@ -887,17 +889,17 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <p class="dim" style="font-size: 13px;">Nvidia NIM 免费通道的全部模型——对话、视觉、语音、向量、重排统统不收一分钱，注册即可使用；用量统计仅用于展示，今后也不会收费。</p>
             </div>
             <div>
-              <b style="font-size: 13.5px;">2 · 收费模型：官方自营系列（统一 aqua/ 前缀）</b>
+              <b style="font-size: 13.5px;">2 · 众筹模型：按次计费（统一 acu/ 前缀）</b>
               <p class="dim" style="font-size: 13px;">
-                计费方式由你密钥的计费分组决定：「免费 + 收费」免费模型随便调，收费模型每次成功请求扣一次、与生成长度无关、失败全额退回；「纯免费」密钥仅可调用免费模型。acu/ 前缀的众筹公共模型任何密钥都能调，按次从站点公共额度扣费、不动个人余额。
-                调用方式与免费模型完全一致——同一个接口，只是 model 换成它们，支持流式输出。
+                acu/ 前缀众筹公共模型任何密钥都能调，<b>按次计费</b>：每次成功请求按单价从站点公共额度扣费、与生成长度无关、失败不计费，个人余额分文不动。
+                调用方式与免费模型完全一致——同一个接口，只是 model 换成它们，支持流式输出；控制台「我的用量」可查每次扣费。
               </p>
             </div>
             <div>
-              <b style="font-size: 13.5px;">3 · 如何获得余额</b>
+              <b style="font-size: 13.5px;">3 · 如何维持公共额度</b>
               <p class="dim" style="font-size: 13px;">
-                在线充值即时到账：登录后进入 <router-link to="/console?view=topup">个人控制台 · 余额充值</router-link>，
-                支付宝 / 微信任一渠道支付，支付金额 100% 全额到账。免费模型不受余额影响——没有余额照样随便用。
+                众筹模型扣的是站点公共额度：到 <router-link to="/pool">众筹池</router-link> 充值，支付宝 / 微信任一渠道，
+                支付金额 100% 全额注入公共池。免费模型不受额度影响——没有额度照样随便用。
               </p>
             </div>
           </div>

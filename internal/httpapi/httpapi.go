@@ -998,8 +998,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["out_price"] = float64(p.OutRate10) / 10000
 				item["description"] = "众筹按量计费：按 tokens 从公共站点额度扣费（缓存命中价更低），个人余额分文不动"
 			} else {
-				// 众筹扣池价不对外下发具体数字（内部拿货价口径；制度 v5 §3.3：前端众筹卡隐藏价目，成本/拿货字样绝不外泄）
-				item["description"] = "众筹按量计费：每次成功请求按实际 tokens 从公共站点额度扣费，个人余额分文不动"
+				// 20260917 站长指示：众筹转按次计费后，前端真实展示每次扣费单价（覆盖旧 v5 §3.3 隐藏价目制度）
+				item["price_micro"] = p.PriceMicro
+				item["description"] = fmt.Sprintf("众筹按次计费：%s 元/次（每次成功请求从站点公共额度扣一次，与生成长度无关，个人余额分文不动）", microToYuanStr(p.PriceMicro))
 			}
 			data = append(data, item)
 		}
