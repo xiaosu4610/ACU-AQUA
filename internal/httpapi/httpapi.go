@@ -643,9 +643,11 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		mergedLines := a.linesSnap()
 		for i := range mergedLines {
 			l := &mergedLines[i]
-			if l.Mode == "free" || l.Mode == "official" || l.Mode == "per_token" || l.AuthStyle == "codex" {
-				// official（tlk 官方中转）/ codex（GPT 账号池）/ per_token（按量专线 tlinks 等）线
-				// 不参与统一前缀合并：专属前缀（线 id 即前缀）单独输出（下方），避免与 aqua/ 同 site_id 混价
+			if l.Mode == "free" || l.Mode == "official" || l.Mode == "per_token" || l.Mode == "crowd" || l.AuthStyle == "codex" {
+				// official（tlk 官方中转）/ codex（GPT 账号池）/ per_token（按量专线 tlinks 等）/
+				// crowd（acu 众筹专线）线不参与统一前缀合并：均有专属前缀（线 id 即前缀）单独输出（下方）。
+				// crowd 曾漏排除——其 6 模型与 aqua/ 全重叠且价目同为 per_token，合并出 groups 重复双份
+				// （['per_token','per_token']，20260917 站长报告"未正确展示按量计费"根因之一）
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
@@ -684,7 +686,8 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			gs := merged[site]
 			item := map[string]any{
 				"id": a.Cfg.Billing.UnifiedPrefix + "/" + site, "object": "model",
-				"created": created, "owned_by": "acu", "paid": true,
+				// owned_by 跟前缀品牌走（aqua/→"aqua"）：原硬编码 "acu" 与众筹线品牌混淆（20260917 站长报告错标）
+				"created": created, "owned_by": a.Cfg.Billing.UnifiedPrefix, "paid": true,
 				"type": "chat", // 特殊计费模型类型下发（image/video…），前端零硬编码；来自线路模型配置
 			}
 			modes := []string{}
@@ -793,7 +796,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				}
 				data = append(data, map[string]any{
 					"id": full, "object": "model",
-					"created": created, "owned_by": "acu", "paid": true,
+					"created": created, "owned_by": l.ID, "paid": true,
 					"type":   "chat",
 					"groups": []string{"official"}, "mode": "official",
 					"in_price":    float64(p.InRate10) / 10000,
@@ -822,16 +825,27 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 						p = vp
 					}
 				}
-				data = append(data, map[string]any{
+				// mode/groups 跟价目行走（线内混挂 image 等按次模型时价目 mode=per_call，
+				// 标线 mode=per_token 会让前端按量卡错误展示 0 价三段——20260917 实测修复）
+				item := map[string]any{
 					"id": full, "object": "model",
-					"created": created, "owned_by": "acu", "paid": true,
+					"created": created, "owned_by": l.ID, "paid": true,
 					"type":   "chat",
-					"groups": []string{l.Mode}, "mode": l.Mode,
-					"in_price":    float64(p.InRate10) / 10000,
-					"cache_price": float64(p.CacheRate10) / 10000,
-					"out_price":   float64(p.OutRate10) / 10000,
-					"description": pricingDescription(m, p),
-				})
+					"groups": []string{p.Mode}, "mode": p.Mode,
+				}
+				if p.Mode == "per_token" {
+					item["in_price"] = float64(p.InRate10) / 10000
+					item["cache_price"] = float64(p.CacheRate10) / 10000
+					item["out_price"] = float64(p.OutRate10) / 10000
+				} else if p.Mode == "per_call" {
+					item["price_micro"] = p.PriceMicro
+				}
+				if m.Image {
+					item["type"] = "image"
+					item["image"] = true
+				}
+				item["description"] = pricingDescription(m, p)
+				data = append(data, item)
 			}
 		}
 		// per_token 按量专线（tlinks 等，codex 已单独处理）：专属前缀（线 id/xxx）单独输出——
@@ -854,16 +868,27 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 						p = vp
 					}
 				}
-				data = append(data, map[string]any{
+				// mode/groups 跟价目行走（线内混挂 image 等按次模型时价目 mode=per_call，
+				// 标线 mode=per_token 会让前端按量卡错误展示 0 价三段——20260917 实测修复）
+				item := map[string]any{
 					"id": full, "object": "model",
-					"created": created, "owned_by": "acu", "paid": true,
+					"created": created, "owned_by": l.ID, "paid": true,
 					"type":   "chat",
-					"groups": []string{l.Mode}, "mode": l.Mode,
-					"in_price":    float64(p.InRate10) / 10000,
-					"cache_price": float64(p.CacheRate10) / 10000,
-					"out_price":   float64(p.OutRate10) / 10000,
-					"description": pricingDescription(m, p),
-				})
+					"groups": []string{p.Mode}, "mode": p.Mode,
+				}
+				if p.Mode == "per_token" {
+					item["in_price"] = float64(p.InRate10) / 10000
+					item["cache_price"] = float64(p.CacheRate10) / 10000
+					item["out_price"] = float64(p.OutRate10) / 10000
+				} else if p.Mode == "per_call" {
+					item["price_micro"] = p.PriceMicro
+				}
+				if m.Image {
+					item["type"] = "image"
+					item["image"] = true
+				}
+				item["description"] = pricingDescription(m, p)
+				data = append(data, item)
 			}
 		}
 	} else {
@@ -887,7 +912,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					continue
 				}
 				item := map[string]any{
-					"id": full, "object": "model", "created": created, "owned_by": "acu",
+					"id": full, "object": "model", "created": created, "owned_by": l.ID,
 					"paid":        true,
 					"type":        "chat",
 					"mode":        p.Mode,
@@ -962,7 +987,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			}
 			item := map[string]any{
 				"id": full, "object": "model",
-				"created": created, "owned_by": "acu", "paid": false,
+				"created": created, "owned_by": l.ID, "paid": false,
 				"type":   "chat",
 				"groups": []string{"free", "crowd"}, "mode": "crowd",
 				"pool_billed": true,
