@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -649,7 +650,13 @@ func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 500, "internal_error", "订单创建失败")
 		return
 	}
-	payURL := a.epaySubmitURL(no, req.AmountMicro, req.Channel, req.Product)
+	payURL, perr := a.epaySubmitURL(no, req.AmountMicro, req.Channel, req.Product, clientIP(r))
+	if perr != nil {
+		log.Printf("[pay] mapi 建单失败 no=%s: %v", no, perr)
+		_, _ = a.DB.Exec("UPDATE payments SET status='failed' WHERE out_trade_no=?", no)
+		errOut(w, 502, "upstream_error", "支付通道暂时不可用，请稍后重试")
+		return
+	}
 	jsonOut(w, 200, map[string]any{
 		"out_trade_no": no, "pay_url": payURL,
 		"amount_micro": req.AmountMicro, "credit_micro": req.AmountMicro, "channel": req.Channel,
@@ -837,8 +844,10 @@ func (a *App) epaySettle(outTradeNo, tradeNo string) {
 	a.inviteOnFirstPay(uid, amount)
 }
 
-// epaySubmitURL 构造易支付跳转链接（MD5 签名，参数排序拼接）
-func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel, product string) string {
+// epaySubmitURL 向易支付 mapi.php 建单（POST + clientip），返回用户侧收银台链接。
+// 20260918 通道 xnoo：submit.php GET 跳转要求商户后台单独配置"支付接口商户"（未配置返回错误页），
+// mapi.php + clientip 直连生效；仅回 payurl 的直接用，仅回 qrcode 的取平台收银台 /pay/submit/{trade_no}/。
+func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel, product, clientIP string) (string, error) {
 	money := fmt.Sprintf("%.2f", float64(amountMicro)/1_000_000)
 	name := "余额充值"
 	if product == "pool" {
@@ -852,6 +861,7 @@ func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel, produ
 		"return_url":   a.Cfg.EPay.ReturnBase + "/pay/return",
 		"name":         name,
 		"money":        money,
+		"clientip":     clientIP,
 	}
 	params["sign"] = a.epaySign(params)
 	params["sign_type"] = "MD5"
@@ -859,7 +869,35 @@ func (a *App) epaySubmitURL(outTradeNo string, amountMicro int64, channel, produ
 	for k, val := range params {
 		v.Set(k, val)
 	}
-	return strings.TrimRight(a.Cfg.EPay.Gateway, "/") + "/submit.php?" + v.Encode()
+	resp, err := http.PostForm(strings.TrimRight(a.Cfg.EPay.Gateway, "/")+"/mapi.php", v)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", err
+	}
+	var j struct {
+		Code    int    `json:"code"`
+		Msg     string `json:"msg"`
+		TradeNo string `json:"trade_no"`
+		PayURL  string `json:"payurl"`
+		QRCode  string `json:"qrcode"`
+	}
+	if err := json.Unmarshal(body, &j); err != nil {
+		return "", fmt.Errorf("mapi 响应异常: %w", err)
+	}
+	if j.Code != 1 {
+		return "", fmt.Errorf("mapi code=%d msg=%s", j.Code, j.Msg)
+	}
+	if j.PayURL != "" {
+		return j.PayURL, nil
+	}
+	if j.TradeNo != "" {
+		return strings.TrimRight(a.Cfg.EPay.Gateway, "/") + "/pay/submit/" + j.TradeNo + "/", nil
+	}
+	return "", fmt.Errorf("mapi 未返回 payurl/trade_no")
 }
 
 // epaySign 易支付 MD5 签名：参数名 ASCII 升序 k=v& 连接（跳过 sign/sign_type/空值）+ 密钥
