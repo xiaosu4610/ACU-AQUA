@@ -68,6 +68,15 @@ type Line struct {
 	Proxy        string   `toml:"proxy"`          // 出站代理（http:// 或 socks5://，仅该线转发走代理；空=直连）
 	KeyFaceMicro int64    `toml:"key_face_micro"` // 每把密钥面值（微元，面值台账用；0=不限）
 	Dynamic      bool     `toml:"dynamic"`        // 免费线：启用动态目录（nvidia_models 表，自动同步上游新模型）
+	// KeyRPM 每钥每分钟请求上限（0=不限）：积分制上游（如商汤 Token Plan）按 key 限速，
+	// 防单钥打爆触发上游 RPM/风控；建议正式号 6。
+	KeyRPM int `toml:"key_rpm"`
+	// AuthFailsToKill 连续鉴权失败（401/403）判死阈值（0=默认 3）：上游 IP 级风控会
+	// 把"原本有效的 key"临时 401，立即判死会误杀全池——达阈值才判死，未达阈值走长冷却。
+	AuthFailsToKill int `toml:"auth_fails_to_kill"`
+	// StrictClean 转发前清洗请求体（剥 tools[].function.strict 等上游白名单外字段；
+	// 针对请求体校验严格的积分制网关）
+	StrictClean bool `toml:"strict_clean"`
 	// vip 折扣 = 普通售价 × VipNum/VipDen（分数表达，整数可除零精度损失）
 	VipNum  int64    `toml:"vip_multiplier_num"`
 	VipDen  int64    `toml:"vip_multiplier_den"`

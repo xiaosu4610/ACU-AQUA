@@ -6,6 +6,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,16 @@ type KeyState struct {
 	Dead         bool
 	LastFailTs   int64
 	Fails        int
+	// AuthFails 连续鉴权失败（401/403）计数：达线阈值才判死（AuthFailsToKill，默认 3）。
+	// 背景阶段 0 实测：上游 IP 级风控会把"原本有效的 key"临时 401（Forbidden code=16），
+	// 立即判死会误杀全池；超过 1 小时的失败重新计数（风控通常临时）
+	AuthFails  int
+	AuthFailTs int64
+	// CoolUntil 自适应冷却截止（unix 秒）：ReportFail 指数退避（300s 起 cap 30min）、
+	// 429 insufficient_quota 长 30min 冷却、鉴权疑似风控长 15min 冷却共用
+	CoolUntil int64
+	// Recent 最近 60s 请求时间戳环（每钥 RPM 限速用）
+	Recent []int64
 }
 
 // KeyPool 密钥池（单钥用尽制）：粘住当前钥直到死钥/冷却，再顺延到下一把。
@@ -36,6 +47,8 @@ type KeyPool struct {
 	keys     []*KeyState
 	cur      int
 	CoolSecs int64 // 失败冷却秒数
+	RPM      int   // 每钥每分钟请求上限（0=不限）
+	AuthKill int   // 连续鉴权失败判死阈值（0=3）
 }
 
 func NewKeyPool(keys []string, faceMicro int64, coolSecs int64) *KeyPool {
@@ -56,13 +69,27 @@ func (p *KeyPool) Len() int {
 	return len(p.keys)
 }
 
-// usable 当前时刻该钥是否可用（未死、不在冷却窗口）
+// usable 当前时刻该钥是否可用（未死、不在冷却窗口、未超每钥 RPM）
 func (p *KeyPool) usable(k *KeyState, now int64) bool {
 	if k.Dead {
 		return false
 	}
+	if k.CoolUntil > now {
+		return false
+	}
 	if p.CoolSecs > 0 && k.Fails > 0 && now-k.LastFailTs < p.CoolSecs {
 		return false
+	}
+	if p.RPM > 0 {
+		cnt := 0
+		for _, t := range k.Recent {
+			if now-t < 60 {
+				cnt++
+			}
+		}
+		if cnt >= p.RPM {
+			return false
+		}
 	}
 	return true
 }
@@ -155,12 +182,71 @@ func (p *KeyPool) ReportDead(k *KeyState) {
 	k.Dead = true
 }
 
-// ReportFail 记录失败（冷却计数）
+// ReportFail 记录失败（自适应指数冷却：300s 起 ×2 递增，cap 30 分钟）
 func (p *KeyPool) ReportFail(k *KeyState) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k.Fails++
 	k.LastFailTs = time.Now().Unix()
+	cool := int64(300)
+	for i := 1; i < k.Fails && cool < 1800; i++ {
+		cool *= 2
+	}
+	if cool > 1800 {
+		cool = 1800
+	}
+	if until := k.LastFailTs + cool; until > k.CoolUntil {
+		k.CoolUntil = until
+	}
+}
+
+// ReportAuthFail 记录鉴权失败（401/403）：疑似风控走长冷却不判死；
+// 连续失败达 AuthKill 阈值（>1h 重置计数）才返回 true 由调用方判死。
+func (p *KeyPool) ReportAuthFail(k *KeyState) (kill bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().Unix()
+	if k.AuthFailTs > 0 && now-k.AuthFailTs > 3600 {
+		k.AuthFails = 0 // 距上次鉴权失败超 1h：风控多为临时，重新计数
+	}
+	k.AuthFails++
+	k.AuthFailTs = now
+	killAt := p.AuthKill
+	if killAt <= 0 {
+		killAt = 3
+	}
+	// 长冷却 15 分钟（远长于普通失败，避免风控期反复打上游延长封禁）
+	k.CoolUntil = now + 900
+	k.LastFailTs = now
+	return k.AuthFails >= killAt
+}
+
+// ReportQuotaDead 配额耗尽（429 insufficient_quota）：长冷却 30 分钟等积分窗口刷新，
+// 不判死（号还在、积分会回来）
+func (p *KeyPool) ReportQuotaDead(k *KeyState) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if until := time.Now().Unix() + 1800; until > k.CoolUntil {
+		k.CoolUntil = until
+	}
+	k.LastFailTs = time.Now().Unix()
+}
+
+// markUse 记录一次请求（每钥 RPM 滑窗）
+func (p *KeyPool) markUse(k *KeyState) {
+	if p.RPM <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().Unix()
+	k.Recent = append(k.Recent, now)
+	// 裁剪 60s 窗口外条目（从头裁即可，时间有序）
+	cut := 0
+	for cut < len(k.Recent) && now-k.Recent[cut] >= 60 {
+		cut++
+	}
+	k.Recent = k.Recent[cut:]
 }
 
 // ReportSuccess 成功清零失败计数
@@ -168,6 +254,7 @@ func (p *KeyPool) ReportSuccess(k *KeyState) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k.Fails = 0
+	k.CoolUntil = 0
 }
 
 // Stats 密钥池快照（管理后台台账）
@@ -214,7 +301,7 @@ func NewClient(l *config.Line) *Client {
 			tr.Proxy = http.ProxyURL(pu)
 		}
 	}
-	return &Client{
+	cl := &Client{
 		Line: l,
 		Pool: NewKeyPool(l.Keys, l.KeyFaceMicro, 300),
 		HTTP: &http.Client{
@@ -224,6 +311,10 @@ func NewClient(l *config.Line) *Client {
 			Transport: tr,
 		},
 	}
+	// 线级调度参数注入：每钥 RPM 限速与鉴权判死阈值（商汤积分线用，其他线零值=关闭）
+	cl.Pool.RPM = l.KeyRPM
+	cl.Pool.AuthKill = l.AuthFailsToKill
+	return cl
 }
 
 // 每钥重试次数与最多尝试密钥数
@@ -279,6 +370,7 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 	tried := map[int]bool{}
 	acquireTries := 0
 	channelDown := false // 渠道级不可用：换钥无意义，立即终止
+	quotaHits, nonQuotaFails := 0, 0 // 429 分型计数：全池纯配额耗尽 → 上层转译为业务态
 	for hop := 0; hop < maxKeyHops; hop++ {
 		k, err := c.Pool.AcquireSkip(tried)
 		if err != nil {
@@ -307,6 +399,7 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 					// 否则一次客户端取消会把全池密钥拖入冷却，整线瘫痪 5 分钟。
 					return nil, nil, err
 				}
+				nonQuotaFails++
 				c.Pool.ReportFail(k)
 				log.Printf("[upstream] line=%s key=%d 网络错误(第%d次): %v", c.Line.ID, k.Idx, try+1, err)
 				continue // 同钥重试
@@ -316,19 +409,40 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 			case sc == 200:
 				c.Pool.ReportSuccess(k)
 				return resp, k, nil
-			case sc == 401 || sc == 403 || sc == 402:
-				// 密钥无效 / 欠费 / 上游面值耗尽：立即判死并换钥。
-				// 402 尤其关键：面值耗尽的钥在上游永远不会再成功，粘住它的用户会反复 402/502
-				// ——判死后粘性自动漂移到下一把可用钥并重试本次请求。
+			case sc == 401 || sc == 403:
+				// 鉴权失败分型（阶段 0 实测：上游 IP 级风控会把有效 key 临时 401，
+				// 立即判死会误杀全池）——达阈值才判死，未达阈值长冷却 15 分钟。
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("UPSTREAM_STATUS_%d", sc)
+				nonQuotaFails++
+				if c.Pool.ReportAuthFail(k) {
+					c.Pool.ReportDead(k)
+					log.Printf("[upstream] line=%s key=%d 状态%d 鉴权连续失败达阈值，判死换钥", c.Line.ID, k.Idx, sc)
+				} else {
+					log.Printf("[upstream] line=%s key=%d 状态%d 疑似上游风控，长冷却15min未判死", c.Line.ID, k.Idx, sc)
+				}
+			case sc == 402:
+				// 上游面值耗尽：该钥永远不会再成功，立即判死换钥
+				lastErr = fmt.Errorf("UPSTREAM_STATUS_402")
+				nonQuotaFails++
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 				_ = resp.Body.Close()
 				c.Pool.ReportDead(k)
-				log.Printf("[upstream] line=%s key=%d 状态%d（无效/欠费/面值耗尽），判死换钥", c.Line.ID, k.Idx, sc)
+				log.Printf("[upstream] line=%s key=%d 状态402（面值耗尽），判死换钥", c.Line.ID, k.Idx)
 			case sc == 429 || sc >= 500:
-				// 读错误体（小），判断是否模型级错误
+				// 读错误体（小），分型处理
 				eb, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 				_ = resp.Body.Close()
+				if sc == 429 && strings.Contains(strings.ToLower(string(eb)), "insufficient_quota") {
+					// 配额耗尽（5h 积分窗口/周额度打完）：号还在、积分会回来，
+					// 长冷却 30 分钟自动复活，绝不判死；换钥继续
+					lastErr = fmt.Errorf("UPSTREAM_QUOTA_EXHAUSTED")
+					quotaHits++
+					c.Pool.ReportQuotaDead(k)
+					log.Printf("[upstream] line=%s key=%d 429 配额耗尽，长冷却30min换钥", c.Line.ID, k.Idx)
+					break
+				}
 				lastErr = fmt.Errorf("UPSTREAM_STATUS_%d", sc)
 				if IsChannelExhausted(eb) {
 					// 渠道级不可用：全钥共享同一渠道池，重试/换钥注定失败 → 立即返回
@@ -342,6 +456,7 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 					modelResp = rebuildResp(resp, eb)
 					log.Printf("[upstream] line=%s key=%d 状态%d 模型级错误，直接换钥", c.Line.ID, k.Idx, sc)
 				} else {
+					nonQuotaFails++
 					c.Pool.ReportFail(k)
 					log.Printf("[upstream] line=%s key=%d 状态%d(第%d次) body=%s，同钥重试", c.Line.ID, k.Idx, sc, try+1, eb)
 					continue // 同钥退避重试
@@ -377,6 +492,10 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("KEY_POOL_EXHAUSTED")
 	}
+	// 全池纯配额耗尽（无其他类型失败）：上层转译为"本时段额度用完"业务态而非故障
+	if quotaHits > 0 && nonQuotaFails == 0 {
+		lastErr = fmt.Errorf("UPSTREAM_QUOTA_EXHAUSTED")
+	}
 	return nil, nil, lastErr
 }
 
@@ -404,11 +523,16 @@ func (c *Client) DoKey(ctx context.Context, body []byte, stream bool, path strin
 	return resp, k, nil
 }
 
-// send 单次上游请求：注入密钥认证（bearer / x-api-key / codex OAuth）
+// send 单次上游请求：注入密钥认证（bearer / x-api-key / codex OAuth）。
+// StrictClean 线先清洗请求体（剥上游白名单外字段）；成功获得 HTTP 响应（不论状态码）
+// 都记入每钥 RPM 滑窗——网络层失败（未达上游）不计。
 func (c *Client) send(ctx context.Context, k *KeyState, body []byte, stream bool, path string) (*http.Response, error) {
 	if c.Line.AuthStyle == "codex" {
 		// Codex（ChatGPT 账号）线：RT→AT 换票 + chat/completions↔Responses 协议转换（见 codex.go）
 		return c.codexSend(ctx, k, body, stream, path)
+	}
+	if c.Line.StrictClean {
+		body = cleanStrictBody(body)
 	}
 	url := strings.TrimRight(c.Line.BaseURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -425,7 +549,41 @@ func (c *Client) send(ctx context.Context, k *KeyState, body []byte, stream bool
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	return c.HTTP.Do(req)
+	resp, err := c.HTTP.Do(req)
+	if err == nil {
+		c.Pool.markUse(k)
+	}
+	return resp, err
+}
+
+// cleanStrictBody 请求清洗（StrictClean 线）：递归剥离 tools[].function.strict 等
+// 上游请求体白名单外的非标准字段（阶段 0 实测某些积分制网关对未列出字段整单拒绝）。
+// 清洗失败（非合法 JSON）时原样返回——绝不让清洗本身弄坏请求。
+func cleanStrictBody(body []byte) []byte {
+	var v any
+	if json.Unmarshal(body, &v) != nil {
+		return body
+	}
+	stripStrict(v)
+	nb, err := json.Marshal(v)
+	if err != nil {
+		return body
+	}
+	return nb
+}
+
+func stripStrict(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		delete(t, "strict")
+		for _, vv := range t {
+			stripStrict(vv)
+		}
+	case []any:
+		for _, vv := range t {
+			stripStrict(vv)
+		}
+	}
 }
 
 // ReadAll 便捷读响应（上限 64MB）

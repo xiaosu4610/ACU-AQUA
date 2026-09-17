@@ -274,7 +274,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		stormFail(actx.KeyHash)
 		a.failRequest(rid, "upstream_error", 502)
-		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+		a.upstreamFailOut(w, line, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -326,7 +326,7 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 				stormFail(actx.KeyHash)
 				a.failRequest(rid, "upstream_error", 502)
-				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+				a.upstreamFailOut(w, line, err)
 				return
 			}
 			if key != nil {
@@ -394,6 +394,17 @@ func forceNonStream(body []byte) ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// upstreamFailOut 上游 Do/DoKey 失败统一转译（报错站点化：客户端只见站点中文错误码）。
+// 全池纯配额耗尽（429 insufficient_quota）→ 503 line_exhausted 业务态（引导切线），
+// 不当故障处理；其余一律 502 upstream_error 通用繁忙文案（上游原文绝不透传）。
+func (a *App) upstreamFailOut(w http.ResponseWriter, line *config.Line, derr error) {
+	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_QUOTA_EXHAUSTED") {
+		errOut(w, 503, "line_exhausted", line.Name+"本时段额度已用完，请改用其他模型或稍后再试")
+		return
+	}
+	errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+}
+
 // serveFakeStreamChat 伪流式主路径：向上游发非流式请求，完整响应到手后转换为
 // 标准 OpenAI chat.completion.chunk SSE 流回放给客户端（首帧 role → reasoning →
 // content 分片 → tool_calls → finish_reason → [可选 usage 帧] → [DONE]）。
@@ -418,7 +429,7 @@ func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx co
 			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
 			stormFail(keyHash)
 			a.failRequest(rid, "upstream_error", 502)
-			errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+			a.upstreamFailOut(w, line, derr)
 			return
 		}
 		stormReset(keyHash) // 上游拨号成功：清零秒败计数
