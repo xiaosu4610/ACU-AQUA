@@ -121,21 +121,35 @@ func (a *App) syncNvidiaModels() (added, removed int, err error) {
 	}
 
 	// —— 3. 差集计算 ——
-	var toAdd []([2]string) // [lowerID, 原始ID]
-	for low, orig := range upstreamSet {
-		if configured[low] {
+	// id 统一剥厂商前缀（裸名口径，与配置目录/免费分发 site_id 对齐）：
+	// 原先直接插上游全名（如 z-ai/glm-5.3-flash），与存量裸名行构成双份，且 SplitModel
+	// 会把全名误拆为线前缀——20260917 站长报告"可见不可调/目录重复"根因
+	bareOf := func(id string) string {
+		if i := strings.Index(id, "/"); i >= 0 {
+			return id[i+1:]
+		}
+		return id
+	}
+	var toAdd []([2]string) // [裸名lower, 上游原始ID]
+	for _, orig := range upstreamSet {
+		bare := strings.ToLower(bareOf(orig))
+		if bare == "" || configured[bare] {
 			continue // 已在配置目录：不进动态表
 		}
-		if _, ok := existing[low]; ok {
-			continue // 表内已有
+		if _, ok := existing[bare]; ok {
+			continue // 表内已有（裸名口径）
 		}
-		toAdd = append(toAdd, [2]string{low, orig})
+		toAdd = append(toAdd, [2]string{bare, orig})
 	}
 	var toRemove []string // lower(id)
 	for low, up := range existing {
 		key := strings.ToLower(up)
 		if key == "" {
 			key = low
+		}
+		if strings.Contains(low, "/") {
+			toRemove = append(toRemove, low) // 存量全名行：统一裸名口径清理
+			continue
 		}
 		if _, ok := upstreamSet[key]; !ok {
 			toRemove = append(toRemove, low) // 上游已无此模型：清理

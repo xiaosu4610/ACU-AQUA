@@ -159,11 +159,21 @@ func (a *App) dynamicModels(lineID string, configured map[string]bool, retired m
 	return out
 }
 
-// dynamicUpstreamID 动态目录反查上游真实 ID
+// dynamicUpstreamID 动态目录反查上游真实 ID。
+// 全名调用兼容：客户端可能用上游原始全名（如 z-ai/glm-5.3-flash，经 SplitModel 拆线失败后
+// 原样进入免费分发）——先按原样查，不中再剥厂商前缀按裸名查（动态表统一裸名口径，20260917）。
 func (a *App) dynamicUpstreamID(model string) (string, bool) {
 	var up string
 	err := a.DB.QueryRow("SELECT upstream_id FROM nvidia_models WHERE id = ?", model).Scan(&up)
 	if err != nil || up == "" {
+		if i := strings.Index(model, "/"); i >= 0 {
+			bare := model[i+1:]
+			err = a.DB.QueryRow("SELECT upstream_id FROM nvidia_models WHERE id = ?", bare).Scan(&up)
+			if err != nil || up == "" {
+				return "", false
+			}
+			return up, true
+		}
 		return "", false
 	}
 	return up, true
