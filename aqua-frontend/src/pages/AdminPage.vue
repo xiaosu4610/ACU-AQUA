@@ -951,7 +951,7 @@ async function doUserKeyRevoke(kid: number) {
               <div class="kpi">
                 <span>计费模式</span>
                 <b style="font-size: 19px;">按次计费</b>
-                <span class="trend">每次成功请求扣一次，与生成长度无关；acu/ 众筹线按次扣站点公共额度（拿货价 +5~6%）</span>
+                <span class="trend">每次成功请求扣一次，与生成长度无关；acu/ 众筹线按次扣站点公共额度（拿货价 +40~50%，含支付宝 5% / 微信 6% 通道费）</span>
               </div>
               <div class="kpi"><span>通道手续费（本站承担）</span><b>¥{{ yuan(stats.upstream.fee_micro || 0) }}</b><span class="trend">实付费率 {{ ((stats.upstream.fee_rate ?? 0) * 100).toFixed(2) }}%</span></div>
             </div>
