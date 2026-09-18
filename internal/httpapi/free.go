@@ -492,7 +492,18 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		w.Header().Set("X-AQUA-Model", model)
 		w.Header().Set("X-AQUA-Line", line.ID)
 		if req.Stream {
-			a.serveFreeStreamChat(w, r, resp, rid, model, start)
+			a.serveFreeStreamChat(w, r, resp, cancel, rid, model, start, func() (*http.Response, context.CancelFunc, bool) {
+				r2, c2, _ := a.freeUpstreamChat(r, body, req, line, upID)
+				if r2 == nil || r2.StatusCode >= 400 {
+					if r2 != nil {
+						_, _ = io.Copy(io.Discard, io.LimitReader(r2.Body, 8<<10))
+						r2.Body.Close()
+						c2()
+					}
+					return nil, nil, false
+				}
+				return r2, c2, true
+			})
 		} else {
 			a.serveFreeJSONChat(w, resp, rid, model, start)
 		}
@@ -511,6 +522,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 	var (
 		chosenModel string
 		chosenLine  *config.Line
+		chosenUpID  string
 		resp        *http.Response
 		cancel      context.CancelFunc
 	)
@@ -522,9 +534,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp2, cancel2, et := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp2 == nil {
 			a.recordHealth(m, false, et, 0, time.Since(start).Milliseconds())
-			if et == "timeout" {
-				a.markRetired(upID)
-			}
+			// timeout 不计 retired（过载风暴会整批误隐健康模型，20260918 实测）
 			continue
 		}
 		if resp2.StatusCode == 404 || resp2.StatusCode == 410 {
@@ -534,7 +544,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			a.markRetired(upID)
 			continue
 		}
-		chosenModel, chosenLine, resp, cancel = m, line, resp2, cancel2
+		chosenModel, chosenLine, chosenUpID, resp, cancel = m, line, upID, resp2, cancel2
 		if resp2.StatusCode < 400 {
 			break
 		}
@@ -545,9 +555,10 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp = nil
 	}
 	if resp == nil {
-		a.failRequest0(uid, keyHash, req.Model, req.Stream, "upstream_error", 502)
-		errOut(w, 502, "upstream_error",
-			"智能路由的候选模型这会儿全部没有响应（上游波动），请稍后重试，或直接指定一个模型——GET /v1/models 可查可用列表")
+		// 候选全败：业务态繁忙（503），不当 502 故障处理（20260918 紧急修复：auto 132×502/时）
+		a.failRequest0(uid, keyHash, req.Model, req.Stream, "auto_exhausted", 503)
+		errOut(w, 503, "auto_exhausted",
+			"智能路由的候选模型这会儿全部繁忙（上游波动），请稍后重试，或直接指定一个模型——GET /v1/models 可查可用列表")
 		return
 	}
 	defer cancel()
@@ -555,7 +566,18 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 	w.Header().Set("X-AQUA-Model", chosenModel)
 	w.Header().Set("X-AQUA-Line", chosenLine.ID)
 	if req.Stream {
-		a.serveFreeStreamChat(w, r, resp, rid, chosenModel, start)
+		a.serveFreeStreamChat(w, r, resp, cancel, rid, chosenModel, start, func() (*http.Response, context.CancelFunc, bool) {
+			r2, c2, _ := a.freeUpstreamChat(r, body, req, chosenLine, chosenUpID)
+			if r2 == nil || r2.StatusCode >= 400 {
+				if r2 != nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(r2.Body, 8<<10))
+					r2.Body.Close()
+					c2()
+				}
+				return nil, nil, false
+			}
+			return r2, c2, true
+		})
 	} else {
 		a.serveFreeJSONChat(w, resp, rid, chosenModel, start)
 	}
@@ -653,22 +675,47 @@ func (a *App) serveFreeJSONChat(w http.ResponseWriter, resp *http.Response, rid 
 	_, _ = w.Write(stripSensitive(raw))
 }
 
-// serveFreeStreamChat SSE 流式：逐行转发 + usage 末帧捕获 + 流结束落库
-func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, rid int64, model string, start time.Time) {
-	defer resp.Body.Close()
+// serveFreeStreamChat SSE 流式：逐行转发 + usage 末帧捕获 + 流结束落库。
+// 稳态保障（20260918 紧急修复，"老是断开连接"主诉）：
+//   - 响应头延迟到首帧到达才写——首帧未到前任何失败都能整体重来；
+//   - 首帧未到即断流（上游建连即掐，sensenova 过载常见）：refetch 换钥重试一次，
+//     重试仍失败则以 JSON 业务态报错（而非半截 SSE）；
+//   - refetch 为 nil 时保持旧行为（如 tools 场景）。
+func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, cancel context.CancelFunc, rid int64, model string, start time.Time, refetch func() (*http.Response, context.CancelFunc, bool)) {
+	curResp, curCancel := resp, cancel
+	defer func() {
+		curResp.Body.Close()
+		curCancel()
+	}()
 	flusher, okF := w.(http.Flusher)
 	if !okF {
 		a.failRequest(rid, "no_flusher", 500)
 		errOut(w, 500, "internal_error", "流式不可用")
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(resp.StatusCode)
 
 	var u billing.Usage
 	var firstByte time.Time // 首帧到达时间：tps 按生成阶段（首字之后）计
+	headersSent := false
+	retried := false
+	sendHeaders := func() {
+		if headersSent {
+			return
+		}
+		headersSent = true
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(curResp.StatusCode)
+	}
+	// 初始响应即为错误码：直接 JSON 报错（头未发，可安全改写）
+	if curResp.StatusCode >= 400 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(curResp.Body, 64<<10))
+		a.failRequest(rid, fmt.Sprintf("upstream_%d", curResp.StatusCode), curResp.StatusCode)
+		errOut(w, curResp.StatusCode, "upstream_error", "上游返回错误（"+fmt.Sprintf("%d", curResp.StatusCode)+"），请稍后重试")
+		return
+	}
+
 	buf := make([]byte, 0, 32<<10)
 	tmp := make([]byte, 16<<10)
 	for {
@@ -678,10 +725,11 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 			return
 		default:
 		}
-		n, rerr := resp.Body.Read(tmp)
+		n, rerr := curResp.Body.Read(tmp)
 		if n > 0 {
 			if firstByte.IsZero() {
 				firstByte = time.Now()
+				sendHeaders()
 			}
 			buf = append(buf, tmp[:n]...)
 			for {
@@ -698,6 +746,20 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 			}
 		}
 		if rerr != nil {
+			// 首帧未到即断流：尚未向客户端写过任何字节 → 换钥整体重试一次
+			if !headersSent && !retried && refetch != nil && r.Context().Err() == nil {
+				retried = true
+				a.recordHealth(model, false, "network_error", 0, time.Since(start).Milliseconds())
+				curResp.Body.Close()
+				curCancel()
+				if r2, c2, ok2 := refetch(); ok2 {
+					curResp, curCancel = r2, c2
+					continue
+				}
+				a.failRequest(rid, "stream_incomplete", 503)
+				errOut(w, 503, "line_busy", "上游连接刚建立即中断（已自动重试仍失败），请稍后重试")
+				return
+			}
 			a.finishFreeStream(rid, model, u, start, firstByte)
 			return
 		}

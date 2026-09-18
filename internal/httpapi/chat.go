@@ -75,11 +75,19 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	// （无前缀裸模型 / 旧厂商前缀 zhipu/glm-4-flash / auto 智能路由 / 动态目录）
 	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
 	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
+	// 裸名兼容路由（20260918 紧急修复）：旧众筹时代客户端以裸名调用收费模型
+	// （deepseek-v4-pro / glm-5.3 / kimi-k3 等），此前被免费线同名模型截胡——
+	// 调到商汤免费体验线吃 429/断流，用户误以为"收费渠道故障"。
+	// 裸名命中非免费线模型 → 视同统一前缀调用（鉴权+计费），免费线只服务裸名免费模型。
+	if !hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && a.paidLineForSiteID(req.Model) != nil {
+		unified = true
+		siteID = config.NormalizeModel(req.Model)
+	}
 	var line *config.Line
 	if hasPrefix && !unified {
 		line = a.lineByID(lineID)
 	}
-	if !hasPrefix || (line == nil && !unified) || (line != nil && line.Mode == "free") {
+	if !unified && (line == nil || line.Mode == "free") {
 		// 绞杀者模式：免费线仍由旧网关承接（免 Go 鉴权，旧网关自管）
 		if legacyProxy != nil {
 			a.proxyChat(w, r, body)
@@ -392,6 +400,23 @@ func forceNonStream(body []byte) ([]byte, error) {
 	m["stream"] = []byte("false")
 	delete(m, "stream_options")
 	return json.Marshal(m)
+}
+
+// paidLineForSiteID 裸名是否命中非免费线（收费/官方等计费线）的模型：
+// 裸名兼容路由用——裸名撞收费线模型时优先走计费路径，绝不被免费线同名模型截胡
+func (a *App) paidLineForSiteID(siteID string) *config.Line {
+	for i := range a.Cfg.Lines {
+		l := &a.Cfg.Lines[i]
+		if l.Mode == "free" {
+			continue
+		}
+		for j := range l.Models {
+			if strings.EqualFold(l.Models[j].SiteID, siteID) {
+				return l
+			}
+		}
+	}
+	return nil
 }
 
 // upstreamFailOut 上游 Do/DoKey 失败统一转译（报错站点化：客户端只见站点中文错误码）。

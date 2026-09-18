@@ -1243,7 +1243,7 @@ func (a *App) handleToolsChat(w http.ResponseWriter, r *http.Request) {
 			rid := a.insertRequest(actx.UserID, actx.KeyHash, "tools", cand, true)
 			w.Header().Set("X-AQUA-Model", cand)
 			w.Header().Set("X-AQUA-Line", line.ID)
-			a.serveFreeStreamChat(w, r, resp, rid, cand, time.Now())
+			a.serveFreeStreamChat(w, r, resp, cancel, rid, cand, time.Now(), nil)
 			return
 		}
 		if resp.StatusCode >= 400 {

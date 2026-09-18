@@ -256,7 +256,7 @@ func (a *App) handleTreehole(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-AQUA-Model", cand)
 		w.Header().Set("X-AQUA-Line", line.ID)
 		if stream {
-			a.serveFreeStreamChat(w, r, resp, rid, cand, time.Now())
+			a.serveFreeStreamChat(w, r, resp, cancel, rid, cand, time.Now(), nil)
 		} else {
 			a.serveFreeJSONChat(w, resp, rid, cand, time.Now())
 		}
