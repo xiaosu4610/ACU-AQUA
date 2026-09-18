@@ -18,6 +18,8 @@ const (
 	banThreshold = 6                 // 10 分钟内触发限流达到该次数 → 封禁
 	banDuration  = 60 * time.Minute  // 封禁时长
 	crowdUserCon = 3                 // crowd 每用户在途并发上限
+	freeUserCon  = 1                 // 官方自营免费体验线（prefixed）每用户在途并发上限
+	freeUserRPM  = 10                // 官方自营免费体验线每用户每分钟请求数（体验定位：满速走收费线）
 )
 
 type ipGuard struct {
@@ -26,6 +28,8 @@ type ipGuard struct {
 	rejects map[string][]time.Time // 每 IP 窗口内被拒时间戳
 	banned  map[string]time.Time   // IP → 封禁到期时间
 	crowd   map[int64]int32        // crowd 每用户在途并发计数
+	freeCon map[int64]int32        // 免费体验线每用户在途并发计数
+	freeRPM map[int64][]time.Time  // 免费体验线每用户窗口内请求时间戳
 	lastGC  time.Time
 }
 
@@ -34,6 +38,8 @@ var guard = &ipGuard{
 	rejects: map[string][]time.Time{},
 	banned:  map[string]time.Time{},
 	crowd:   map[int64]int32{},
+	freeCon: map[int64]int32{},
+	freeRPM: map[int64][]time.Time{},
 }
 
 // guardBypass 测试旁路（仅 guard_test.go 的 init 置 true，生产恒 false）
@@ -118,6 +124,48 @@ func (g *ipGuard) crowdEnter(uid int64) (func(), bool) {
 		defer g.mu.Unlock()
 		if g.crowd[uid]--; g.crowd[uid] <= 0 {
 			delete(g.crowd, uid)
+		}
+	}, true
+}
+
+// freeAllow 官方自营免费体验线每用户 RPM 闸（prefixed 免费线专用；uid=0 匿名不计——匿名走 IP 级滑窗）
+func (g *ipGuard) freeAllow(uid int64) bool {
+	if uid <= 0 || guardBypass {
+		return true
+	}
+	now := time.Now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	arr := g.freeRPM[uid][:0]
+	for _, t := range g.freeRPM[uid] {
+		if now.Sub(t) < ipWindow {
+			arr = append(arr, t)
+		}
+	}
+	g.freeRPM[uid] = arr
+	if len(arr) >= freeUserRPM {
+		return false
+	}
+	g.freeRPM[uid] = append(arr, now)
+	return true
+}
+
+// freeEnter 官方自营免费体验线每用户并发闸：放行返回释放函数；超限返回 false
+func (g *ipGuard) freeEnter(uid int64) (func(), bool) {
+	if uid <= 0 || guardBypass {
+		return func() {}, true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.freeCon[uid] >= freeUserCon {
+		return nil, false
+	}
+	g.freeCon[uid]++
+	return func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.freeCon[uid]--; g.freeCon[uid] <= 0 {
+			delete(g.freeCon, uid)
 		}
 	}, true
 }

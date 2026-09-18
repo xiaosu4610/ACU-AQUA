@@ -221,6 +221,17 @@ func (p *KeyPool) ReportAuthFail(k *KeyState) (kill bool) {
 	return k.AuthFails >= killAt
 }
 
+// ReportRateLimit 限流（429 tpm/rpm）短冷却 20s：窗口期过后该钥自动恢复可用，
+// 不计 Fails（避免触发 300s 指数退避把好钥锁死 5 分钟）
+func (p *KeyPool) ReportRateLimit(k *KeyState) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if until := time.Now().Unix() + 20; until > k.CoolUntil {
+		k.CoolUntil = until
+	}
+	k.LastFailTs = time.Now().Unix()
+}
+
 // ReportQuotaDead 配额耗尽（429 insufficient_quota）：长冷却 30 分钟等积分窗口刷新，
 // 不判死（号还在、积分会回来）
 func (p *KeyPool) ReportQuotaDead(k *KeyState) {
@@ -335,6 +346,18 @@ func IsModelUnavailable(body []byte) bool {
 		strings.Contains(s, "does not exist")
 }
 
+// IsRateLimited 上游错误体是否为"限流"（tpm/rpm 速率限制，如商汤 429003）。
+// 此类错误同钥重试无意义（窗口内继续打只会继续 429），应立即换钥；
+// 钥本身没死，短冷却（秒级窗口过后即恢复）而非 300s 指数退避。
+func IsRateLimited(body []byte) bool {
+	s := strings.ToLower(string(body))
+	return strings.Contains(s, "rate_limit_error") ||
+		strings.Contains(s, "429003") ||
+		strings.Contains(s, "rate limit") ||
+		strings.Contains(s, "tpm limit") ||
+		strings.Contains(s, "rpm limit")
+}
+
 // IsChannelExhausted 上游**渠道级**不可用（如 OneAPI 网关报 no available channel）：
 // 同一上游的所有密钥共享同一渠道池，换钥/重试都注定失败 —— 必须快速失败，
 // 避免渠道抖动时用户等十几秒才收到错误。
@@ -369,8 +392,9 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 
 	tried := map[int]bool{}
 	acquireTries := 0
+	consecRL := 0        // 连续限流换钥计数：≥3 视为全池饱和，提前止损（逐钥再试纯属浪费时长）
 	channelDown := false // 渠道级不可用：换钥无意义，立即终止
-	quotaHits, nonQuotaFails := 0, 0 // 429 分型计数：全池纯配额耗尽 → 上层转译为业务态
+	quotaHits, nonQuotaFails, rateLimitHits := 0, 0, 0 // 429 分型计数：全池纯配额耗尽/纯限流 → 上层转译为业务态
 	for hop := 0; hop < maxKeyHops; hop++ {
 		k, err := c.Pool.AcquireSkip(tried)
 		if err != nil {
@@ -455,8 +479,25 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 					modelLevel = true
 					modelResp = rebuildResp(resp, eb)
 					log.Printf("[upstream] line=%s key=%d 状态%d 模型级错误，直接换钥", c.Line.ID, k.Idx, sc)
+				} else if sc == 429 && IsRateLimited(eb) {
+					// 限流（tpm/rpm）：同钥重试无意义（窗口内继续打只会继续 429），
+					// 短冷却 20s（窗口过后自动恢复，绝不长冷）并立即换钥——
+					// 旧逻辑在此走"同钥重试+300s 冷却"，50 钥池被热钥拖累后全池冷却 → 整线 502
+					lastErr = fmt.Errorf("UPSTREAM_RATE_LIMITED")
+					rateLimitHits++
+					consecRL++
+					c.Pool.ReportRateLimit(k)
+					log.Printf("[upstream] line=%s key=%d 429 限流(tpm/rpm)，短冷却20s换钥 body=%s", c.Line.ID, k.Idx, eb)
+					if consecRL >= 3 {
+						// 连续 3 把钥都限流：全池饱和（多为 IP 级限流），逐钥再试无意义，
+						// 立即终止让上层转译为 429 繁忙业务态
+						log.Printf("[upstream] line=%s 连续%d钥限流，全池饱和提前止损", c.Line.ID, consecRL)
+						return nil, nil, fmt.Errorf("UPSTREAM_RATE_LIMITED")
+					}
+					break
 				} else {
 					nonQuotaFails++
+					consecRL = 0
 					c.Pool.ReportFail(k)
 					log.Printf("[upstream] line=%s key=%d 状态%d(第%d次) body=%s，同钥重试", c.Line.ID, k.Idx, sc, try+1, eb)
 					continue // 同钥退避重试
@@ -495,6 +536,10 @@ func (c *Client) Do(ctx context.Context, body []byte, stream bool, path string) 
 	// 全池纯配额耗尽（无其他类型失败）：上层转译为"本时段额度用完"业务态而非故障
 	if quotaHits > 0 && nonQuotaFails == 0 {
 		lastErr = fmt.Errorf("UPSTREAM_QUOTA_EXHAUSTED")
+	}
+	// 全池纯限流（无其他类型失败）：上层转译为 429 繁忙业务态而非 502 故障
+	if rateLimitHits > 0 && nonQuotaFails == 0 && quotaHits == 0 {
+		lastErr = fmt.Errorf("UPSTREAM_RATE_LIMITED")
 	}
 	return nil, nil, lastErr
 }

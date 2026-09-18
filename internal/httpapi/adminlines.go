@@ -90,7 +90,7 @@ func seedLinesToDB(lines []config.Line, d *sql.DB) error {
 // linesFromDB 三表 → []config.Line（enabled 线；keys 按 idx 排序剔除 dead）
 func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	rows, err := d.Query(
-		`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0)
+		`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0), COALESCE(prefixed,0), COALESCE(key_rpm,0)
 		 FROM admin_lines ORDER BY rowid`)
 	if err != nil {
 		return nil, err
@@ -99,14 +99,16 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	out := []config.Line{}
 	for rows.Next() {
 		var l config.Line
-		var enabled, dynamic int
-		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.AuthStyle, &l.Proxy, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic); err != nil {
+		var enabled, dynamic, prefixed, keyRPM int
+		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.AuthStyle, &l.Proxy, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic, &prefixed, &keyRPM); err != nil {
 			return nil, err
 		}
 		if enabled == 0 {
 			continue // 停用线不参与路由
 		}
 		l.Dynamic = dynamic != 0
+		l.Prefixed = prefixed != 0
+		l.KeyRPM = keyRPM
 		out = append(out, l)
 	}
 	if err := rows.Err(); err != nil {

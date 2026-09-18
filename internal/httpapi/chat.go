@@ -396,10 +396,15 @@ func forceNonStream(body []byte) ([]byte, error) {
 
 // upstreamFailOut 上游 Do/DoKey 失败统一转译（报错站点化：客户端只见站点中文错误码）。
 // 全池纯配额耗尽（429 insufficient_quota）→ 503 line_exhausted 业务态（引导切线），
-// 不当故障处理；其余一律 502 upstream_error 通用繁忙文案（上游原文绝不透传）。
+// 全池纯限流（429 tpm/rpm）→ 429 line_busy 业务态（不当故障处理）；
+// 其余一律 502 upstream_error 通用繁忙文案（上游原文绝不透传）。
 func (a *App) upstreamFailOut(w http.ResponseWriter, line *config.Line, derr error) {
 	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_QUOTA_EXHAUSTED") {
 		errOut(w, 503, "line_exhausted", line.Name+"本时段额度已用完，请改用其他模型或稍后再试")
+		return
+	}
+	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_RATE_LIMITED") {
+		errOut(w, 429, "line_busy", line.Name+"当前访问过于火爆，请稍后重试或改用其他模型")
 		return
 	}
 	errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")

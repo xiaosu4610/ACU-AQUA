@@ -951,7 +951,12 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			if retired[m.UpstreamID] {
 				continue // 上游永久下线（404/410 两次确认）：隐藏
 			}
-			item := map[string]any{"id": m.SiteID, "object": "model", "created": created, "owned_by": l.ID}
+			id := m.SiteID
+			if l.Prefixed {
+				// 专属前缀免费线（官方自营品牌框）：acu/ 形式透出；调用侧 NormalizeModel 剥前缀后仍走免费分发
+				id = l.ID + "/" + m.SiteID
+			}
+			item := map[string]any{"id": id, "object": "model", "created": created, "owned_by": l.ID}
 			if m.Image {
 				item["type"] = "image" // 特殊计费类型下发（免费文生图等），前端零硬编码
 			}

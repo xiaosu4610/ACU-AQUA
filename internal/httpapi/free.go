@@ -440,6 +440,23 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 				"模型不存在：目录与动态模型表均未收录，请 GET /v1/models 查看可用模型列表")
 			return
 		}
+		// 官方自营免费体验线（prefixed）用户级限速：RPM + 单并发——体验定位，满速与旗舰走收费线
+		if line.Prefixed && uid > 0 {
+			if !guard.freeAllow(uid) {
+				a.failRequest0(uid, keyHash, model, req.Stream, "free_rate_limited", 429)
+				errOut(w, 429, "free_rate_limited",
+					"免费体验专线限速中（每用户每分钟 10 次、单并发）：请等待在途请求完成或稍后再试；升级 aqua/ 收费模型享受满速不限次")
+				return
+			}
+			rel, ok := guard.freeEnter(uid)
+			if !ok {
+				a.failRequest0(uid, keyHash, model, req.Stream, "free_busy", 429)
+				errOut(w, 429, "free_busy",
+					"免费体验专线单用户同时仅 1 路请求：请等待当前请求完成；升级 aqua/ 收费模型支持多路并发")
+				return
+			}
+			defer rel()
+		}
 		if retired[upID] {
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
@@ -451,6 +468,12 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			if et == "timeout" {
 				// 黑洞型故障（请求被上游静默挂起）：计入 retired，两次确认后自动摘除
 				a.markRetired(upID)
+			}
+			if et == "rate_limited" {
+				// 全池限流：业务态繁忙（429），不当 502 故障处理
+				a.failRequest0(uid, keyHash, model, req.Stream, "upstream_rate_limited", 429)
+				errOut(w, 429, "line_busy", "官方自营线当前访问过于火爆，请稍后重试或改用 aqua/ 收费模型（更稳定）")
+				return
 			}
 			a.failRequest0(uid, keyHash, model, req.Stream, "upstream_error", 502)
 			errOut(w, 502, "upstream_error",
@@ -564,6 +587,10 @@ func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line 
 		logFreeErr(line.ID, upID, err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, func() {}, "timeout"
+		}
+		// 全池纯限流（429 tpm/rpm）：业务态繁忙而非故障，上层转译 429
+		if strings.Contains(err.Error(), "UPSTREAM_RATE_LIMITED") {
+			return nil, func() {}, "rate_limited"
 		}
 		return nil, func() {}, "network_error"
 	}

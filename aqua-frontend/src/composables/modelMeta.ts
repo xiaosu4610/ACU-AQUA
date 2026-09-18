@@ -21,8 +21,8 @@ export function inferType(id: string): string {
 }
 
 export function classifyModel(id: string): { platform: string; type: string } {
-  // 官方自营收费模型：统一 aqua/ 前缀（按次/按量由密钥分组决定）；旧 tide/ 前缀兼容
-  if (id.startsWith('aqua/') || id.startsWith('tide/')) return { platform: 'acu', type: inferType(id) || 'chat' }
+  // 官方自营品牌：acu/ 前缀（免费自营专线）与 aqua/ 前缀（收费）同品牌；旧 tide/ 前缀兼容
+  if (id.startsWith('acu/') || id.startsWith('aqua/') || id.startsWith('tide/')) return { platform: 'acu', type: inferType(id) || 'chat' }
   return { platform: 'nvidia', type: inferType(id) || 'chat' }
 }
 

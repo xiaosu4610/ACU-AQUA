@@ -68,6 +68,9 @@ type Line struct {
 	Proxy        string   `toml:"proxy"`          // 出站代理（http:// 或 socks5://，仅该线转发走代理；空=直连）
 	KeyFaceMicro int64    `toml:"key_face_micro"` // 每把密钥面值（微元，面值台账用；0=不限）
 	Dynamic      bool     `toml:"dynamic"`        // 免费线：启用动态目录（nvidia_models 表，自动同步上游新模型）
+	// Prefixed 免费线专属前缀展示：模型以 线id/site_id 形式透出（/v1/models、模型详情），
+	// 调用侧前缀经 NormalizeModel 剥离后仍走免费分发——用于需要独立品牌框的免费线（如官方自营）。
+	Prefixed bool `toml:"prefixed"`
 	// KeyRPM 每钥每分钟请求上限（0=不限）：积分制上游（如商汤 Token Plan）按 key 限速，
 	// 防单钥打爆触发上游 RPM/风控；建议正式号 6。
 	KeyRPM int `toml:"key_rpm"`

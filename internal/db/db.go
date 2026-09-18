@@ -331,6 +331,8 @@ func InitTables(d *sql.DB) error {
 		{"admin_line_models", "key_idx", "INTEGER NOT NULL DEFAULT -1"}, // 模型专属密钥池序（-1=自动走粘性池；≥0 锁定非 dead 钥排序后的第 N 把，按模型分工钥）
 		{"payments", "product", "TEXT NOT NULL DEFAULT 'balance'"},      // 支付产品分流：balance=个人余额充值 / pool=众筹池充值
 		{"admin_lines", "dynamic", "INTEGER NOT NULL DEFAULT 0"},        // 免费线动态目录开关（NVIDIA 自动同步上游新模型到 nvidia_models）
+		{"admin_lines", "prefixed", "INTEGER NOT NULL DEFAULT 0"},       // 免费线专属前缀展示（模型以 线id/模型名 透出，官方自营等独立品牌框用）
+		{"admin_lines", "key_rpm", "INTEGER NOT NULL DEFAULT 0"},        // 每钥每分钟请求上限（0=不限；打爆前预轮转换钥，防热钥限流后全池冷却）
 		{"admin_lines", "auth_style", "TEXT NOT NULL DEFAULT ''"},       // 鉴权风格：''=bearer | x-api-key | codex（ChatGPT 账号池 RT→AT+协议转换）
 		{"admin_lines", "proxy", "TEXT NOT NULL DEFAULT ''"},            // 线路级出站代理（http:// 或 socks5://，空=直连；gpt 线走本机 sing-box）
 		{"requests", "key_idx", "INTEGER NOT NULL DEFAULT -1"},          // 实际使用的钥池序（codex 账号粒度用量/利润记账；-1=非钥池线或失败请求）

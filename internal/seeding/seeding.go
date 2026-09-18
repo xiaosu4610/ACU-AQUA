@@ -57,10 +57,14 @@ func SeedAll(d *sql.DB, c *config.Cfg) error {
 func seedTokenModel(d *sql.DB, l *config.Line, full string, m *config.Model, grp string) error {
 	in, cache, out := m.InSellRate10, m.CacheSellRate10, m.OutSellRate10
 	if grp == "vip" {
-		// vip = 普通售价 × VipNum/VipDen（整数运算零精度损失）
-		in = m.InSellRate10 * l.VipNum / l.VipDen
-		cache = m.CacheSellRate10 * l.VipNum / l.VipDen
-		out = m.OutSellRate10 * l.VipNum / l.VipDen
+		// vip = 普通售价 × VipNum/VipDen（整数运算零精度损失）；倍率未配置（0/0）按 1/1 兜底，防除零 panic
+		num, den := l.VipNum, l.VipDen
+		if den <= 0 {
+			num, den = 1, 1
+		}
+		in = m.InSellRate10 * num / den
+		cache = m.CacheSellRate10 * num / den
+		out = m.OutSellRate10 * num / den
 	}
 	return insertIfAbsent(d, full, grp, "per_token", 1000, 1000, in, cache, out)
 }
@@ -72,7 +76,12 @@ func seedCallModel(d *sql.DB, l *config.Line, full string, m *config.Model, grp 
 		price = m.PerImageSell
 	}
 	if grp == "vip" {
-		price = price * l.VipNum / l.VipDen
+		// 倍率未配置（0/0）按 1/1 兜底，防除零 panic（20260918 aqua 线 crash-loop 根因）
+		num, den := l.VipNum, l.VipDen
+		if den <= 0 {
+			num, den = 1, 1
+		}
+		price = price * num / den
 	}
 	return insertIfAbsent(d, full, grp, "per_call", price, 0, 0, 0, 0)
 }

@@ -235,13 +235,9 @@ const crowdModels = computed(() => orderedModels.value
 const CROWD_DESC: Record<string, { t: string; d: string }> = {
   'acu/deepseek-v4-flash': { t: 'DeepSeek 极速轻旗舰', d: '秒回级响应，高频轻任务首选' },
   'acu/deepseek-v4-pro': { t: 'DeepSeek 满血旗舰', d: '深度推理 · 长文创作 · 复杂任务扛把子' },
-  'acu/doubao-seed-2.0-lite': { t: '豆包轻量版', d: '日常问答的性价比之王' },
-  'acu/doubao-seed-2.1-turbo': { t: '豆包加速版', d: '速度与质量兼顾的全能选手' },
-  'acu/doubao-seed-evolving': { t: '豆包自进化', d: '持续在线迭代，能力常用常新' },
-  'acu/glm-5.3': { t: '智谱 GLM 旗舰', d: '中文创作与代码生成双优' },
-  'acu/glm-5.3-flash': { t: 'GLM 极速版', d: '毫秒级响应，高并发场景利器' },
+  'acu/glm-5.2': { t: '智谱 GLM 旗舰', d: '中文创作与代码生成双优' },
 }
-function crowdDesc(id: string) { return CROWD_DESC[id] || { t: '官方自营通道', d: '按次从站点额度扣费' } }
+function crowdDesc(id: string) { return CROWD_DESC[id] || { t: '官方自营通道', d: '免费调用，无需任何费用' } }
 
 /* ================= 加载/同步状态提示条（旧 updateModelsNotice 平移） ================= */
 function timeStr(t: number): string {
@@ -623,20 +619,15 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           </div>
         </div>
 
-        <!-- 众筹专区：/v1/pool/status 站点额度状态 -->
-        <div v-if="crowdModels.length" class="card mt16 crowd" :class="{ off: poolStatus && !poolAlive }">
+        <!-- 官方自营免费专区：acu/ 前缀专线（官方通道直供，纯免费） -->
+        <div v-if="crowdModels.length" class="card mt16 crowd">
           <div class="row wrap between">
-            <b><AqIcon name="coin" :size="17" />众筹公共模型 · 官方自营通道</b>
-            <div class="row wrap" style="gap: 8px;">
-              <span class="dot" :class="poolAlive ? 'ok' : 'bad'"></span>
-              <span class="dim">{{ poolStatus ? (poolAlive ? '站点额度可用' : '站点额度已用完 · 等待充值复活') : '状态同步中…' }}</span>
-              <span v-if="poolStatus" class="tag">站点额度 ¥{{ (poolStatus.balance_micro / 1e6).toFixed(2).replace(/\.00$/, '') }}</span>
-              <router-link to="/pool" class="btn ghost sm">账本与榜单 <AqIcon name="arrow-right" :size="13" /></router-link>
-            </div>
+            <b><AqIcon name="coin" :size="17" />官方自营 · 免费体验专线（acu/）</b>
+            <span class="tag acc">免费体验 · 有限速</span>
           </div>
           <p class="dim mt8" style="font-size: 12.5px;">
-            acu/ 前缀模型<b>按次</b>从<b>众筹站点额度</b>扣费（与生成长度无关）——无需充值即可调用，任何分组密钥可用，个人余额分文不动；
-            站点额度充值 1:1 到账，见底即暂停，充值立刻复活。
+            acu/ 前缀模型由<b>官方自营通道</b>直供，<b>完全免费</b>——不扣个人余额、不扣站点额度；
+            体验专线限速运行（每用户每分钟 10 次、单并发），追求满速与旗舰模型请使用 <b>aqua/ 收费模型</b>。
           </p>
           <div class="grid3 mt12">
             <div v-for="m in crowdModels" :key="m.id" class="crowd-item">
@@ -649,16 +640,10 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
                 <div class="dim" style="font-size: 11.5px;">{{ crowdDesc(m.id).d }}</div>
               </div>
               <div class="row wrap mt8" style="gap: 6px;">
-                <span class="tag grad">按次计费</span>
-                <span v-if="m.price" class="tag grad num" title="每次成功请求按此单价从站点公共额度扣除，与生成长度无关">¥{{ microYuan(m.price) }}<em>/次</em></span>
+                <span class="tag grad">免费</span>
                 <span v-if="m.health" class="tag"><span class="dot" :class="m.health.dot"></span>健康 {{ m.health.score }}</span>
                 <span v-if="m.st" class="tag bad" :title="m.st.title">{{ m.st.text }}</span>
               </div>
-            </div>
-            <div class="crowd-item cta">
-              <b>充值扩容</b>
-              <p class="dim" style="font-size: 12px;">充值 1:1 注入站点额度——给所有人的公共算力扩容，无最低限制；额度归零后第一笔充值自动登上荣誉墙。</p>
-              <router-link to="/pool" class="btn primary sm">去充值</router-link>
             </div>
           </div>
         </div>
@@ -706,7 +691,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
             </div>
           </div>
         </div>
-        <p class="dim mt12" style="font-size: 12.5px;">免费模型由 Nvidia NIM 提供——注册即可使用、永久免费；点击模型 ID 查看详细能力说明与支持参数。</p>
+        <p class="dim mt12" style="font-size: 12.5px;">免费模型由官方免费通道提供——注册即可使用；acu/ 体验专线限速运行，收费模型（aqua/）享受满速优先通道；点击模型 ID 查看详细能力说明与支持参数。</p>
       </template>
 
       <!-- ================================================== 收费模型视图 ================================================== -->
