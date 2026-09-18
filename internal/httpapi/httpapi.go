@@ -633,10 +633,11 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		// 统一前缀模式：全部收费线模型合并为 前缀/site_id，groups 标注可用计费分组
 		// （同 ID 在按次/按量线都存在 → 两条分组都列出；计费方式由密钥分组决定）
 		type grpPrice struct {
-			mode string
-			m    *config.Model
-			p    *billing.PricingInfo // 用户实付价目（VIP 有 vip 价目 → vip 价；否则 normal 价）
-			base *billing.PricingInfo // 原价（normal）——仅 VIP 且存在 vip 价目时携带，供前端底部展示
+			mode  string
+			m     *config.Model
+			p     *billing.PricingInfo // 用户实付价目（vip/agent 分组价；否则 normal 价）
+			base  *billing.PricingInfo // 原价（normal）——仅 vip/agent 分组价存在时携带，供前端划线对比
+			agent bool                 // 代理拿货价视角（前端渲染「代理拿货价」徽标与注释）
 		}
 		merged := map[string][]grpPrice{}
 		var order []string
@@ -650,7 +651,12 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				// （['per_token','per_token']，20260917 站长报告"未正确展示按量计费"根因之一）
 				continue
 			}
-			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
+			ugrp := ""
+			if actx != nil {
+				ugrp = a.userGrpFor(actx.UserID, l.Mode)
+			}
+			vip := ugrp == "vip"
+			agent := ugrp == "agent" // 代理拿货价视角（20260919 代理体系）
 			for j := range l.Models {
 				m := &l.Models[j]
 				full := config.ModelFullName(l.ID, m.SiteID)
@@ -666,20 +672,27 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					if _, ok := merged[m.SiteID]; !ok {
 						order = append(order, m.SiteID)
 					}
-					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{p.Mode, m, p, nil})
+					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, m: m, p: p})
 					continue
 				}
 				if _, ok := merged[m.SiteID]; !ok {
 					order = append(order, m.SiteID)
 				}
-				if vip {
-					if vp := a.pricingFor(full, "vip"); vp != nil {
-						// VIP 拿货价为主 + 附原价（normal），前端底部展示对比
-						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{vp.Mode, m, vp, p})
+				if agent {
+					// 代理拿货价为主价 + normal 原价划线对比；agent 行缺失回退 normal（不 404）
+					if ap := a.pricingFor(full, "agent"); ap != nil {
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: ap.Mode, m: m, p: ap, base: p, agent: true})
 						continue
 					}
 				}
-				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{p.Mode, m, p, nil})
+				if vip {
+					if vp := a.pricingFor(full, "vip"); vp != nil {
+						// VIP 拿货价为主 + 附原价（normal），前端底部展示对比
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: vp.Mode, m: m, p: vp, base: p})
+						continue
+					}
+				}
+				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, m: m, p: p})
 			}
 		}
 		for _, site := range order {
@@ -772,6 +785,13 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			}
 			if allDeg && len(gs) > 0 {
 				item["degraded"] = true
+			}
+			// 代理拿货价视角标记：前端据此渲染「代理拿货价」徽标 + 原价划线对比 + 利润注释
+			for k := range gs {
+				if gs[k].agent {
+					item["price_view"] = "agent"
+					break
+				}
 			}
 			data = append(data, item)
 		}

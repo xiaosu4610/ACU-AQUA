@@ -134,7 +134,7 @@ func (a *App) handleAdminUserPriceGrp(w http.ResponseWriter, r *http.Request, ui
 	}
 	norm := func(g string) (string, bool) {
 		switch strings.TrimSpace(g) {
-		case "normal", "vip", "":
+		case "normal", "vip", "agent", "": // agent=代理拿货价组（20260919 代理体系，仅按次线价目在用）
 			return strings.TrimSpace(g), true
 		}
 		return "", false
@@ -142,7 +142,7 @@ func (a *App) handleAdminUserPriceGrp(w http.ResponseWriter, r *http.Request, ui
 	call, okC := norm(req.PriceGrpCall)
 	token, okT := norm(req.PriceGrpToken)
 	if !okC || !okT {
-		errAdmin(w, 400, "bad_request", "价目组仅允许 normal/vip/空（维持原值）")
+		errAdmin(w, 400, "bad_request", "价目组仅允许 normal/vip/agent/空（维持原值）")
 		return
 	}
 	username, _, _, exists := a.userExists(uid)

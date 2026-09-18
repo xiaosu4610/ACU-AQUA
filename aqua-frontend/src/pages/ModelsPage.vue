@@ -278,6 +278,7 @@ const paidModels = computed(() => orderedModels.value
     basePerImage: (m as any).base_per_image as number | undefined,
     subsidized: m.subsidized === true,
     promoEndsAt: m.promo_ends_at ?? 0,
+    priceView: (m as any).price_view as string | undefined,
     isImage: m.type === 'image',
     health: healthOf(m),
     st: statusOf(m),
@@ -787,9 +788,11 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               </div>
               <div class="row wrap mt8" style="gap: 6px;">
                 <span class="tag grad num">¥{{ microYuan(m.price) }}<em>/次</em></span>
-                <span class="tag">{{ m.basePrice != null ? 'VIP 拿货价' : '正常价' }}</span>
+                <span v-if="m.priceView === 'agent'" class="tag" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;" title="代理拿货价：原价与拿货价的差价即您的零售利润空间">代理拿货价</span>
+                <span v-else class="tag">{{ m.basePrice != null ? 'VIP 拿货价' : '正常价' }}</span>
               </div>
-              <div v-if="m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
+              <div v-if="m.priceView === 'agent' && m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 <s>¥{{ microYuan(m.basePrice) }}/次</s> · 您当前为<b>代理分组</b>，展示的是代理拿货价，零售差价即您的利润空间</div>
+              <div v-else-if="m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
               <div class="row between mt12">
                 <CopyBtn :text="m.id" />
                 <router-link :to="m.link" class="btn ghost sm">能力详情 <AqIcon name="arrow-right" :size="13" /></router-link>

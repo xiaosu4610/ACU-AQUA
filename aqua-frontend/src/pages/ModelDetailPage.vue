@@ -581,6 +581,9 @@ function liveText(): string {
 }
 
 /* ---- 头部价格标签（付费模型三态文案，与旧版 1:1） ---- */
+/* 代理拿货价视角（20260919 代理体系）：展示拿货价 + 官网零售原价对比 */
+const isAgentView = computed(() => (row.value as any)?.price_view === 'agent')
+const agentBasePrice = computed(() => (row.value as any)?.base_price_micro as number | undefined)
 const priceTag = computed(() => {
   const r = row.value
   if (!r?.paid) return null
@@ -592,9 +595,12 @@ const priceTag = computed(() => {
   }
   if (r.price_micro || r.per_image != null) {
     const v = ((r.price_micro ?? r.per_image) / 1_000_000).toFixed(3)
+    const ag = isAgentView.value ? ' · 代理拿货价' : ''
     return {
-      text: '收费 · ¥' + v + '/' + (isTideImage.value ? '张' : '次') + ' · 按' + (isTideImage.value ? '张' : '次') + '计费',
-      title: isTideImage.value ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明',
+      text: '收费 · ¥' + v + '/' + (isTideImage.value ? '张' : '次') + ' · 按' + (isTideImage.value ? '张' : '次') + '计费' + ag,
+      title: isAgentView.value
+        ? '代理拿货价已生效：展示的是代理拿货价，官网零售原价与拿货价的差价即您的零售利润空间'
+        : (isTideImage.value ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明'),
     }
   }
   return null
@@ -614,6 +620,13 @@ const priceRows = computed<[string, string][] | null>(() => {
   }
   if (isTideImage.value) {
     return [['计费方式', '按张计费 · n 参数控制张数（1~10 张）'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 张']]
+  }
+  if (isAgentView.value) {
+    return [
+      ['计费方式', '按次计费 · 每次成功请求扣一次，与生成长度无关'],
+      ['单价（代理拿货价）', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 次'],
+      ['官网零售原价', agentBasePrice.value != null ? '¥' + microYuan(agentBasePrice.value) + ' / 次 · 零售差价即您的利润空间' : '见模型中心'],
+    ]
   }
   return [['计费方式', '按次计费 · 每次成功请求扣一次，与生成长度无关'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 次']]
 })
@@ -648,6 +661,14 @@ const priceRows = computed<[string, string][] | null>(() => {
         <div class="ops">
           <CopyBtn :text="id" label="复制 ID" />
           <router-link to="/models?view=cap" class="btn sm">能力总览</router-link>
+        </div>
+      </div>
+
+      <!-- 代理拿货价横幅（仅代理分组可见） -->
+      <div v-if="isAgentView" class="card mt16" style="border-color: #f59e0b; background: linear-gradient(135deg, rgba(245, 158, 11, .08), transparent);">
+        <b style="color: #d97706;">代理拿货价已生效</b>
+        <div class="dim" style="font-size: 12.5px; margin-top: 4px;">
+          您当前为<b>代理分组</b>，本页展示的是<b>代理拿货价</b>（金标价格）；<template v-if="agentBasePrice != null">官网零售原价为 <s>¥{{ microYuan(agentBasePrice) }}/次</s>，</template>零售差价即您的利润空间。您的下游客户按官网原价零售即可。
         </div>
       </div>
 
