@@ -185,7 +185,7 @@ const PARAM_TEMPLATES: Record<string, ParamTpl> = {
 interface ModelSpec { re: RegExp; ctx?: string; size?: string; dims?: number; released?: string }
 const MODEL_SPECS: ModelSpec[] = [
   { re: /aqua\/deepseek-v4-flash$/, ctx: "1M", size: "284B (13B active)", released: "2026-07" },
-  { re: /aqua\/deepseek-v4-pro$/, ctx: "1M", size: "1.6T (49B active)", released: "2026-08" },
+  { re: /aqua\/deepseek-v4-1-flash$/, ctx: "1M", released: "2026-09" },
   { re: /aqua\/glm-5\.3-flash$/, ctx: "1M", size: "320B (18B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.3$/, ctx: "1M", size: "744B (40B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.2$/, ctx: "1M", size: "744B (40B active)", released: "2026-06" },
@@ -333,7 +333,7 @@ function modelSpec(id: string): ModelSpec | null {
 interface ModelNote { match: RegExp; name: string; desc: string }
 const MODEL_NOTES: ModelNote[] = [
   { match: /aqua\/deepseek-v4-flash$/, name: "DeepSeek V4 Flash", desc: "官方原版满血 DeepSeek-V4-Flash-0731。MoE 架构总参 284B / 激活 13B（MIT 开源），1M 上下文、单次最大输出 384K，支持思考 / 非思考双模式（含 Think Max 深度档）。0731 版重点强化 Agent 与编程：Terminal-Bench 2.1 达 82.7、DeepSWE 54.4，高频调用与长任务的性价比之选。" },
-  { match: /aqua\/deepseek-v4-pro$/, name: "DeepSeek V4 Pro", desc: "官方原版满血 DeepSeek-V4-Pro-0813 正式版。旗舰 MoE 总参 1.6T / 激活 49B（MIT 开源），1M 上下文、单次最大输出 384K，思考三档（Non-Think / High / Max）。Agentic Coding 开源最佳：SWE-bench Verified 79.4%、Codeforces 2919、GPQA-Diamond 89.1%，复杂推理与竞赛级代码旗舰。" },
+  { match: /aqua\/deepseek-v4-1-flash$/, name: "DeepSeek V4.1 Flash", desc: "官方原版 DeepSeek-V4.1-Flash——V4 Pro 正式下架后的全面代偿旗舰。混合推理架构（思考 / 非思考自适应），1M 超大上下文，Agentic Coding 与复杂推理能力对齐 V4 Pro 代际，长文创作与代码任务的旗舰首选。" },
   { match: /aqua\/glm-5\.3-flash$/, name: "GLM-5.3-Flash", desc: "官方原版满血 GLM-5.3-Flash（320B-A18B MoE，MIT 开源），GLM-5 系列首个原生多模态基座（文本 / 图片 / 视频输入）。稀疏 + 线性混合注意力让注意力计算量降约 3 倍、KV 缓存降约 4.4 倍。1M 上下文、最大输出 128K，DeepSWE v1.1 63.4 全面超越上代 GLM-5.2，AA 智能指数 57 持平 Claude Opus 4.8 而成本仅约其十分之一。" },
   { match: /aqua\/glm-5\.3$/, name: "GLM-5.3", desc: "官方原版满血 GLM-5.3 旗舰（与 5.2 同 744B-A40B 基座，纯后训练 Scaling，MIT 开源）。1M 上下文、最大输出 128K，深度思考强制开启（reasoning_effort low / high / max）。Terminal-Bench 3.0 28.3 开源第一、DeepSWE v1.1 66.9，编程（Built to Code）与网络安全（CyberGym 84.5）双修。" },
   { match: /aqua\/glm-5\.2$/, name: "GLM-5.2", desc: "官方原版满血 GLM-5.2（744B-A40B MoE，MIT 开源），面向长任务时代的旗舰。Solid 1M 上下文（IndexShare 架构，1M 长度下单 token 计算量降约 2.9 倍）、最大输出 128K，思考力度可调（High / Max）。Terminal-Bench 2.1 达 81.0，长程 Agent 可稳定运行 12 小时以上，Code Arena 百万用户盲测全球第一。" },
@@ -368,12 +368,11 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
     ],
     unsupported: ACU_UNSUPPORTED
   },
-  'aqua/deepseek-v4-pro': {
+  'aqua/deepseek-v4-1-flash': {
     limits: [
-      "官方原版满血 DeepSeek-V4-Pro-0813 正式版：旗舰 MoE 总参 1.6T / 激活 49B（MIT 开源权重）",
-      "上下文 1M tokens，单次最大输出 384K tokens",
-      "思考三档：Non-Think（快速响应）/ Think High / Think Max（最深推理）",
-      "官方支持 Tool Calls / JSON Output / 结构化输出 / 对话前缀续写，请求体参数原样透传",
+      "官方原版 DeepSeek-V4.1-Flash：V4 Pro 正式下架后的全面代偿旗舰",
+      "上下文 1M tokens，混合推理（思考 / 非思考自适应）",
+      "官方支持 Tool Calls / JSON Output / 结构化输出，请求体参数原样透传",
       "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
     ],
     unsupported: ACU_UNSUPPORTED

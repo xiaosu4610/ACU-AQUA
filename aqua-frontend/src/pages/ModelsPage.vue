@@ -346,7 +346,7 @@ function toggle(id: string) { expandedId.value = expandedId.value === id ? '' : 
 interface ModelSpec { re: RegExp; ctx?: string; size?: string; dims?: number; released?: string }
 const MODEL_SPECS: ModelSpec[] = [
   { re: /aqua\/deepseek-v4-flash$/, ctx: "1M", size: "284B (13B active)", released: "2026-07" },
-  { re: /aqua\/deepseek-v4-pro$/, ctx: "1M", size: "1.6T (49B active)", released: "2026-08" },
+  { re: /aqua\/deepseek-v4-1-flash$/, ctx: "1M", released: "2026-09" },
   { re: /aqua\/glm-5\.3-flash$/, ctx: "1M", size: "320B (18B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.3$/, ctx: "1M", size: "744B (40B active)", released: "2026-08" },
   { re: /aqua\/glm-5\.2$/, ctx: "1M", size: "744B (40B active)", released: "2026-06" },
