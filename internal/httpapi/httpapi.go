@@ -948,9 +948,8 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		for j := range l.Models {
 			m := &l.Models[j]
 			configured[strings.ToLower(m.SiteID)] = true
-			if retired[m.UpstreamID] {
-				continue // 上游永久下线（404/410 两次确认）：隐藏
-			}
+			// 固定目录模型一律列出——retired 仅作用于下方动态目录（Dynamic），
+			// 20260919 线路独立规矩：商汤 404 抖动不得隐藏 acu 自营目录模型
 			id := m.SiteID
 			if l.Prefixed {
 				// 专属前缀免费线（官方自营品牌框）：acu/ 形式透出；调用侧 NormalizeModel 剥前缀后仍走免费分发

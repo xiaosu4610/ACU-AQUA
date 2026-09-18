@@ -29,7 +29,7 @@ async function run() {
 </script>
 
 <template>
-  <p class="tool-intro">把冗长网址压缩成 <code>https://aqua.zhuafs.com/s/xxxxxx</code> 短链，302 跳转直达。<b>90 天无访问自动清理</b>，不做长期留存。</p>
+  <p class="tool-intro">把冗长网址压缩成 <code>https://aqua.ltzy.top/s/xxxxxx</code> 短链，302 跳转直达。<b>90 天无访问自动清理</b>，不做长期留存。</p>
   <div class="grid2">
     <div class="card out-pane">
       <div class="field">

@@ -451,7 +451,7 @@ const profile = computed(() => {
 })
 
 /* ---- 调用示例（旧 modelExample 平移为 cURL；另生成 Python / JS 版本） ---- */
-const EX_BASE = 'https://aqua.zhuafs.com/v1'
+const EX_BASE = 'https://api.ltzy.top/v1'
 function exBody(): string {
   const mid = id.value
   const t = meta.value.type
@@ -467,12 +467,12 @@ const exCurl = computed(() => {
   const mid = id.value
   const t = meta.value.type
   if (t === 'asr') {
-    return '# 使用 multipart 上传音频文件\ncurl https://aqua.zhuafs.com/v1/audio/transcriptions \\\n  -F "file=@audio.wav" \\\n  -F "model=' + mid + '"'
+    return '# 使用 multipart 上传音频文件\ncurl https://api.ltzy.top/v1/audio/transcriptions \\\n  -F "file=@audio.wav" \\\n  -F "model=' + mid + '"'
   }
   if (t === 'ip') {
-    return 'curl https://aqua.zhuafs.com/v1/ip_location\n  -H "Content-Type: application/json"\n  -d \'{"ip":""}\''
+    return 'curl https://api.ltzy.top/v1/ip_location\n  -H "Content-Type: application/json"\n  -d \'{"ip":""}\''
   }
-  return 'curl https://aqua.zhuafs.com/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer sk-****" \\\n  -d \'' + exBody() + '\''
+  return 'curl https://api.ltzy.top/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer sk-****" \\\n  -d \'' + exBody() + '\''
 })
 const exPy = computed(() => {
   const mid = id.value

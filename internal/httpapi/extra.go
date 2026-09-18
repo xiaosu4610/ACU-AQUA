@@ -55,9 +55,9 @@ func (a *App) handleModelDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 上游永久下线：详情返回 410 指引换模型
+	// 上游永久下线：详情返回 410 指引换模型——仅动态目录线；固定目录线绝不联动（20260919 线路独立规矩）
 	if line, upID, ok := a.freeResolve(id); ok {
-		if retired[upID] {
+		if line.Dynamic && retired[upID] {
 			errOut(w, 410, "model_retired",
 				"模型 "+id+" 已在上游永久下线，请更换模型。GET /v1/models 可查全部可用模型")
 			return
@@ -93,7 +93,8 @@ func (a *App) freeForwardPath(w http.ResponseWriter, r *http.Request, body []byt
 		return
 	}
 	retired := a.retiredUpstreams()
-	if retired[upID] {
+	// retired 仅拦动态目录线；固定目录线（acu 商汤自营）绝不联动（20260919 线路独立规矩）
+	if line.Dynamic && retired[upID] {
 		errOut(w, 410, "model_retired",
 			"模型 "+norm+" 已在上游永久下线，请更换模型。GET /v1/models 可查全部可用模型")
 		return

@@ -1,7 +1,9 @@
 /* 统一 API 封装：网关地址自动探测 + 结构化错误（中文消息）+ 剪贴板 */
 export function detectGateway(): string {
-  // 前台 aqua.zhuafs.com 与网关 aqua.zhuafs.com 同级约定：acu → api
+  // 前台与网关同级约定：acu.* → api.*（主机名推导，acu.ltzy.top → api.ltzy.top）
   if (location.hostname.startsWith('acu.')) return 'https://api.' + location.hostname.slice(4) + '/v1'
+  // ltzy.top 主站（aqua.ltzy.top）：接口域名按惯例固定 api.ltzy.top（20260919 站长指定）
+  if (location.hostname.endsWith('.ltzy.top')) return 'https://api.ltzy.top/v1'
   // 局域网部署：前端 8788 / API 8787
   if (location.port === '8788') return `${location.protocol}//${location.hostname}:8787/v1`
   // 其他（本地 dev 由 vite 代理 /v1；自定义域同源）

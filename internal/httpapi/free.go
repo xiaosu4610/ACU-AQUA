@@ -295,14 +295,16 @@ func (a *App) autoCandidates() []string {
 			rows2.Close()
 		}
 	}
-	// 上游永久下线的模型不进候选池
+	// 上游永久下线的模型不进候选池——仅拦动态目录模型；
+	// 固定目录线（acu 商汤自营）模型绝不联动 retired（20260919 线路独立规矩）
 	retired := a.retiredUpstreams()
 	n := 0
 	for _, c := range cands {
-		if !retired[upstreamIDOf(a, c.m)] {
-			cands[n] = c
-			n++
+		if dynUp, isDyn := a.dynamicUpstreamID(c.m); isDyn && retired[dynUp] {
+			continue
 		}
+		cands[n] = c
+		n++
 	}
 	cands = cands[:n]
 	sort.SliceStable(cands, func(i, j int) bool {
@@ -350,17 +352,6 @@ func (a *App) autoFallbacks() []string {
 		}
 	}
 	return out
-}
-
-// upstreamIDOf 站点模型 → 上游真实 ID（配置目录优先，动态目录次之）
-func upstreamIDOf(a *App, siteID string) string {
-	if _, m := a.Cfg.FindFreeModel(siteID); m != nil {
-		return m.UpstreamID
-	}
-	if up, ok := a.dynamicUpstreamID(siteID); ok {
-		return up
-	}
-	return ""
 }
 
 // normalizeFreeID 旧 ID 归一化（去首个「厂商/」前缀段 + 全小写）
@@ -457,7 +448,9 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			}
 			defer rel()
 		}
-		if retired[upID] {
+		// retired 仅作用于动态目录线（英伟达）；固定目录线（acu 商汤自营等）绝不联动——
+		// 20260919 站长规矩：各线路完全独立，商汤 404 抖动不得隐藏 acu 自营目录模型
+		if line.Dynamic && retired[upID] {
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
@@ -483,7 +476,9 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			_, _ = io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 			resp.Body.Close()
 			cancel()
-			a.markRetired(upID)
+			if line.Dynamic { // 仅动态目录登记 retired；固定目录线不登记（线路独立，20260919）
+				a.markRetired(upID)
+			}
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
@@ -528,7 +523,11 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 	)
 	for _, m := range cands {
 		line, upID, ok := a.freeResolve(m)
-		if !ok || retired[upID] {
+		if !ok {
+			continue
+		}
+		// retired 仅拦动态目录候选；固定目录线（acu 商汤自营）绝不联动（20260919 线路独立规矩）
+		if line.Dynamic && retired[upID] {
 			continue
 		}
 		resp2, cancel2, et := a.freeUpstreamChat(r, body, req, line, upID)
@@ -541,7 +540,9 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			_, _ = io.ReadAll(io.LimitReader(resp2.Body, 8<<10))
 			resp2.Body.Close()
 			cancel2()
-			a.markRetired(upID)
+			if line.Dynamic { // 仅动态目录登记 retired；固定目录线不登记（线路独立，20260919）
+				a.markRetired(upID)
+			}
 			continue
 		}
 		chosenModel, chosenLine, chosenUpID, resp, cancel = m, line, upID, resp2, cancel2

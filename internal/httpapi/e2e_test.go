@@ -788,15 +788,16 @@ func TestFreeModelsAndVIP(t *testing.T) {
 		t.Fatalf("免登录免费对话应 200，得 %d", rec.Code)
 	}
 
-	// retired：上游 404 两次登记 → 列表隐藏 + 调用 410
+	// retired 仅作用于动态目录线（20260919 线路独立规矩）：
+	// 固定目录免费模型（acu 商汤自营等）即使被误登记 retired，仍正常列出与调用
 	_, _ = d.Exec("INSERT INTO retired_models (model, retired_ts, hits) VALUES ('vendor/qwen3-8b', ?, 2)", now)
-	if _, has := modelsOf(tok)["qwen3-8b"]; has {
-		t.Fatal("retired 免费模型应从列表隐藏")
+	if _, has := modelsOf(tok)["qwen3-8b"]; !has {
+		t.Fatal("固定目录免费模型不应被 retired 隐藏（线路独立）")
 	}
 	rec, _ = doJSON(t, h, "POST", "/v1/chat/completions", tok, map[string]any{
 		"model": "qwen3-8b", "messages": []map[string]string{{"role": "user", "content": "hi"}}})
-	if rec.Code != 410 {
-		t.Fatalf("retired 模型应 410，得 %d", rec.Code)
+	if rec.Code != 200 {
+		t.Fatalf("固定目录模型不应被 retired 拦 410，得 %d", rec.Code)
 	}
 }
 
