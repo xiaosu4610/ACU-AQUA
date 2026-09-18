@@ -869,9 +869,7 @@ func (a *App) freeDispatchJSON(model string, messages []map[string]any, temperat
 		resp, cancel, et := a.freeUpstreamChat(dummy, payload, req, ln, up)
 		if resp == nil {
 			a.recordHealth(cand, false, et, 0, time.Since(start).Milliseconds())
-			if et == "timeout" {
-				a.markRetired(up)
-			}
+			// timeout 不计 retired（过载风暴会整批误隐健康模型，20260918 实测）
 			continue
 		}
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
@@ -1231,9 +1229,7 @@ func (a *App) handleToolsChat(w http.ResponseWriter, r *http.Request) {
 		resp, cancel, et := a.freeUpstreamChat(r, payload, req, line, upID)
 		if resp == nil {
 			a.recordHealth(cand, false, et, 0, time.Since(start).Milliseconds())
-			if et == "timeout" {
-				a.markRetired(upID)
-			}
+			// timeout 不计 retired（过载风暴会整批误隐健康模型，20260918 实测）
 			continue
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {

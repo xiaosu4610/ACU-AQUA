@@ -465,10 +465,9 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp, cancel, et := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp == nil {
 			a.recordHealth(model, false, et, 0, time.Since(start).Milliseconds())
-			if et == "timeout" {
-				// 黑洞型故障（请求被上游静默挂起）：计入 retired，两次确认后自动摘除
-				a.markRetired(upID)
-			}
+			// 注：timeout（上游过载/黑洞）不再计 retired——20260918 英伟达过载风暴
+			// 期间 22 个健康模型因 45s 超时×2 被整批误隐；retired 仅收 404/410 明确下线，
+			// 过载场景由 nvidia 同步自愈 + 短冷却调度兜底
 			if et == "rate_limited" {
 				// 全池限流：业务态繁忙（429），不当 502 故障处理
 				a.failRequest0(uid, keyHash, model, req.Stream, "upstream_rate_limited", 429)

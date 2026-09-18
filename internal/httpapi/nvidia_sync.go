@@ -155,6 +155,26 @@ func (a *App) syncNvidiaModels() (added, removed int, err error) {
 			toRemove = append(toRemove, low) // 上游已无此模型：清理
 		}
 	}
+	// —— 3.5 retired 误标自愈：仍在上游目录、标记超 1h 无新失败的行自动复活。
+	// 场景：上游瞬时 404/抖动误标 → 列表错误隐藏；真下线的模型上游目录也会消失，
+	// 由下方 toRemove 清出展示，retired 行随 TTL 过期，无需保留。
+	{
+		healBefore := time.Now().Unix() - 3600
+		var healed int64
+		for low := range upstreamSet {
+			res, err := a.DB.Exec(
+				"DELETE FROM retired_models WHERE lower(model)=? AND retired_ts < ?", low, healBefore)
+			if err == nil {
+				if n, _ := res.RowsAffected(); n > 0 {
+					healed += n
+				}
+			}
+		}
+		if healed > 0 {
+			log.Printf("[nvidia] retired 误标自愈：复活 %d 个仍在上游目录的模型", healed)
+		}
+	}
+
 	if len(toAdd) == 0 && len(toRemove) == 0 {
 		return 0, 0, nil
 	}

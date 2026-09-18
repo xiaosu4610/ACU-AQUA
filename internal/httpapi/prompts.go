@@ -235,9 +235,7 @@ func (a *App) handleTreehole(w http.ResponseWriter, r *http.Request) {
 		resp, cancel, et := a.freeUpstreamChat(r, payload, req, line, upID)
 		if resp == nil {
 			a.recordHealth(cand, false, et, 0, 0)
-			if et == "timeout" {
-				a.markRetired(upID)
-			}
+			// timeout 不计 retired（过载风暴会整批误隐健康模型，20260918 实测）
 			continue
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
