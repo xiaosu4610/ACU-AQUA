@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -458,6 +459,11 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 		resp, cancel, et := a.freeUpstreamChat(r, body, req, line, upID)
 		if resp == nil {
 			a.recordHealth(model, false, et, 0, time.Since(start).Milliseconds())
+			// 客户端主动断开：499 client_cancel，不计故障（20260919 统计真实性）
+			if et == "client_cancel" {
+				a.failRequest0(uid, keyHash, model, req.Stream, "client_cancel", 499)
+				return
+			}
 			// 注：timeout（上游过载/黑洞）不再计 retired——20260918 英伟达过载风暴
 			// 期间 22 个健康模型因 45s 超时×2 被整批误隐；retired 仅收 404/410 明确下线，
 			// 过载场景由 nvidia 同步自愈 + 短冷却调度兜底
@@ -481,6 +487,18 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			}
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
+			return
+		}
+		// 动态线 5xx 且为推理引擎崩溃（CUDA/TensorRT）：登记 retired 摘除（同钥/换钥重试均无意义，
+		// 上游同步自愈 1h 复活；固定目录线不登记，20260919）
+		if line.Dynamic && resp.StatusCode >= 500 && crashBodyPeek(resp.Body) {
+			resp.Body.Close()
+			cancel()
+			a.markRetired(upID)
+			a.recordHealth(model, false, "upstream_error", resp.StatusCode, time.Since(start).Milliseconds())
+			a.failRequest0(uid, keyHash, model, req.Stream, "upstream_error", 502)
+			errOut(w, 502, "upstream_error",
+				"模型 "+model+" 上游推理引擎故障（已自动摘除，通常数小时内自动恢复），请稍后重试或换个模型")
 			return
 		}
 		rid := a.insertRequest(uid, keyHash, "chat", model, req.Stream)
@@ -545,6 +563,14 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			}
 			continue
 		}
+		// 动态线 5xx 推理引擎崩溃：换候选（登记 retired 摘除，同步自愈复活）
+		if line.Dynamic && resp2.StatusCode >= 500 && crashBodyPeek(resp2.Body) {
+			resp2.Body.Close()
+			cancel2()
+			a.markRetired(upID)
+			a.recordHealth(m, false, "upstream_error", resp2.StatusCode, time.Since(start).Milliseconds())
+			continue
+		}
 		chosenModel, chosenLine, chosenUpID, resp, cancel = m, line, upID, resp2, cancel2
 		if resp2.StatusCode < 400 {
 			break
@@ -607,6 +633,10 @@ func (a *App) freeUpstreamChat(r *http.Request, body []byte, req *chatReq, line 
 	if err != nil {
 		cancel()
 		logFreeErr(line.ID, upID, err)
+		// 客户端主动断开（9s 超时脚本/用户取消）：记 499 不污染 502 统计（20260919）
+		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+			return nil, func() {}, "client_cancel"
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, func() {}, "timeout"
 		}
@@ -625,6 +655,16 @@ func (a *App) failRequest0(uid int64, keyHash, model string, stream bool, reason
 	if rid != 0 {
 		a.failRequest(rid, reason, statusCode)
 	}
+}
+
+// crashBodyPeek 探测 5xx 响应体是否为推理引擎崩溃（CUDA/TensorRT，换钥重试无意义）。
+// 读限 32KB，读完即丢弃。
+func crashBodyPeek(body io.Reader) bool {
+	b, _ := io.ReadAll(io.LimitReader(body, 32<<10))
+	s := string(b)
+	return strings.Contains(s, "TensorRT-LLM") ||
+		strings.Contains(s, "CUDA runtime error") ||
+		strings.Contains(s, "illegal memory access")
 }
 
 // healthErrType 状态码 → 健康记录错误类型（口径同 Rust）
@@ -722,7 +762,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 	for {
 		select {
 		case <-r.Context().Done():
-			a.finishFreeStream(rid, model, u, start, firstByte)
+			a.finishFreeStream(rid, model, u, start, firstByte, true)
 			return
 		default:
 		}
@@ -730,20 +770,76 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 		if n > 0 {
 			if firstByte.IsZero() {
 				firstByte = time.Now()
-				sendHeaders()
 			}
 			buf = append(buf, tmp[:n]...)
-			for {
-				i := bytes.IndexByte(buf, '\n')
-				if i < 0 {
-					break
+			if !headersSent {
+				// 首帧闸门（20260919）：响应头延迟到首个真实内容帧才发——
+				// ①上游秒断（0 字节内容）→ 整体重试一次；②首个 data 帧即错误事件
+				// （商汤 429-in-stream 等）→ 不向客户端漏传错误帧，换钥重试/转业务态
+				held := make([][]byte, 0, 8)
+				sawErr := ""
+				gate := func() bool { // true=继续读上游，false=退出
+					for {
+						i := bytes.IndexByte(buf, '\n')
+						if i < 0 {
+							return true
+						}
+						lineBytes := buf[:i]
+						buf = buf[i+1:]
+						if d, isErr := sseErrorEvent(lineBytes); isErr {
+							sawErr = d
+							return false
+						}
+						if len(bytes.TrimSpace(lineBytes)) > 0 {
+							held = append(held, lineBytes) // 非空非错误行：暂扣，发头后补发
+						}
+					}
 				}
-				lineBytes := buf[:i]
-				buf = buf[i+1:]
-				out := sanitizeStreamLine(lineBytes, &u)
-				_, _ = w.Write(out)
-				_, _ = w.Write([]byte("\n"))
-				flusher.Flush()
+				if !gate() {
+					a.recordHealth(model, false, "upstream_error", 0, time.Since(start).Milliseconds())
+					curResp.Body.Close()
+					curCancel()
+					if !retried && refetch != nil && r.Context().Err() == nil {
+						retried = true
+						if rateLimitedPayload(sawErr) {
+							a.failRequest(rid, "upstream_rate_limited", 429)
+							errOut(w, 429, "line_busy", "官方自营线当前访问过于火爆，请稍后重试或改用 aqua/ 收费模型（更稳定）")
+							return
+						}
+						if r2, c2, ok2 := refetch(); ok2 {
+							curResp, curCancel = r2, c2
+							firstByte = time.Time{}
+							buf = buf[:0]
+							continue
+						}
+					}
+					a.failRequest(rid, "stream_incomplete", 503)
+					errOut(w, 503, "line_busy", "上游连接刚建立即中断，请稍后重试")
+					return
+				}
+				if len(held) > 0 {
+					sendHeaders()
+					for _, hb := range held {
+						out := sanitizeStreamLine(hb, &u)
+						_, _ = w.Write(out)
+						_, _ = w.Write([]byte("\n"))
+					}
+					flusher.Flush()
+				}
+			}
+			if headersSent {
+				for {
+					i := bytes.IndexByte(buf, '\n')
+					if i < 0 {
+						break
+					}
+					lineBytes := buf[:i]
+					buf = buf[i+1:]
+					out := sanitizeStreamLine(lineBytes, &u)
+					_, _ = w.Write(out)
+					_, _ = w.Write([]byte("\n"))
+					flusher.Flush()
+				}
 			}
 		}
 		if rerr != nil {
@@ -761,19 +857,58 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 				errOut(w, 503, "line_busy", "上游连接刚建立即中断（已自动重试仍失败），请稍后重试")
 				return
 			}
-			a.finishFreeStream(rid, model, u, start, firstByte)
+			a.finishFreeStream(rid, model, u, start, firstByte, r.Context().Err() != nil)
 			return
 		}
 	}
 }
 
-// finishFreeStream 流结束：健康记录 + usage 落库（免费口径：billed=0）
-func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time, firstByte time.Time) {
+// sseErrorEvent 判断 SSE 行是否为「错误事件而非内容帧」（仅首帧闸门用）：
+// data: JSON 含 error 字段，或含 code+message 且无 choices（商汤/各家中断流错误形态）。
+// 返回 payload 原文（限流判定用）；非错误行第二返回值 false。
+func sseErrorEvent(line []byte) (string, bool) {
+	s := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(s, "data:") {
+		return "", false
+	}
+	payload := strings.TrimSpace(s[5:])
+	if payload == "" || payload == "[DONE]" {
+		return "", false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(payload), &m) != nil {
+		return "", false
+	}
+	if _, hasErr := m["error"]; hasErr {
+		return payload, true
+	}
+	_, hasCode := m["code"]
+	_, hasMsg := m["message"]
+	_, hasChoices := m["choices"]
+	if hasCode && hasMsg && !hasChoices {
+		return payload, true
+	}
+	return "", false
+}
+
+// rateLimitedPayload 错误事件是否为限流（tpm/rpm/quota 口径 → 429 业务态）
+func rateLimitedPayload(payload string) bool {
+	l := strings.ToLower(payload)
+	return strings.Contains(l, "rate") || strings.Contains(l, "429003") ||
+		strings.Contains(l, "tpm") || strings.Contains(l, "rpm") ||
+		strings.Contains(l, "quota")
+}
+
+// finishFreeStream 流结束：健康记录 + usage 落库（免费口径：billed=0）；
+// clientGone=客户端主动断开 → 499 client_cancel（不污染 502 统计，20260919）
+func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time, firstByte time.Time, clientGone bool) {
 	lat := time.Since(start).Milliseconds()
 	ok := u.PromptTokens > 0 || u.CompletionTokens > 0
 	a.recordHealth(model, ok, healthResultType(ok, 200), 200, lat)
 	if ok {
 		a.okFreeRequestGen(rid, u, 200, "actual", lat, genMs(firstByte))
+	} else if clientGone {
+		a.failRequest(rid, "client_cancel", 499)
 	} else {
 		a.failRequest(rid, "stream_incomplete", 502)
 	}

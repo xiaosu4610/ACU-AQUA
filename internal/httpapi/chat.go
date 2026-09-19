@@ -53,6 +53,13 @@ type usageJSON struct {
 // handleChat /v1/chat/completions 主入口：
 // 鉴权 → 收费线路由（统一前缀按密钥分组选线 / 线前缀显式直连）→ 免费模型（含 auto 路由/动态目录/旧 ID 兼容）
 //
+// legacyPaidRetired 已下架收费模型的裸名指引（路由隔离，20260919）：
+// 裸名命中已下架收费模型时不再掉进免费线同名模型（付费意图用户会被商汤免费线的
+// 429/断流误导为"收费渠道故障"），直接 410 给出明确替代指引。
+var legacyPaidRetired = map[string]string{
+	"deepseek-v4-pro": "aqua/deepseek-v4-1-flash",
+}
+
 //	→ 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -82,6 +89,14 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && a.paidLineForSiteID(req.Model) != nil {
 		unified = true
 		siteID = config.NormalizeModel(req.Model)
+	}
+	// 裸名命中已下架收费模型：410 明确指引，不落免费线（20260919 路由隔离）
+	if !unified && !hasPrefix {
+		if alt, ok := legacyPaidRetired[config.NormalizeModel(req.Model)]; ok {
+			errOut(w, 410, "model_retired",
+				"模型 "+req.Model+" 已正式下架：旗舰由 "+alt+" 全面代偿（按次计费）；免费体验请使用 acu/"+config.NormalizeModel(req.Model))
+			return
+		}
 	}
 	var line *config.Line
 	if hasPrefix && !unified {
