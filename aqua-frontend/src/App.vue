@@ -83,7 +83,7 @@ async function doLogout() {
   <div v-else-if="isBench" class="bench">
     <aside class="bside">
       <router-link to="/home" class="brand" style="padding: 2px 11px 10px;">
-        <AqIcon name="droplet" :size="26" />
+        <img src="/logo.png" alt="{{ siteName }}" />
         <em>{{ siteName }}</em>
       </router-link>
       <template v-for="g in BENCH_NAV" :key="g.grp">
@@ -138,7 +138,7 @@ async function doLogout() {
     <header class="ptop">
       <div class="ptop-in">
         <router-link to="/home" class="brand">
-          <AqIcon name="droplet" :size="26" />
+          <img src="/logo.png" alt="{{ siteName }}" />
           <em>{{ siteName }}</em>
         </router-link>
 
