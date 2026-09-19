@@ -1,375 +1,126 @@
 <script setup lang="ts">
-/* 首页 · 沉浸式 hero + 实时数据条 + 功能卡矩阵 + 快速开始三步
- * 接口对接（与旧版 1:1）：
- * - GATEWAY（/composables/useApi）→ baseUrl 展示与复制（旧版 hero Base URL）
- * - isLoggedIn()（/composables/useAuth）→ CTA 注册/登录 ↔ 控制台切换
- * - /v1/meta（useMeta 单例）→ 公告横幅 / QQ 群链接（失败静默）
- * - /v1/status（apiJson('/status')）→ 版本 / 连续运行 / 近 1h 成功率与时延（30 秒轮询） */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
-import { apiJson, GATEWAY } from '@/composables/useApi'
+import { apiJson } from '@/composables/useApi'
 import { isLoggedIn } from '@/composables/useAuth'
 import { useMeta } from '@/composables/useMeta'
-import { useModels } from '@/composables/useModels'
-
-/* ---- 旧版保留：网关地址（Base URL 三步接入第一块） ---- */
-const baseUrl = GATEWAY.startsWith('/') ? location.origin + GATEWAY : GATEWAY
-
-/* ---- /v1/meta 站点配置（公告 / Q 群），失败静默走兜底 ---- */
-const { meta, loadMeta } = useMeta()
-loadMeta()
-
-/* ---- /v1/status 实时数据条 ---- */
-interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number; avg_first_ms?: number }
-interface StatusResp { version?: string; uptime_sec?: number; window?: string; models?: StatusModel[] }
-const statusLoading = ref(true)
-const statusErr = ref(false)
-const stVersion = ref('--')
-const stUptime = ref('--')
-const stOkRate = ref('--')
-const stLatency = ref('--')
-/* 在线模型：站点全部模型（/v1/models 全量，仅排除 auto 聚合项），useModels 单例共享 */
-const { models, load: loadModels } = useModels()
-const stModels = computed(() => models.value.filter(m => m.id !== 'auto').length || '--')
-
-function fmtUptime(sec: number): string {
-  const d = Math.floor(sec / 86400)
-  const h = Math.floor((sec % 86400) / 3600)
-  return d > 0 ? `${d} 天 ${h} 时` : `${h} 时 ${Math.floor((sec % 3600) / 60)} 分`
-}
-async function loadStatus() {
-  statusLoading.value = true
+const { meta } = useMeta()
+const baseUrl = 'https://api.ltzy.top/v1'
+const code = `curl ${baseUrl}/chat/completions \\\n  -H "Authorization: Bearer sk-你的密钥" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"acu/deepseek-v4-flash",
+       "messages":[{"role":"user","content":"你好"}]}'`
+const rows = ref<{model:string; calls_1h:number; success_rate:number}[]>([])
+const updated = ref('')
+const failed = ref(false)
+const lines = computed(() => [
+  { id: 'acu/', name: '商汤免费线', mode: '纯免费', desc: '商汤日日新官方自营。与收费线路独立，不扣个人余额。', to: '/models?view=free' },
+  { id: 'aqua/', name: '按次模型', mode: '按次计费', desc: '每次成功请求按模型单价结算。选型前查看完整价格。', to: '/models?view=paid' },
+  { id: 'codex/', name: '按量模型', mode: '按量计费', desc: '输入、缓存与输出分别计价，按实际用量核对费用。', to: '/models?view=paid' },
+].map(line => {
+  const samples = rows.value.filter(row => row.model.startsWith(line.id))
+  const count = samples.reduce((n, row) => n + row.calls_1h, 0)
+  const rate = count ? samples.reduce((n, row) => n + row.calls_1h * row.success_rate, 0) / count : null
+  return { ...line, count, rate }
+}))
+async function refresh() {
+  if (document.hidden) return
   try {
-    const j = await apiJson<StatusResp>('/status')
-    const list = j.models || []
-    stVersion.value = j.version || '--'
-    stUptime.value = j.uptime_sec ? fmtUptime(j.uptime_sec) : '--'
-    if (list.length) {
-      const avgRate = list.reduce((s, m) => s + (m.success_rate || 0), 0) / list.length
-      const avgLat = list.reduce((s, m) => s + (m.avg_first_ms || m.avg_latency_ms || 0), 0) / list.length // 展示口径：优先首字延迟（用户感知）
-      stOkRate.value = avgRate.toFixed(1) + '%'
-      stLatency.value = (avgLat / 1000).toFixed(2) + ' s'
-    }
-    statusErr.value = false
-  } catch { statusErr.value = true /* 保留上次成功数据，下一轮自动重试 */ }
-  statusLoading.value = false
+    const result = await apiJson<{models?: typeof rows.value}>('/status')
+    rows.value = result.models || []
+    updated.value = new Date().toLocaleTimeString('zh-CN')
+    failed.value = false
+  } catch { failed.value = true }
 }
-let statusTimer = 0
-onMounted(() => { loadModels(); loadStatus(); statusTimer = window.setInterval(loadStatus, 30000) })
-onUnmounted(() => { if (statusTimer) window.clearInterval(statusTimer) })
-
-/* ---- 功能卡矩阵 ---- */
-const FEATURES = [
-  { icon: 'chat', title: '在线体验', desc: '登录后流式对话，全模型切换即开即用', to: '/playground' },
-  { icon: 'layout', title: '个人控制台', desc: '创建 / 管理 API 密钥，余额与账号设置', to: '/console' },
-  { icon: 'chart', title: '我的用量', desc: '登录后查看用量统计与调用日志', to: '/usage' },
-  { icon: 'box', title: '模型中心', desc: '免费与收费模型一览，实时健康分，一键复制模型 ID', to: '/models' },
-  { icon: 'puzzle', title: '工具箱', desc: 'IP 定位 / 翻译 / 子网计算 / 小游戏，纯免费', to: '/tools' },
-  { icon: 'book', title: 'API 文档', desc: '端点、参数、错误码一览，OpenAI 协议全兼容', to: '/api' },
-  { icon: 'trophy', title: '模型竞技场', desc: '双模型盲测对比，投票揭晓身份，全站胜率排行', to: '/arena' },
-  { icon: 'activity', title: '状态大屏', desc: '全站调用量、成功率、模型健康度实时透明', to: '/status' },
-  { icon: 'heart', title: '赞助支持', desc: '请作者喝杯咖啡，助服务器与算力走得更远', to: '/sponsor' },
-]
-
-/* ---- 快速开始第三步：请求示例（curl / Python / JS 切换） ---- */
-const DEMO_LANGS = ['curl', 'python', 'js'] as const
-type DemoLang = (typeof DEMO_LANGS)[number]
-const demoLang = ref<DemoLang>('curl')
-const DEMO: Record<'curl' | 'python' | 'js', string> = {
-  curl: `curl ${baseUrl}/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -d '{"model": "gpt-oss-20b", "messages": [{"role": "user", "content": "用一句话介绍你自己"}]}'`,
-  python: `from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-你的密钥",              # 控制台创建
-    base_url="${baseUrl}",               # 结尾已带 /v1
-)
-r = client.chat.completions.create(
-    model="gpt-oss-20b",
-    messages=[{"role": "user", "content": "用一句话介绍你自己"}],
-)
-print(r.choices[0].message.content)`,
-  js: `import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: "sk-你的密钥",                // 控制台创建
-  baseURL: "${baseUrl}",                 // 结尾已带 /v1
-});
-const r = await client.chat.completions.create({
-  model: "gpt-oss-20b",
-  messages: [{ role: "user", content: "用一句话介绍你自己" }],
-});
-console.log(r.choices[0].message.content);`,
-}
-const demoCode = computed(() => DEMO[demoLang.value])
-
-/* ---- 社区 / 开源（静态内容与旧版一致，Q 群以 meta 下发优先） ---- */
-const qqUrl = computed(() => meta.value?.qq_group_url || 'https://qm.qq.com/q/qoe6XbsVge')
-const qqNum = computed(() => meta.value?.qq_group || '1103667832')
+let timer = 0
+onMounted(() => { refresh(); timer = window.setInterval(refresh, 60000) })
+onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <div class="wrap">
-    <!-- ================= 沉浸式 Hero ================= -->
-    <section class="hero fade-up">
-      <div class="orb o1" aria-hidden="true"></div>
-      <div class="orb o2" aria-hidden="true"></div>
-      <div class="orb o3" aria-hidden="true"></div>
-
-      <span class="tag acc hero-badge"><AqIcon name="bolt" :size="13" />OpenAI 兼容 · 注册即用 · 永久免费额度</span>
-      <h1 class="hero-title">
-        AQUA api · 算力如水 普惠共享<br />
-        <span class="grad-text">一个接口接入全部大模型</span>
-      </h1>
-      <p class="hero-sub">
-        半公益开放算力站 —— 免费 · 极速 · 注册即用，Nvidia NIM 与官方自营专线的 OpenAI 兼容 API 网关（ACU 工程系列旗舰项目）。
-        客户端只改 base_url 与 api_key，协议级兼容，开箱即用。
-      </p>
-
-      <div class="hero-cta">
-        <router-link v-if="!isLoggedIn()" class="btn primary" to="/login">
-          <AqIcon name="key" :size="15" />注册 / 登录 · 创建密钥
-        </router-link>
-        <router-link v-else class="btn primary" to="/console">
-          <AqIcon name="layout" :size="15" />进入我的控制台
-        </router-link>
-        <router-link class="btn" to="/api"><AqIcon name="book" :size="15" />查看 API 文档</router-link>
-        <router-link class="btn" to="/community"><AqIcon name="chat" :size="15" />加入交流群</router-link>
+  <main class="wrap home">
+    <section class="hero">
+      <div class="intro">
+        <h1>让模型接入，<br><span>清晰而简单。</span></h1>
+        <p>一个 OpenAI 兼容接口，连接免费与付费模型。<br class="desktop-break">选好线路，看清费用，把精力留给创造。</p>
+        <div class="actions">
+          <router-link class="btn primary" :to="isLoggedIn() ? '/console' : '/login'">开始接入 <span aria-hidden="true">↗</span></router-link>
+          <router-link class="btn ghost" to="/models">查看模型与价格</router-link>
+        </div>
+        <div class="endpoint"><span>API BASE URL</span><code>{{ baseUrl }}</code><CopyBtn :text="baseUrl" label="复制" /></div>
       </div>
-
-      <!-- 实时数据条：/v1/status（30 秒轮询） -->
-      <div class="card live-strip">
-        <div class="li">
-          <span>网关版本</span>
-          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 72px;"></b>
-          <b v-else class="num">{{ stVersion }}</b>
-        </div>
-        <div class="li">
-          <span>连续运行</span>
-          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 88px;"></b>
-          <b v-else class="num">{{ stUptime }}</b>
-        </div>
-        <div class="li">
-          <span>近 1h 成功率</span>
-          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 64px;"></b>
-          <b v-else class="num">{{ stOkRate }}</b>
-        </div>
-        <div class="li">
-          <span>平均首字时延</span>
-          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 64px;"></b>
-          <b v-else class="num">{{ stLatency }}</b>
-        </div>
-        <div class="li">
-          <span>在线模型</span>
-          <b v-if="statusLoading" class="skeleton" style="min-height: 18px; width: 46px;"></b>
-          <b v-else class="num">{{ stModels }}</b>
-        </div>
-        <div class="li st">
-          <span class="dot" :class="statusErr ? 'bad' : 'ok'"></span>
-          {{ statusErr ? '状态同步失败 · 自动重试中' : '实时健康' }}
-        </div>
-      </div>
-      <div v-if="statusErr" class="msg bad">实时状态获取失败（/v1/status），将在 30 秒后自动重试；其余功能不受影响。</div>
-
-      <!-- 公告：/v1/meta 配置下发 -->
-      <div v-if="meta?.announcement_enabled && meta?.announcement" class="banner">
-        <AqIcon name="info" :size="15" />
-        <span>{{ meta.announcement }}</span>
+      <div class="request-panel">
+        <div class="request-top"><span>你的第一条请求</span><span class="mono">cURL</span></div>
+        <pre>{{ code }}</pre>
+        <div class="request-bottom"><span><b>acu/</b> 商汤纯免费线路</span><CopyBtn :text="code" label="复制示例" /></div>
+        <p>先在工作台创建密钥，再替换示例中的 sk-你的密钥。模型可用性以目录和实际响应为准。</p>
       </div>
     </section>
-
-    <!-- ================= 功能卡矩阵 ================= -->
-    <section class="mt24">
-      <div class="sec-head">
-        <h2><AqIcon name="grid" :size="19" />站内直达</h2>
-        <div class="sub">从对话体验到数据大屏，一个站点全覆盖</div>
-      </div>
-      <div class="grid3 fade-up">
-        <router-link v-for="f in FEATURES" :key="f.to" :to="f.to" class="card hoverable feat">
-          <span class="feat-ic"><AqIcon :name="f.icon" :size="19" /></span>
-          <b>{{ f.title }}</b>
-          <span class="dim">{{ f.desc }}</span>
-          <span class="feat-go"><AqIcon name="arrow-right" :size="14" /></span>
+    <div v-if="meta?.announcement_enabled && meta?.announcement" class="banner">{{ meta.announcement }}</div>
+    <section class="routes">
+      <div class="section-heading"><h2>三条线路，各自清楚。</h2><p>免费、按次、按量，独立选择与计费。</p></div>
+      <div class="line-grid">
+        <router-link v-for="line in lines" :key="line.id" :to="line.to" class="line-item">
+          <div class="line-meta"><code>{{ line.id }}</code><span>{{ line.mode }}</span></div>
+          <h3>{{ line.name }}</h3><p>{{ line.desc }}</p>
+          <span class="line-link">查看模型 <span aria-hidden="true">↗</span></span>
         </router-link>
       </div>
     </section>
-
-    <!-- ================= 快速开始三步 ================= -->
-    <section class="mt24">
-      <div class="sec-head">
-        <h2><AqIcon name="bolt" :size="19" />三步接入</h2>
-        <div class="sub">注册免费 · 密钥自助创建 · 随时吊销重建 · 免费模型注册即用</div>
-      </div>
-      <div class="grid3 fade-up">
-        <div class="card">
-          <div class="step-no">STEP 01</div>
-          <b><AqIcon name="server" :size="16" />Base URL（接口地址）</b>
-          <div class="row mt12" style="flex-wrap: nowrap;">
-            <code class="code" style="flex: 1; padding: 9px 12px;">{{ baseUrl }}</code>
-            <CopyBtn :text="baseUrl" />
-          </div>
-          <p class="dim mt8">客户端只需填入该地址，系统自动拼接 /chat/completions 等路径。</p>
-        </div>
-        <div class="card">
-          <div class="step-no">STEP 02</div>
-          <b><AqIcon name="key" :size="16" />API Key（密钥）</b>
-          <p class="mt12">
-            注册登录后，在<b>个人控制台一键创建密钥</b>（形如 <code>sk-****</code>）——
-            注册免费、创建自助、随时吊销重建，每个密钥独立统计用量。
-          </p>
-          <router-link to="/console" class="btn block mt12"><AqIcon name="plus" :size="14" />进入控制台创建</router-link>
-        </div>
-        <div class="card">
-          <div class="step-no">STEP 03</div>
-          <b><AqIcon name="send" :size="16" />发起第一条请求</b>
-          <div class="chips mt12">
-            <button v-for="l in DEMO_LANGS" :key="l" class="chip" :class="{ on: demoLang === l }" @click="demoLang = l">
-              {{ l === 'js' ? 'JavaScript' : l === 'curl' ? 'cURL' : 'Python' }}
-            </button>
-          </div>
-          <pre class="code mt8 demo-code">{{ demoCode }}</pre>
-          <div class="row mt8">
-            <CopyBtn :text="demoCode" />
-            <router-link to="/models" class="btn ghost sm">去模型中心选模型 <AqIcon name="arrow-right" :size="13" /></router-link>
-          </div>
-        </div>
-      </div>
+    <section class="status-band">
+      <div><h2>服务状态，有据可查。</h2><p>近 1 小时 · 按请求量加权成功率</p><small>{{ failed ? '更新失败；已有数据可能过期' : updated ? `最后更新 ${updated}` : '正在获取样本' }}</small></div>
+      <div v-for="line in lines" :key="line.id" class="line-status"><code>{{ line.id }}</code><strong>{{ line.rate === null ? '暂无样本' : `${line.rate.toFixed(1)}%` }}</strong><small>{{ line.count }} 次请求</small></div>
+      <router-link to="/status">查看详情 ↗</router-link>
     </section>
-
-    <!-- ================= 开源与社区 ================= -->
-    <section class="mt24">
-      <div class="sec-head">
-        <h2><AqIcon name="heart" :size="19" />开源与社区</h2>
-        <div class="sub">AGPL-3.0 完全开源 · 网关 + 前台全量源码 · 大版本公告在 QQ 频道同步</div>
-      </div>
-      <div class="grid2 fade-up">
-        <div class="card">
-          <b><AqIcon name="star" :size="16" />AQUA api · ACU 工程系列开源项目</b>
-          <p class="mt8 dim">
-            可自由自部署；二开对外提供服务需以同协议开源。喜欢就给作者点个 Star，是项目持续演进的最大动力。
-          </p>
-          <div class="row wrap mt12">
-            <a class="btn sm" href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">
-              <AqIcon name="external" :size="13" />Gitee 仓库
-            </a>
-            <a class="btn sm" href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">
-              <AqIcon name="external" :size="13" />GitHub 仓库
-            </a>
-            <CopyBtn text="https://gitee.com/xiaosu4610/aqua-rust-workers" label="复制仓库地址" />
-          </div>
-        </div>
-        <div class="card">
-          <b><AqIcon name="message" :size="16" />官方交流群 · QQ 频道</b>
-          <p class="mt8 dim">
-            技术交流、使用反馈、问题求助都在这里；一群将满请加二群。频道号
-            <code>pd57362562</code>，大版本更新等重要公告同步于此。
-          </p>
-          <div class="row wrap mt12">
-            <span class="tag acc mono">群号 {{ qqNum }}</span>
-            <a class="btn sm primary" :href="qqUrl" target="_blank" rel="noopener">
-              <AqIcon name="arrow-right" :size="13" />加入群聊
-            </a>
-            <CopyBtn :text="qqNum" label="复制群号" />
-          </div>
-        </div>
-      </div>
+    <section class="start">
+      <div class="section-heading"><h2>从选择到调用，只需三步。</h2><router-link to="/api">打开接入文档 ↗</router-link></div>
+      <div class="steps"><div><span>01</span><h3>选择模型</h3><p>比较模型能力、线路与价格，复制完整模型 ID。</p></div><div><span>02</span><h3>创建密钥</h3><p>在工作台管理 API 密钥，查看余额和调用记录。</p></div><div><span>03</span><h3>发送请求</h3><p>配置 Base URL 与密钥。遇到问题，按响应错误码排查。</p></div></div>
     </section>
-  </div>
+    <section class="explore"><div><h2>先体验，再构建。</h2><p>在线对话、实用工具与社区，帮助你找到合适的用法。</p></div><div class="actions"><router-link class="btn" to="/playground">AI 对话</router-link><router-link class="btn ghost" to="/tools">工具箱</router-link><router-link class="btn ghost" to="/community">社区交流</router-link></div></section>
+  </main>
 </template>
 
 <style scoped>
-/* ---- Hero 区（布局微调；颜色一律取令牌） ---- */
-.hero {
-  position: relative;
-  padding: 72px 0 8px;
-  text-align: center;
-  overflow: hidden;
-}
-.orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(72px);
-  pointer-events: none;
-  z-index: -1;
-}
-.o1 { width: 340px; height: 340px; left: 6%; top: -60px; background: var(--acc); opacity: .14; animation: twinkle 7s ease-in-out infinite; }
-.o2 { width: 300px; height: 300px; right: 4%; top: 30px; background: var(--acc-2); opacity: .15; animation: twinkle 9s ease-in-out 1.2s infinite; }
-.o3 { width: 260px; height: 260px; left: 42%; top: 140px; background: var(--acc-3); opacity: .12; animation: twinkle 11s ease-in-out 2.4s infinite; }
-@keyframes twinkle {
-  0%, 100% { opacity: .06; transform: scale(.92); }
-  50% { opacity: .17; transform: scale(1.05); }
-}
-.hero-badge { margin-bottom: 18px; }
-.hero-title {
-  font-size: clamp(38px, 6.2vw, 64px);
-  font-weight: 800;
-  letter-spacing: -.03em;
-  line-height: 1.14;
-}
-.hero-title .grad-text { font-size: 1.08em; }
-.hero-sub {
-  max-width: 640px;
-  margin: 18px auto 0;
-  color: var(--txt2);
-  font-size: 15px;
-}
-.hero-cta {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 26px;
-}
-.hero-cta .btn { padding: 11px 22px; font-size: 14.5px; }
-
-/* ---- 实时数据条 ---- */
-.live-strip {
-  margin: 34px auto 0;
-  max-width: 920px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px 18px;
-  text-align: left;
-  padding: 16px 20px;
-}
-.live-strip .li span { display: block; font-size: 11.5px; color: var(--txt2); }
-.live-strip .li b { font-size: 17px; color: var(--txt0); font-weight: 700; margin-top: 2px; display: inline-block; min-height: 20px; }
-.live-strip .li.st { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--txt2); justify-content: flex-end; }
-
-/* ---- 功能卡矩阵 ---- */
-.sec-head { margin: 0 0 16px; }
-.sec-head h2 { display: flex; align-items: center; gap: 9px; font-size: 21px; }
-.sec-head .sub { color: var(--txt2); font-size: 13px; margin-top: 3px; }
-.feat { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; color: inherit; position: relative; }
-.feat b { font-size: 15px; }
-.feat-ic {
-  width: 38px; height: 38px; border-radius: 11px;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--acc-soft); color: var(--acc);
-  margin-bottom: 4px;
-}
-.feat-go {
-  position: absolute; right: 16px; top: 22px;
-  color: var(--txt3);
-  transition: transform var(--t-fast), color var(--t-fast);
-}
-.feat:hover .feat-go { color: var(--acc); transform: translateX(3px); }
-
-/* ---- 快速开始 ---- */
-.step-no {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  color: var(--acc);
-  background: var(--acc-soft);
-  border-radius: 7px;
-  padding: 3px 9px;
-  width: fit-content;
-  margin-bottom: 10px;
-}
-.demo-code { min-height: 208px; white-space: pre; margin-top: 0; }
+.home { padding-bottom: 24px; }
+.hero { display:grid; grid-template-columns:1.05fr 1fr; gap:56px; align-items:center; padding:100px 0 88px; position:relative; }
+.hero::before { content:''; position:absolute; inset:-20px -15px; background:radial-gradient(ellipse at 75% 40%,var(--acc-soft),transparent 65%); z-index:-1; pointer-events:none; }
+h1 { font-size:clamp(36px,4.8vw,62px); line-height:1.2; letter-spacing:-.045em; font-weight:750; }
+h1 span { color:var(--acc); }
+.intro > p { color:var(--txt2); font-size:17px; line-height:1.9; margin:24px 0 28px; }
+.actions { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.actions .btn { min-height:46px; padding:10px 20px; font-size:14px; }
+.endpoint { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:30px; }
+.endpoint > span { font-size:11px; letter-spacing:.12em; width:100%; color:var(--txt2); }
+.endpoint code { font-size:13px; overflow-wrap:anywhere; }
+.request-panel { min-width:0; background:var(--bg1); border:1px solid var(--line-strong); border-radius:16px; box-shadow:var(--shadow-2); overflow:hidden; }
+.request-top,.request-bottom { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 22px; font-size:13px; }
+.request-top { border-bottom:1px solid var(--line); color:var(--txt2); }
+.request-panel pre { padding:28px 22px; overflow:auto; font-size:12px; line-height:2; color:var(--txt0); }
+.request-bottom { border-top:1px solid var(--line); flex-wrap:wrap; }
+.request-panel > p { padding:0 22px 20px; font-size:12px; color:var(--txt2); }
+.section-heading { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:12px; margin-bottom:28px; }
+.section-heading h2,.status-band h2,.explore h2 { font-size:24px; letter-spacing:-.03em; }
+.section-heading p,.steps p,.explore p { color:var(--txt2); }
+.line-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border-top:1px solid var(--line-strong); border-bottom:1px solid var(--line-strong); }
+.line-item { padding:30px 28px; color:var(--txt1); transition:background-color var(--t-fast); }
+.line-item + .line-item { border-left:1px solid var(--line); }
+.line-item:hover { background:var(--acc-soft); }
+.line-meta { display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--txt2); margin-bottom:24px; }
+.line-meta code { font-size:20px; color:var(--acc); }
+.line-item h3 { font-size:21px; margin-bottom:12px; }
+.line-item p { color:var(--txt2); min-height:72px; }
+.line-link { display:flex; justify-content:space-between; margin-top:24px; font-size:13px; color:var(--txt0); }
+.status-band { display:flex; align-items:center; flex-wrap:wrap; gap:30px; background:var(--bg1); padding:28px; margin-top:32px; border-radius:12px; border:1px solid var(--line); }
+.status-band > div:first-child { flex:1; min-width:220px; }
+.status-band h2 { font-size:18px; margin-bottom:6px; }
+.status-band p,.status-band small { font-size:12px; color:var(--txt2); }
+.line-status { display:grid; gap:4px; min-width:86px; }
+.line-status code { color:var(--txt2); }
+.line-status strong { font-size:20px; font-variant-numeric:tabular-nums; }
+.start { padding:76px 0; }
+.steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:40px; }
+.steps span { font:14px var(--mono); color:var(--acc); display:block; margin-bottom:20px; }
+.steps h3 { margin-bottom:10px; }
+.explore { display:flex; justify-content:space-between; align-items:center; gap:24px; flex-wrap:wrap; padding:36px 0; border-top:1px solid var(--line); }
+.explore p { margin-top:10px; }
+@media(max-width:960px) { .hero { gap:28px; padding:64px 0; } .request-panel pre { font-size:11px; } }
+@media(max-width:720px) { .hero { grid-template-columns:minmax(0,1fr); padding:44px 0; gap:36px; } .intro > p { font-size:16px; } .desktop-break { display:none; } .line-grid,.steps { grid-template-columns:minmax(0,1fr); } .line-item { padding:24px 8px; } .line-item + .line-item { border-left:0; border-top:1px solid var(--line); } .line-item p { min-height:0; } .line-meta { margin-bottom:12px; } .status-band { padding:20px; gap:24px; } .status-band > div:first-child { flex-basis:100%; } .start { padding:48px 0; } .steps { gap:28px; } .steps span { margin-bottom:8px; } }
 </style>

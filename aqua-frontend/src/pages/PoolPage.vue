@@ -310,7 +310,7 @@ onMounted(async () => {
         <div>
           <h1><AqIcon name="coin" :size="24" />众筹公共算力池</h1>
           <div class="sub">
-            acu/ 前缀众筹模型<b>按次</b>从公共站点额度扣费——人人可调、无需充值、个人余额分文不动。站点额度由大家共同充值维持（<b>充值 1:1 注入站点额度</b>），见底即暂停，充值即复活。每一笔充值与扣费全部公开可查。
+            此页用于公共池贡献与历史流水，<b>不计入您的个人余额</b>。acu/ 商汤官方自营纯免费，不扣个人或公共池额度，也不因公共池余额变化而转为收费。个人付费调用请前往工作台充值。
           </div>
         </div>
         <div class="ops">
@@ -351,8 +351,8 @@ onMounted(async () => {
 
       <!-- 众筹模型一览 -->
       <div class="card mt16">
-        <b><AqIcon name="server" :size="16" /> 众筹模型一览（acu/ 前缀 · 按次扣池）</b>
-        <p class="msg info mt12" style="margin: 0;">以下模型<b>所有分组密钥均可调用</b>（含纯免费），每次成功请求从公共站点额度扣一次（与生成长度无关），个人余额分文不动；失败请求全额退回池子。</p>
+        <b><AqIcon name="server" :size="16" /> 商汤免费线一览（acu/ · 不扣公共池）</b>
+        <p class="msg info mt12" style="margin: 0;">以下 acu/ 模型为商汤官方自营纯免费线路，不扣个人余额或公共池额度。实际可用性与限制请查看模型详情。</p>
         <p v-if="crowdModelsMsg" class="msg bad mt12">{{ crowdModelsMsg }}</p>
         <div v-else-if="!crowdModels.length" class="empty" style="padding: 18px 0;">
           <b>模型列表加载中或暂未上架</b>

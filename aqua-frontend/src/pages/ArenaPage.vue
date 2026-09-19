@@ -12,6 +12,7 @@ interface ArenaSide { ok: boolean; content?: string; status?: number | string; l
 interface ArenaResp { battle_id?: string; a: ArenaSide; b: ArenaSide }
 interface VoteResp { counted?: boolean; msg?: string; revealed: { a: string; b: string } }
 interface LbItem { model: string; win_rate: number | string; wins: number; losses: number; ties: number; battles: number }
+interface LbResp { ranking?: LbItem[] }
 interface LbRow { model: string; wr: string; rec: string }
 
 const prompt = ref('')

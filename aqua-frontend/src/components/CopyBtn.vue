@@ -15,7 +15,7 @@ async function doCopy() {
 </script>
 
 <template>
-  <button class="btn" :class="[size === 'xs' ? 'xs' : 'sm', { primary: ok }]" type="button" @click="doCopy">
+  <button class="btn" :class="[size === 'xs' ? 'xs' : 'sm', { primary: ok }]" type="button" aria-live="polite" @click="doCopy">
     <AqIcon :name="ok ? 'check' : 'copy'" :size="13" />{{ ok ? '已复制' : label }}
   </button>
 </template>

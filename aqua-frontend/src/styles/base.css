@@ -16,7 +16,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   min-height: 100dvh;
-  overflow-x: hidden;
+  overflow-wrap: break-word;
 }
 
 /* ---- 背景氛围：极光光谱 + 科技网格（仅暗色全开，亮色轻量） ---- */
@@ -106,6 +106,9 @@ button { font-family: inherit; }
   to   { background-position: 400px 0; }
 }
 
+body::before, body::after { display: none; }
+pre { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }

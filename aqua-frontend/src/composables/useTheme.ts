@@ -11,10 +11,13 @@ function read(): Theme {
     const t = localStorage.getItem('aqua-theme')
     if (t === 'light' || t === 'dark') return t
   } catch { /* 隐私模式 */ }
-  return 'dark' // 暗黑科技流为主主题
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
 }
 function apply(t: Theme) {
   document.documentElement.setAttribute('data-theme', t)
+  document.documentElement.style.colorScheme = t
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (meta) meta.content = t === 'dark' ? '#071019' : '#f5f8fa'
 }
 
 export function useTheme() {

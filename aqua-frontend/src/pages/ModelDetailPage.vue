@@ -594,12 +594,12 @@ const priceTag = computed(() => {
     }
   }
   if (r.price_micro || r.per_image != null) {
-    const v = ((r.price_micro ?? r.per_image) / 1_000_000).toFixed(3)
+    const v = microYuan(r.price_micro ?? r.per_image)
     const ag = isAgentView.value ? ' · 代理拿货价' : ''
     return {
       text: '收费 · ¥' + v + '/' + (isTideImage.value ? '张' : '次') + ' · 按' + (isTideImage.value ? '张' : '次') + '计费' + ag,
       title: isAgentView.value
-        ? '代理拿货价已生效：展示的是代理拿货价，官网零售原价与拿货价的差价即您的零售利润空间'
+        ? '代理结算价由服务端账号分组决定；价差未扣除经营成本，不代表保证收益'
         : (isTideImage.value ? '按张计费：n 参数控制张数，详见下方计费说明' : '预充值按次计费，详见下方计费说明'),
     }
   }
@@ -625,7 +625,7 @@ const priceRows = computed<[string, string][] | null>(() => {
     return [
       ['计费方式', '按次计费 · 每次成功请求扣一次，与生成长度无关'],
       ['单价（代理拿货价）', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 次'],
-      ['官网零售原价', agentBasePrice.value != null ? '¥' + microYuan(agentBasePrice.value) + ' / 次 · 零售差价即您的利润空间' : '见模型中心'],
+      ['官网零售原价', agentBasePrice.value != null ? '¥' + microYuan(agentBasePrice.value) + ' / 次 · 仅供价格对比' : '见模型中心'],
     ]
   }
   return [['计费方式', '按次计费 · 每次成功请求扣一次，与生成长度无关'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 次']]
@@ -668,7 +668,7 @@ const priceRows = computed<[string, string][] | null>(() => {
       <div v-if="isAgentView" class="card mt16" style="border-color: #f59e0b; background: linear-gradient(135deg, rgba(245, 158, 11, .08), transparent);">
         <b style="color: #d97706;">代理拿货价已生效</b>
         <div class="dim" style="font-size: 12.5px; margin-top: 4px;">
-          您当前为<b>代理分组</b>，本页展示的是<b>代理拿货价</b>（金标价格）；<template v-if="agentBasePrice != null">官网零售原价为 <s>¥{{ microYuan(agentBasePrice) }}/次</s>，</template>零售差价即您的利润空间。您的下游客户按官网原价零售即可。
+          当前结算身份：<b>代理</b>。<template v-if="agentBasePrice != null">官网零售价 ¥{{ microYuan(agentBasePrice) }}/次；每次价差 ¥{{ microYuan(agentBasePrice - (row?.price_micro ?? 0)) }}。</template><template v-else>当前模型未提供代理专价对照，按接口展示价格结算。</template>价差未扣除获客、支付及其他经营成本，不代表保证收益。
         </div>
       </div>
 
@@ -834,7 +834,8 @@ const priceRows = computed<[string, string][] | null>(() => {
 }
 @media (max-width: 1020px) {
   .detail-grid { grid-template-columns: 1fr; }
-  .col-side { position: static; }
+  .col-side { position: static; min-width: 0; grid-row: 1; }
+  .detail-grid > * { min-width: 0; }
 }
 .back-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
 .mid-id { font-size: 22px; font-weight: 700; color: var(--txt0); word-break: break-all; }

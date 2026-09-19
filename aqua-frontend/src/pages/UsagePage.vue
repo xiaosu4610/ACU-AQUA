@@ -165,7 +165,7 @@ onUnmounted(() => {
                   <td class="num">
                     <template v-if="r.amount != null">
                       <b>¥{{ microYuan(r.amount) }}</b>
-                      <span v-if="r.model.startsWith('acu/')" class="dim" title="众筹模型按次计费：每次成功请求扣一次单价，从站点公共额度扣除，与生成长度无关"> · 按次</span>
+                      <span v-if="r.model.startsWith('aqua/')" class="dim"> · 按次</span><span v-else-if="r.model.startsWith('codex/')" class="dim"> · 按量</span>
                     </template>
                     <template v-else><span class="dim">免费</span></template>
                   </td>

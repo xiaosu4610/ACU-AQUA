@@ -6,7 +6,7 @@ import { TOOL_REGISTRY } from '@/tools/registry'
 // meta.desc  = 每页专属 description；meta.noindex = 私密页禁止收录
 const router = createRouter({
   history: createWebHistory(),
-  scrollBehavior: () => ({ top: 0 }),
+  scrollBehavior: (to, _from, saved) => saved || (to.hash ? { el: to.hash, top: 80 } : { top: 0 }),
   routes: [
     { path: '/', redirect: '/home' },
     { path: '/home', component: () => import('@/pages/HomePage.vue'), meta: {
@@ -29,8 +29,8 @@ const router = createRouter({
       desc: 'AQUA api 工具箱：IP 归属地、AI 翻译、AI 摘要、正则解释、哈希计算、周报生成、五子棋等免费在线工具，即开即用。' } },
     { path: '/tools/:name', component: () => import('@/pages/ToolPage.vue') },
     { path: '/treehole', component: () => import('@/pages/TreeholePage.vue'), meta: {
-      title: '树洞 — 匿名心事社区',
-      desc: 'AQUA api 树洞：匿名倾诉心事，AI 温柔回应，也可以看看别人的故事。' } },
+      title: '树洞 — AI 倾诉与陪伴',
+      desc: 'AQUA api 树洞：向 AI 说出心事，获得陪伴与回应，不替代专业心理支持。' } },
     { path: '/prompts', component: () => import('@/pages/PromptsPage.vue'), meta: {
       title: '提示词库 — 精选 Prompt 模板',
       desc: 'AQUA api 提示词库：写作、编程、学习、办公等场景的精选 Prompt 模板，一键复制到 Playground 试用。' } },
@@ -52,7 +52,7 @@ const router = createRouter({
       desc: 'AQUA api 是半公益项目，赞助帮助我们覆盖上游算力成本，让免费额度持续下去。' } },
     { path: '/pool', component: () => import('@/pages/PoolPage.vue'), meta: {
       title: '公共众筹池 — 半公益 AI 算力',
-      desc: 'AQUA api 公共众筹池：大家出资扩充公共站点额度，acu/ 系列模型按次从池扣费，个人余额分文不动。' } },
+      desc: 'AQUA api 公共池贡献与历史流水，与个人余额独立。acu/ 商汤纯免费，不扣公共池额度。' } },
     { path: '/login', component: () => import('@/pages/LoginPage.vue'), meta: {
       title: '登录 / 注册', noindex: true } },
     // /register 兼容重定向：注册是 /login 页内的 tab，老邀请链接与直链透传 code / mode

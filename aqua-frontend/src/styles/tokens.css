@@ -1,104 +1,28 @@
-/* ============================================================
- * AQUA api Design Tokens —— 双主题设计令牌
- * 暗色「深海光谱」（默认）：深空蓝黑 + 电光青→靛紫渐变
- * 亮色「晨雾实验室」：冷白纸感 + 同源强调色
- * 所有组件只消费令牌，禁止硬编码色值
- * ============================================================ */
-
 :root {
-  /* 字体 */
-  --font: 'Inter', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei UI',
-    'Segoe UI', system-ui, -apple-system, sans-serif;
-  --mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, 'SF Mono', Consolas, monospace;
-
-  /* 几何 */
-  --r-lg: 18px;
-  --r-md: 12px;
-  --r-sm: 9px;
-  --w-max: 1180px;
-
-  /* 动效 */
-  --ease: cubic-bezier(.22, .61, .21, 1);
-  --t-fast: .16s var(--ease);
-  --t-med: .32s var(--ease);
-  /* 统一 UI 过渡（禁用 transition:all——避免布局属性参与过渡引发重排） */
+  --font: 'Inter', 'PingFang SC', 'Microsoft YaHei UI', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Code', ui-monospace, 'SF Mono', Consolas, monospace;
+  --r-lg: 14px; --r-md: 10px; --r-sm: 8px; --w-max: 1240px;
+  --ease: cubic-bezier(.22,.61,.21,1); --t-fast: .16s var(--ease); --t-med: .2s var(--ease);
   --tr-ui: color var(--t-fast), background-color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
-
   color-scheme: dark;
 }
-
-/* ---------------- 暗色：深海光谱 ---------------- */
 :root[data-theme='dark'] {
-  --bg0: #04060c;                          /* 页面底 */
-  --bg1: #0a0e18;                          /* 区块底 */
-  --bg2: rgba(17, 24, 39, .55);            /* 卡片（玻璃） */
-  --bg2-solid: #101828;                    /* 卡片实底（弹层用） */
-  --bg3: rgba(148, 163, 184, .08);         /* 悬浮/表头 */
-  --glass-blur: 16px;
-
-  --line: rgba(148, 163, 184, .13);
-  --line-strong: rgba(148, 163, 184, .30);
-
-  --txt0: #eef2f8;                         /* 主标题 */
-  --txt1: #c3cddc;                         /* 正文 */
-  --txt2: #8b97ab;                         /* 次要 */
-  --txt3: #5d6a80;                         /* 弱化 */
-
-  --acc: #2ee6d6;                          /* 电光青 */
-  --acc-2: #7c8cff;                        /* 靛紫 */
-  --acc-3: #38bdf8;                        /* 天青 */
-  --acc-soft: rgba(46, 230, 214, .12);
-  --acc-grad: linear-gradient(120deg, #2ee6d6 0%, #38bdf8 48%, #7c8cff 100%);
-  --acc-grad-text: linear-gradient(100deg, #5eead4, #38bdf8 55%, #a5b4fc);
-  --on-acc: #04121a;
-
-  --ok: #34d399;  --ok-soft: rgba(52, 211, 153, .13);
-  --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .13);
-  --bad: #fb7185; --bad-soft: rgba(251, 113, 133, .13);
-
-  --shadow-1: 0 1px 2px rgba(2, 6, 16, .5);
-  --shadow-2: 0 18px 48px -20px rgba(2, 6, 16, .8);
-  --glow: 0 0 0 1px rgba(46, 230, 214, .22), 0 8px 32px -10px rgba(46, 230, 214, .28);
-  --hero-glow: radial-gradient(52% 42% at 50% 0%, rgba(56, 189, 248, .16), transparent 70%);
-
-  --scroll: rgba(148, 163, 184, .22);
-  color-scheme: dark;
+  --bg0:#080f19; --bg1:#0e1825; --bg2:#111d2b; --bg2-solid:#111d2b; --bg3:rgba(165,190,217,.07); --glass-blur:12px;
+  --line:rgba(165,190,217,.14); --line-strong:rgba(165,190,217,.28);
+  --txt0:#f0f5fa; --txt1:#cfdae6; --txt2:#9eafc3; --txt3:#8fA2b8;
+  --acc:#62dfd2; --acc-2:#a1b5f8; --acc-3:#78c9ed; --acc-soft:rgba(98,223,210,.09);
+  --acc-grad:linear-gradient(115deg,#62dfd2,#78c9ed); --acc-grad-text:linear-gradient(115deg,#8aeadd,#9ccef2); --on-acc:#08232b;
+  --ok:#69dbb0; --ok-soft:rgba(105,219,176,.1); --warn:#f2c974; --warn-soft:rgba(242,201,116,.1); --bad:#ff97a6; --bad-soft:rgba(255,151,166,.1);
+  --shadow-1:0 1px 2px rgba(0,0,0,.12); --shadow-2:0 24px 64px -28px rgba(0,0,0,.65); --glow:0 0 0 1px var(--line-strong); --hero-glow:radial-gradient(ellipse at 75% 30%,var(--acc-soft),transparent 65%);
+  --scroll:rgba(165,190,217,.3); color-scheme:dark;
 }
-
-/* ---------------- 亮色：晨雾实验室 ---------------- */
 :root[data-theme='light'] {
-  --bg0: #f4f6fb;
-  --bg1: #ffffff;
-  --bg2: rgba(255, 255, 255, .82);
-  --bg2-solid: #ffffff;
-  --bg3: rgba(15, 23, 42, .05);
-  --glass-blur: 14px;
-
-  --line: rgba(15, 23, 42, .10);
-  --line-strong: rgba(15, 23, 42, .22);
-
-  --txt0: #0b1526;
-  --txt1: #29354a;
-  --txt2: #5b6b84;
-  --txt3: #93a1b7;
-
-  --acc: #0d9488;
-  --acc-2: #4f46e5;
-  --acc-3: #0284c7;
-  --acc-soft: rgba(13, 148, 136, .10);
-  --acc-grad: linear-gradient(120deg, #0d9488 0%, #0284c7 48%, #4f46e5 100%);
-  --acc-grad-text: linear-gradient(100deg, #0d9488, #0284c7 55%, #4f46e5);
-  --on-acc: #ffffff;
-
-  --ok: #059669;  --ok-soft: rgba(5, 150, 105, .10);
-  --warn: #b45309; --warn-soft: rgba(180, 83, 9, .10);
-  --bad: #e11d48; --bad-soft: rgba(225, 29, 72, .09);
-
-  --shadow-1: 0 1px 2px rgba(15, 23, 42, .06);
-  --shadow-2: 0 18px 48px -24px rgba(15, 23, 42, .25);
-  --glow: 0 0 0 1px rgba(13, 148, 136, .25), 0 8px 28px -12px rgba(13, 148, 136, .30);
-  --hero-glow: radial-gradient(52% 42% at 50% 0%, rgba(2, 132, 199, .09), transparent 70%);
-
-  --scroll: rgba(15, 23, 42, .25);
-  color-scheme: light;
+  --bg0:#f6f8fb; --bg1:#fff; --bg2:#fff; --bg2-solid:#fff; --bg3:rgba(25,49,73,.04); --glass-blur:12px;
+  --line:rgba(25,49,73,.12); --line-strong:rgba(25,49,73,.25);
+  --txt0:#14283c; --txt1:#354b60; --txt2:#536b80; --txt3:#5d7084;
+  --acc:#08796e; --acc-2:#4056ac; --acc-3:#126e9e; --acc-soft:rgba(8,121,110,.07);
+  --acc-grad:linear-gradient(115deg,#08796e,#126e9e); --acc-grad-text:linear-gradient(115deg,#08796e,#126e9e); --on-acc:#fff;
+  --ok:#15734e; --ok-soft:rgba(21,115,78,.08); --warn:#91560d; --warn-soft:rgba(145,86,13,.08); --bad:#be284d; --bad-soft:rgba(190,40,77,.07);
+  --shadow-1:0 1px 2px rgba(25,49,73,.03); --shadow-2:0 24px 60px -28px rgba(25,49,73,.24); --glow:0 0 0 1px var(--line-strong); --hero-glow:radial-gradient(ellipse at 75% 30%,var(--acc-soft),transparent 65%);
+  --scroll:rgba(25,49,73,.25); color-scheme:light;
 }

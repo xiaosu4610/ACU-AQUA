@@ -14,7 +14,7 @@
   max-width: var(--w-max); margin: 0 auto; padding: 0 22px;
   height: 60px; display: flex; align-items: center; gap: 18px;
 }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; color: var(--txt0); letter-spacing: .02em; }
+.brand { flex-shrink: 0; white-space: nowrap; display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; color: var(--txt0); letter-spacing: .02em; }
 .brand svg { width: 26px; height: 26px; }
 .brand img { width: 26px; height: 26px; display: block; border-radius: 6px; object-fit: contain; }
 .brand em { font-style: normal; background: var(--acc-grad-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -51,6 +51,7 @@
 }
 .mnav {
   position: fixed; inset: 54px 0 auto 0; z-index: 49;
+  max-height: calc(100dvh - 54px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--bg2-solid); border-bottom: 1px solid var(--line);
   padding: 10px 14px 14px; display: grid; gap: 2px;
   box-shadow: var(--shadow-2);
@@ -62,6 +63,7 @@
 /* 汉堡按钮 */
 .burger { display: none; width: 38px; height: 38px; border: 1px solid var(--line); background: var(--bg2); border-radius: var(--r-sm); cursor: pointer; align-items: center; justify-content: center; color: var(--txt1); }
 @media (max-width: 860px) { .burger { display: inline-flex; } }
+@media (max-width: 380px) { .ptop-in { padding: 0 12px; gap: 8px; } .ptop-acts { gap: 5px; } .brand { font-size: 15px; gap: 6px; } }
 
 /* ================= 页脚 ================= */
 .foot { border-top: 1px solid var(--line); margin-top: 56px; padding: 26px 0 34px; }
@@ -126,7 +128,7 @@
 @media (max-width: 860px) {
   .bench { flex-direction: column; }
   .bside {
-    position: sticky; top: 0; z-index: 45; height: auto;
+    position: relative; top: auto; z-index: 45; height: auto;
     width: 100%; flex-direction: row; align-items: center;
     overflow-x: auto; overflow-y: hidden;
     padding: 9px 12px; gap: 6px;
@@ -150,7 +152,7 @@
 
 /* ---- 主题切换 ---- */
 .theme-btn {
-  width: 34px; height: 34px; border-radius: var(--r-sm);
+  width: 40px; height: 40px; border-radius: var(--r-sm);
   border: 1px solid var(--line); background: var(--bg2); color: var(--txt2);
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
   transition: var(--tr-ui);

@@ -44,7 +44,8 @@ function scoreColor(s: number): string {
 function lineStatus(s: string): { dot: string; text: string } {
   if (s === 'great' || s === 'ok') return { dot: 'ok', text: s === 'great' ? '状态极佳' : '运行正常' }
   if (s === 'degraded') return { dot: 'warn', text: '部分异常' }
-  return { dot: 'bad', text: '故障' }
+  if (s === 'down') return { dot: 'bad', text: '故障' }
+  return { dot: 'warn', text: '暂无有效样本' }
 }
 const lineRowsView = computed(() => lineRows.value.slice().sort((a, b) => b.samples - a.samples))
 
@@ -91,17 +92,17 @@ async function loadLive(ac: AbortController) {
     lineMsg.value = lineRows.value.length ? '' : '暂无实时采样数据——去 Playground 或竞技场产生第一条记录'
   } catch {
     if (ac.signal.aborted) return
-    lineRows.value = []
-    lineMsg.value = '实时数据加载失败，稍后自动重试'
+    lineMsg.value = '更新失败；已显示的采样可能过期，稍后自动重试'
   }
 }
 
 async function refresh() {
+  if (document.hidden) return
   if (aborter) aborter.abort()
   const ac = new AbortController()
   aborter = ac
-  updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   await Promise.all([loadStatus(ac), loadLive(ac)])
+  if (meta.value && !lineMsg.value) updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   firstLoading.value = false
 }
 
@@ -150,7 +151,7 @@ onUnmounted(() => {
       <div class="kpi"><span>近 1h 总调用</span><b>{{ kpi.calls }}</b></div>
       <div class="kpi"><span>近 1h 成功率</span><b>{{ kpi.rate }}</b></div>
       <div class="kpi"><span>近 1h 平均首字延迟</span><b>{{ kpi.lat }}</b></div>
-      <div class="kpi"><span>在线模型数</span><b>{{ onlineShow }}</b></div>
+      <div class="kpi"><span>目录模型数（非可用性保证）</span><b>{{ onlineShow }}</b></div>
     </div>
 
     <!-- 线路健康表 -->
@@ -158,10 +159,11 @@ onUnmounted(() => {
       <AqIcon name="server" :size="15" />线路健康
       <span class="grp-n">最近 200 次请求采样 · 实时推断</span>
     </div>
+    <p v-if="lineMsg && lineRowsView.length" class="msg bad" role="status">{{ lineMsg }}</p>
     <div v-if="lineRowsView.length" class="tbl-wrap">
       <table class="table">
         <thead>
-          <tr><th>线路</th><th>状态</th><th class="num">调用数</th><th class="num">近 1h 成功率</th></tr>
+          <tr><th>线路</th><th>状态</th><th class="num">调用数</th><th class="num">采样成功率</th></tr>
         </thead>
         <tbody>
           <tr v-for="r in lineRowsView" :key="r.model">

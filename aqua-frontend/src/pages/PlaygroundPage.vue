@@ -52,8 +52,8 @@ const options = computed(() => listRows.value.map(r => ({
   id: r.id,
   label: r.id
     + (r.paid && r.mode === 'per_token' && r.in_price != null && r.per_image == null ? ' · 按量 ¥' + r.in_price + '/百万tok 起' : '')
-    + (r.paid && r.per_image != null ? ' · ¥' + (r.per_image / 1_000_000).toFixed(3) + '/张' : '')
-    + (r.paid && r.per_image == null && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(3) + '/次' : '')
+    + (r.paid && r.per_image != null ? ' · ¥' + (r.per_image / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') + '/张' : '')
+    + (r.paid && r.per_image == null && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') + '/次' : '')
     + (r.health && typeof r.health.score === 'number' ? ' · ' + r.health.score + '分' : ''),
 })))
 
@@ -232,7 +232,7 @@ onMounted(() => {
         <textarea
           ref="inputEl" v-model="inputText" class="textarea" rows="1"
           placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-          @keydown.enter.exact.prevent="send" @input="autoGrow"
+          aria-label="对话消息" @keydown.enter.exact="event => { if (!event.isComposing && event.keyCode !== 229) { event.preventDefault(); send() } }" @input="autoGrow"
         />
         <div class="chat-actions">
           <button v-show="busy" class="btn danger" type="button" @click="stopStream"><AqIcon name="cross" :size="14" />停止</button>

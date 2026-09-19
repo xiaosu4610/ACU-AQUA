@@ -21,7 +21,7 @@ const view = ref<'free' | 'paid' | 'cap'>(route.query.view === 'cap' ? 'cap' : r
 watch(() => route.query.view, v => { view.value = v === 'cap' ? 'cap' : v === 'paid' ? 'paid' : 'free' })
 function setView(v: 'free' | 'paid' | 'cap') {
   view.value = v
-  router.replace({ query: v === 'free' ? {} : { view: v } })
+  router.replace({ query: { ...route.query, view: v === 'free' ? undefined : v } })
 }
 
 /* ================= 模型列表：/v1/models（60 秒自动刷新） ================= */
@@ -117,7 +117,8 @@ const promoEndsStr = computed(() => new Date(promoEndsAt.value * 1000).toLocaleS
 /* ================= 筛选状态 ================= */
 const curPlatform = ref('all')
 const curType = ref('all')
-const q = ref('')
+const q = ref(typeof route.query.q === 'string' ? route.query.q : '')
+watch(q, value => router.replace({ query: { ...route.query, q: value || undefined } }))
 /* 筛选选项常量（模板直接消费） */
 const PLATFORM_OPTS = [['all', '全部'], ['nvidia', 'Nvidia NIM'], ['acu', '官方自营']] as const
 const TYPE_OPTS = [['all', '全部'], ['chat', '对话'], ['embedding', '向量'], ['rerank', '重排'], ['asr', '语音识别'], ['tts', '语音合成'], ['moderation', '风控'], ['vision', '视觉']] as const
@@ -289,7 +290,8 @@ const paidCallLine = computed(() => paidModels.value.filter(m => m.groups.includ
 const paidTokenLine = computed(() => paidModels.value.filter(m => m.groups.includes('per_token') && !m.id.startsWith('codex/')))
 
 /* 收费页工具栏：搜索 + 类型筛选 + 排序 */
-const paidQ = ref('')
+const paidQ = ref(typeof route.query.q === 'string' ? route.query.q : '')
+watch(paidQ, value => router.replace({ query: { ...route.query, q: value || undefined } }))
 const paidType = ref<'all' | 'chat' | 'image'>('all')
 const paidSort = ref<'smart' | 'price'>('smart')
 function sortTokenLine(arr: typeof paidModels.value) {
@@ -486,7 +488,7 @@ const MODEL_SPECS: ModelSpec[] = [
   { re: /bge-reranker-v2-m3/, ctx: "8K", size: "568M", dims: 0, released: "2024-01" },
   { re: /bce-reranker/, ctx: "0.5K", size: "278M", dims: 0, released: "2023-09" },
 ]
-function modelSpec(id: string): ModelSpec {
+function modelSpec(id: string): Omit<ModelSpec, 're'> {
   for (const s of MODEL_SPECS) if (s.re.test(id)) return s
   return {}
 }
@@ -671,7 +673,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-for="r in viewRows" :key="r.row.id" class="card hoverable mcard" :class="{ exhausted: r.exhausted }" @click="toggle(r.row.id)">
             <div class="row between">
               <router-link :to="modelLink(r.row.id)" class="mono mid" :title="'查看 ' + r.row.id + ' 详情'" @click.stop>{{ r.row.id }}</router-link>
-              <AqIcon name="chevron-down" :size="15" class="caret" :class="{ open: expandedId === r.row.id }" />
+              <button type="button" class="btn ghost xs" :aria-label="`展开 ${r.row.id}`" :aria-expanded="expandedId === r.row.id" @click.stop="toggle(r.row.id)"><AqIcon name="chevron-down" :size="15" class="caret" :class="{ open: expandedId === r.row.id }" /></button>
             </div>
             <div class="row wrap mt8" style="gap: 6px;">
               <span v-if="r.row.id.toLowerCase() === 'auto'" class="tag acc">智能路由</span>
@@ -729,9 +731,10 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-if="loading" class="grid3">
             <div v-for="i in 3" :key="i"><div class="skeleton" style="min-height: 120px;"></div></div>
           </div>
-          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>按次模型加载中或暂未在售</b><div class="dim">acu/ 众筹模型见上方众筹专区 · 在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
+          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>按次模型加载中或暂未在售</b><div class="dim">acu/ 商汤纯免费模型见免费专区 · 在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
         </div>
 
+        <div v-if="!loading && !tokenLineRows.length && !callLineRows.length && !codexLineRows.length && !officialLineRows.length" class="empty"><b>没有匹配当前条件的收费模型</b><button class="btn mt12" @click="paidQ = ''; paidType = 'all'">清除搜索与筛选</button></div>
         <!-- 按量计费分组 -->
         <section v-if="tokenLineRows.length" class="mt16">
           <div class="line-title">按量计费分组<small>密钥选「免费 + 按量计费」时可用：输入 / 缓存命中 / 输出分段计价，无保底，先付后用</small></div>
@@ -780,7 +783,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
         <!-- 按次计费分组 -->
         <section v-if="callLineRows.length" class="mt16">
           <div class="line-title">收费模型（按次计费）<small>密钥选「免费 + 收费」时可用：每次成功请求扣一次，与生成长度无关</small></div>
-          <div class="grid3">
+          <div class="call-list">
             <div v-for="m in callLineRows" :key="m.id + ':call'" class="card hoverable pcard" :class="{ paused: !!m.st }">
               <div class="row between">
                 <span class="mono pid" :title="'完整模型 ID：' + m.id"><i>{{ m.id.split('/')[0] }}/</i>{{ m.id.split('/').slice(1).join('/') }}</span>
@@ -788,10 +791,10 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               </div>
               <div class="row wrap mt8" style="gap: 6px;">
                 <span class="tag grad num">¥{{ microYuan(m.price) }}<em>/次</em></span>
-                <span v-if="m.priceView === 'agent'" class="tag" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;" title="代理拿货价：原价与拿货价的差价即您的零售利润空间">代理拿货价</span>
+                <span v-if="m.priceView === 'agent'" class="tag" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;" title="代理结算价由服务端确认，价差不代表保证收益">代理拿货价</span>
                 <span v-else class="tag">{{ m.basePrice != null ? 'VIP 拿货价' : '正常价' }}</span>
               </div>
-              <div v-if="m.priceView === 'agent' && m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 <s>¥{{ microYuan(m.basePrice) }}/次</s> · 您当前为<b>代理分组</b>，展示的是代理拿货价，零售差价即您的利润空间</div>
+              <div v-if="m.priceView === 'agent' && m.basePrice != null" class="dim mt8"><b>当前结算身份：代理</b><dl class="price-compare"><dt>代理结算价</dt><dd>¥{{ microYuan(m.price) }}/次</dd><dt>官网零售价</dt><dd>¥{{ microYuan(m.basePrice) }}/次</dd><dt>每次价差</dt><dd>¥{{ microYuan(m.basePrice - m.price) }}</dd></dl><p>价差未扣除获客、支付及其他经营成本，不代表保证收益。</p></div>
               <div v-else-if="m.basePrice != null" class="dim mt8" style="font-size: 11.5px;">原价 ¥{{ microYuan(m.basePrice) }}/次 · VIP 专享拿货价已生效</div>
               <div class="row between mt12">
                 <CopyBtn :text="m.id" />
@@ -877,18 +880,12 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <p class="dim" style="font-size: 13px;">Nvidia NIM 免费通道的全部模型——对话、视觉、语音、向量、重排统统不收一分钱，注册即可使用；用量统计仅用于展示，今后也不会收费。</p>
             </div>
             <div>
-              <b style="font-size: 13.5px;">2 · 众筹模型：按次计费（统一 acu/ 前缀）</b>
-              <p class="dim" style="font-size: 13px;">
-                acu/ 前缀众筹公共模型任何密钥都能调，<b>按次计费</b>：每次成功请求按单价从站点公共额度扣费、与生成长度无关、失败不计费，个人余额分文不动。
-                调用方式与免费模型完全一致——同一个接口，只是 model 换成它们，支持流式输出；控制台「我的用量」可查每次扣费。
-              </p>
+              <b style="font-size: 13.5px;">2 · acu/ 商汤官方自营纯免费</b>
+              <p class="dim">acu/ 与收费线路独立，不扣个人余额。aqua/ 按次计费，codex/ 按量计费；完整模型前缀决定线路，请勿混用。</p>
             </div>
             <div>
-              <b style="font-size: 13.5px;">3 · 如何维持公共额度</b>
-              <p class="dim" style="font-size: 13px;">
-                众筹模型扣的是站点公共额度：到 <router-link to="/pool">众筹池</router-link> 充值，支付宝 / 微信任一渠道，
-                支付金额 100% 全额注入公共池。免费模型不受额度影响——没有额度照样随便用。
-              </p>
+              <b style="font-size: 13.5px;">3 · 个人余额与公共贡献分开</b>
+              <p class="dim">付费调用使用个人余额；公共池贡献与赞助不等于个人充值，也不改变 acu/ 纯免费规则。支付前请核对资金用途。</p>
             </div>
           </div>
         </div>
@@ -989,6 +986,13 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
 .crowd-item.cta b { color: var(--warn); }
 
 /* ---- 收费卡 ---- */
+.call-list { display: grid; gap: 0; border-top: 1px solid var(--line-strong); }
+.call-list .pcard { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; gap: 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none; padding: 24px 18px; }
+.call-list .pcard:hover { transform: none; background: var(--bg3); }
+.call-list .pcard > .dim { grid-column: 1 / -1; }
+.call-list .pid { white-space: normal; overflow-wrap: anywhere; font-size: 15px; }
+@media(max-width:800px) { .call-list .pcard { grid-template-columns: minmax(0,1fr); gap: 8px; padding: 22px 16px; } }
+
 .pcard .pid { font-size: 12.5px; font-weight: 700; color: var(--txt0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcard .pid i { font-style: normal; color: var(--txt3); font-weight: 600; }
 .pcard.paused { opacity: .62; }

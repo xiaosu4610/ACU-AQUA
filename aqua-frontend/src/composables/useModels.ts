@@ -1,5 +1,6 @@
 /* 模型列表共享状态：/v1/models 拉取 + 离线兜底（首屏即有模型可选） */
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { sessionToken } from './useAuth'
 import { apiJson } from './useApi'
 import { classifyModel } from './modelMeta'
 
@@ -12,6 +13,8 @@ export interface ModelRow {
   status_msg?: string
   /** 收费模型：价格（微元）+ 活动价标记 */
   paid?: boolean
+  price_view?: string
+  base_price_micro?: number
   price_micro?: number
   promo_active?: boolean
   /** 活动价截止时刻（unix 秒，后端 /v1/models 提供） */
@@ -42,16 +45,27 @@ const loading = ref(false)
 const error = ref('')
 /** 最近一次成功拉取时间戳（0 = 从未成功） */
 const loadedAt = ref(0)
+let generation = 0
+watch(sessionToken, () => {
+  generation++
+  models.value = []
+  loadedAt.value = 0
+  loading.value = false
+  error.value = ''
+  void useModels().load(true)
+}, { flush: 'pre' })
 
 export function useModels() {
   async function load(force = false) {
     if (loading.value) return
     if (models.value.length && !force) return
+    const requestGeneration = generation
     loading.value = true
     error.value = ''
     try {
       // 带登录态：后端按用户价格组下发 VIP 拿货价（vip 价目）+ base_* 原价对照字段；匿名/未登录得 normal 视角
       const j = await apiJson<{ data: any[] }>('/models', { session: true })
+      if (requestGeneration !== generation) return
       const all: any[] = j?.data || []
       let ids: string[] = all.map((m: any) => (typeof m === 'string' ? m : m.id)).filter(Boolean)
       ids = [...new Set(ids)]
@@ -80,6 +94,7 @@ export function useModels() {
           per_image: raw.per_image,
           floor_micro: raw.floor_micro,
           // VIP 拿货价对照：base_* 原价字段透传（模型卡片「VIP 拿货价」标签与划线原价依赖这些字段）
+          price_view: raw.price_view,
           base_price_micro: raw.base_price_micro,
           base_in_price: raw.base_in_price,
           base_cache_price: raw.base_cache_price,
@@ -91,10 +106,11 @@ export function useModels() {
       })
       loadedAt.value = Date.now()
     } catch (e: any) {
+      if (requestGeneration !== generation) return
       error.value = e?.message || String(e)
       if (!models.value.length) models.value = OFFLINE
     } finally {
-      loading.value = false
+      if (requestGeneration === generation) loading.value = false
     }
   }
   return { models, loading, error, loadedAt, load }

@@ -223,7 +223,7 @@ onMounted(() => {
             <textarea
               ref="inputEl" v-model="inputText" class="textarea" rows="1"
               placeholder="把心里的话说给树洞听…（Enter 发送，Shift+Enter 换行）"
-              @keydown.enter.exact.prevent="send" @input="autoGrow"
+              aria-label="说给树洞的消息" @keydown.enter.exact="event => { if (!event.isComposing && event.keyCode !== 229) { event.preventDefault(); send() } }" @input="autoGrow"
             />
             <button class="btn primary" type="button" :disabled="busy" @click="send"><AqIcon name="send" :size="14" />说给树洞</button>
           </div>

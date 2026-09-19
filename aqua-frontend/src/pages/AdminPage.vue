@@ -170,7 +170,10 @@ async function doSeed() {
 }
 
 /* ===== 仪表盘 ===== */
-const stats = ref<any>(null)
+const stats = ref<{
+  top?: { user_id: number; username: string; cost_micro: number; calls: number }[]
+  [key: string]: any
+} | null>(null)
 const statsMsg = ref('')
 const loadingStats = ref(false)
 async function loadStats() {
@@ -600,7 +603,7 @@ async function doKeysCalAuto(id: string) {
   const pw = prompt('将实时查询该线全部存活密钥的上游余额并自动校准（余额为 0 的自动判死摘除）：请输入管理密码确认')
   if (!pw) return
   keyCalBusy.value = true
-  keyCal.line = id
+  keyCal.value.line = id
   keyCalMsg.value = ''
   keyCalOk.value = false
   try {

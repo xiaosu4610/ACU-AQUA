@@ -22,33 +22,15 @@ const isStandalone = computed(() => route.path === '/admin')
 interface NavLeaf { label: string; to: string }
 const PORTAL_NAV: { label: string; to: string; match: string[]; children?: NavLeaf[] }[] = [
   { label: '首页', to: '/home', match: ['/home'] },
-  {
-    label: '体验中心', to: '/playground', match: ['/playground', '/treehole', '/tools', '/prompts', '/arena'],
-    children: [
-      { label: 'AI 对话', to: '/playground' },
-      { label: '树洞', to: '/treehole' },
-      { label: '工具箱', to: '/tools' },
-      { label: '提示词工坊', to: '/prompts' },
-      { label: '模型竞技场', to: '/arena' },
-    ],
-  },
-  {
-    label: '模型中心', to: '/models', match: ['/models', '/model'],
-    children: [
-      { label: '模型列表', to: '/models' },
-      { label: '能力总览', to: '/models?view=cap' },
-    ],
-  },
-  { label: 'API 文档', to: '/api', match: ['/api'] },
-  {
-    label: '数据中心', to: '/status', match: ['/status', '/pool', '/community'],
-    children: [
-      { label: '状态大屏', to: '/status' },
-      { label: '众筹算力池', to: '/pool' },
-      { label: '社区', to: '/community' },
-    ],
-  },
-  { label: '赞助', to: '/sponsor', match: ['/sponsor'] },
+  { label: '模型与价格', to: '/models', match: ['/models', '/model'] },
+  { label: '接入文档', to: '/api', match: ['/api'] },
+  { label: '服务状态', to: '/status', match: ['/status'] },
+  { label: '体验与生态', to: '/playground', match: ['/playground', '/treehole', '/tools', '/prompts', '/arena', '/community', '/pool', '/sponsor'], children: [
+    { label: 'AI 对话', to: '/playground' }, { label: '树洞', to: '/treehole' },
+    { label: '工具箱', to: '/tools' }, { label: '提示词工坊', to: '/prompts' },
+    { label: '模型竞技场', to: '/arena' }, { label: '社区交流', to: '/community' },
+    { label: '公共池贡献', to: '/pool' }, { label: '自愿赞助', to: '/sponsor' },
+  ] },
 ]
 const mobileOpen = ref(false)
 watch(() => route.path, () => { mobileOpen.value = false })
@@ -101,7 +83,7 @@ async function doLogout() {
   <div v-else-if="isBench" class="bench">
     <aside class="bside">
       <router-link to="/home" class="brand" style="padding: 2px 11px 10px;">
-        <img src="/favicon.ico" alt="" />
+        <AqIcon name="droplet" :size="26" />
         <em>{{ siteName }}</em>
       </router-link>
       <template v-for="g in BENCH_NAV" :key="g.grp">
@@ -156,7 +138,7 @@ async function doLogout() {
     <header class="ptop">
       <div class="ptop-in">
         <router-link to="/home" class="brand">
-          <img src="/favicon.ico" alt="" />
+          <AqIcon name="droplet" :size="26" />
           <em>{{ siteName }}</em>
         </router-link>
 
@@ -183,14 +165,14 @@ async function doLogout() {
             <img v-if="avatarUrl()" :src="avatarUrl()" alt="" /><template v-else>{{ initial }}</template>
           </router-link>
           <router-link v-else-if="route.path !== '/login'" to="/login" class="btn primary sm">登录 / 注册</router-link>
-          <button class="burger" aria-label="菜单" @click="mobileOpen = !mobileOpen">
+          <button class="burger" aria-label="菜单" :aria-expanded="mobileOpen" aria-controls="mobile-navigation" @keydown.esc="mobileOpen = false" @click="mobileOpen = !mobileOpen">
             <AqIcon :name="mobileOpen ? 'cross' : 'menu'" :size="17" />
           </button>
         </div>
       </div>
 
       <!-- 移动端菜单 -->
-      <nav v-if="mobileOpen" class="mnav">
+      <nav v-if="mobileOpen" id="mobile-navigation" class="mnav" aria-label="移动导航" @keydown.esc="mobileOpen = false">
         <template v-for="n in PORTAL_NAV" :key="n.label">
           <div class="dt">{{ n.label }}</div>
           <router-link v-if="!n.children" :to="n.to" :class="{ on: navOn(n) }">{{ n.label }}</router-link>
@@ -207,7 +189,7 @@ async function doLogout() {
 
     <footer class="foot">
       <div class="foot-in">
-        <div>{{ siteName }} · ACU 工程系列开源旗舰项目 —— 更多生态链项目持续开发中 · 数据由 Nvidia NIM 与官方自营提供 · 仅用于技术学习与交流</div>
+        <div>{{ siteName }} · OpenAI 兼容模型接口 · acu/ 纯免费 · aqua/ 按次 · codex/ 按量</div>
         <div class="row" style="justify-content: center; flex-wrap: wrap;">
           <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> ·
           <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a> ·
