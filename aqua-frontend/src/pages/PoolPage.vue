@@ -310,7 +310,7 @@ onMounted(async () => {
         <div>
           <h1><AqIcon name="coin" :size="24" />众筹公共算力池</h1>
           <div class="sub">
-            此页用于公共池贡献与历史流水，<b>不计入您的个人余额</b>。acu/ 商汤官方自营纯免费，不扣个人或公共池额度，也不因公共池余额变化而转为收费。个人付费调用请前往工作台充值。
+            此页用于公共池贡献与历史流水，<b>不计入您的个人余额</b>。acu/ 官方自营纯免费，不扣个人或公共池额度，也不因公共池余额变化而转为收费。个人付费调用请前往工作台充值。
           </div>
         </div>
         <div class="ops">
@@ -351,8 +351,8 @@ onMounted(async () => {
 
       <!-- 众筹模型一览 -->
       <div class="card mt16">
-        <b><AqIcon name="server" :size="16" /> 商汤免费线一览（acu/ · 不扣公共池）</b>
-        <p class="msg info mt12" style="margin: 0;">以下 acu/ 模型为商汤官方自营纯免费线路，不扣个人余额或公共池额度。实际可用性与限制请查看模型详情。</p>
+        <b><AqIcon name="server" :size="16" /> 官方自营免费线一览（acu/ · 不扣公共池）</b>
+        <p class="msg info mt12" style="margin: 0;">以下 acu/ 模型为官方自营纯免费线路，不扣个人余额或公共池额度。实际可用性与限制请查看模型详情。</p>
         <p v-if="crowdModelsMsg" class="msg bad mt12">{{ crowdModelsMsg }}</p>
         <div v-else-if="!crowdModels.length" class="empty" style="padding: 18px 0;">
           <b>模型列表加载中或暂未上架</b>

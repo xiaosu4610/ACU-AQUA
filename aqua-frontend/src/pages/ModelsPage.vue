@@ -731,7 +731,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
           <div v-if="loading" class="grid3">
             <div v-for="i in 3" :key="i"><div class="skeleton" style="min-height: 120px;"></div></div>
           </div>
-          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>按次模型加载中或暂未在售</b><div class="dim">acu/ 商汤纯免费模型见免费专区 · 在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
+          <div v-else class="empty"><div class="big"><AqIcon name="coin" :size="40" /></div><b>按次模型加载中或暂未在售</b><div class="dim">acu/ 官方自营纯免费模型见免费专区 · 在售清单以 /v1/models 实时下发为准 · 每分钟自动刷新</div></div>
         </div>
 
         <div v-if="!loading && !tokenLineRows.length && !callLineRows.length && !codexLineRows.length && !officialLineRows.length" class="empty"><b>没有匹配当前条件的收费模型</b><button class="btn mt12" @click="paidQ = ''; paidType = 'all'">清除搜索与筛选</button></div>
@@ -880,7 +880,7 @@ function modelLink(id: string) { return '/model/' + encodeURIComponent(id) }
               <p class="dim" style="font-size: 13px;">Nvidia NIM 免费通道的全部模型——对话、视觉、语音、向量、重排统统不收一分钱，注册即可使用；用量统计仅用于展示，今后也不会收费。</p>
             </div>
             <div>
-              <b style="font-size: 13.5px;">2 · acu/ 商汤官方自营纯免费</b>
+              <b style="font-size: 13.5px;">2 · acu/ 官方自营纯免费</b>
               <p class="dim">acu/ 与收费线路独立，不扣个人余额。aqua/ 按次计费，codex/ 按量计费；完整模型前缀决定线路，请勿混用。</p>
             </div>
             <div>

@@ -506,7 +506,7 @@ function fmtTime(ts: number): string {
         <div class="grid2 mt16">
           <div class="card hoverable">
             <b><AqIcon name="spark" :size="16" /> 余额充值</b>
-            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。本页充值进入您的个人余额，用于收费模型调用；公共池贡献与赞助另行操作。acu/ 商汤纯免费，不扣个人余额。</div>
+            <div class="dim mt8">支付宝 / 微信在线充值，支付金额 100% 全额到账（渠道手续费由本站承担）。本页充值进入您的个人余额，用于收费模型调用；公共池贡献与赞助另行操作。acu/ 官方自营纯免费，不扣个人余额。</div>
             <div class="row wrap mt12">
               <button class="btn primary sm" @click="go('topup')"><AqIcon name="spark" :size="13" /> 立即充值</button>
               <span class="tag acc">今日消费 ¥{{ yuan(balance?.today_cost_micro) }}</span>
@@ -571,7 +571,7 @@ function fmtTime(ts: number): string {
         <!-- 创建表单 -->
         <div class="card">
           <b><AqIcon name="key" :size="16" /> 创建密钥</b>
-          <p class="dim mt8">密钥创建后请妥善保管；支持查看原文的密钥可在列表单独操作，默认只展示掩码。「免费 + 收费」分组支持 aqua/ 按次计费；acu/ 商汤纯免费。「纯免费」密钥不能调用收费模型。</p>
+          <p class="dim mt8">密钥创建后请妥善保管；支持查看原文的密钥可在列表单独操作，默认只展示掩码。「免费 + 收费」分组支持 aqua/ 按次计费；acu/ 官方自营纯免费。「纯免费」密钥不能调用收费模型。</p>
           <div class="form-grid mt12">
             <div class="field">
               <label>密钥名称</label>
@@ -610,7 +610,7 @@ function fmtTime(ts: number): string {
             <b><AqIcon name="list" :size="16" /> 密钥列表</b>
             <button class="btn sm" :disabled="keysLoading" @click="loadKeys"><AqIcon name="refresh" :size="13" /> 刷新</button>
           </div>
-          <p class="dim mt8">acu/ 是商汤官方自营纯免费线路，不扣个人余额。aqua/ 按次计费，codex/ 按量计费；请按线路选择密钥分组。</p>
+          <p class="dim mt8">acu/ 是官方自营纯免费线路，不扣个人余额。aqua/ 按次计费，codex/ 按量计费；请按线路选择密钥分组。</p>
           <div v-if="keysLoading && !keys.length" class="mt12"><div class="skeleton" style="min-height: 120px;"></div></div>
           <div v-else-if="!keys.length" class="empty">
             <div class="big"><AqIcon name="key" :size="34" /></div>

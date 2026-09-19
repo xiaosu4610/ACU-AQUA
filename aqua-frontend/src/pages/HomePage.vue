@@ -12,7 +12,7 @@ const rows = ref<{model:string; calls_1h:number; success_rate:number}[]>([])
 const updated = ref('')
 const failed = ref(false)
 const lines = computed(() => [
-  { id: 'acu/', name: '商汤免费线', mode: '纯免费', desc: '商汤日日新官方自营。与收费线路独立，不扣个人余额。', to: '/models?view=free' },
+  { id: 'acu/', name: '官方自营线', mode: '纯免费', desc: '官方自营纯免费线路。与收费线路独立，不扣个人余额。', to: '/models?view=free' },
   { id: 'aqua/', name: '按次模型', mode: '按次计费', desc: '每次成功请求按模型单价结算。选型前查看完整价格。', to: '/models?view=paid' },
   { id: 'codex/', name: '按量模型', mode: '按量计费', desc: '输入、缓存与输出分别计价，按实际用量核对费用。', to: '/models?view=paid' },
 ].map(line => {
@@ -50,7 +50,7 @@ onUnmounted(() => clearInterval(timer))
       <div class="request-panel">
         <div class="request-top"><span>你的第一条请求</span><span class="mono">cURL</span></div>
         <pre>{{ code }}</pre>
-        <div class="request-bottom"><span><b>acu/</b> 商汤纯免费线路</span><CopyBtn :text="code" label="复制示例" /></div>
+        <div class="request-bottom"><span><b>acu/</b> 官方自营纯免费线路</span><CopyBtn :text="code" label="复制示例" /></div>
         <p>先在工作台创建密钥，再替换示例中的 sk-你的密钥。模型可用性以目录和实际响应为准。</p>
       </div>
     </section>
