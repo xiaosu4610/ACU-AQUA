@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"acu-aqua/gateway/internal/billing"
 	"acu-aqua/gateway/internal/config"
 	"acu-aqua/gateway/internal/upstream"
 )
@@ -75,11 +76,11 @@ func seedLinesToDB(lines []config.Line, d *sql.DB) error {
 			if _, err := d.Exec(
 				`INSERT INTO admin_line_models (line_id, site_id, upstream_id, image, per_call_sell, per_call_cost,
 				 per_image_sell, per_image_cost, in_sell_rate10, cache_sell_rate10, out_sell_rate10,
-				 in_cost_rate10, cache_cost_rate10, out_cost_rate10, updated_ts)
-				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(line_id, site_id) DO NOTHING`,
+				 in_cost_rate10, cache_cost_rate10, out_cost_rate10, no_vision, max_output_tokens, updated_ts)
+				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(line_id, site_id) DO NOTHING`,
 				l.ID, m.SiteID, m.UpstreamID, b2i(m.Image), m.PerCallSell, m.PerCallCost,
 				m.PerImageSell, m.PerImageCost, m.InSellRate10, m.CacheSellRate10, m.OutSellRate10,
-				m.InCostRate10, m.CacheCostRate10, m.OutCostRate10, now); err != nil {
+				m.InCostRate10, m.CacheCostRate10, m.OutCostRate10, b2i(m.NoVision), m.MaxOutputTokens, now); err != nil {
 				return err
 			}
 		}
@@ -90,7 +91,7 @@ func seedLinesToDB(lines []config.Line, d *sql.DB) error {
 // linesFromDB 三表 → []config.Line（enabled 线；keys 按 idx 排序剔除 dead）
 func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	rows, err := d.Query(
-		`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0), COALESCE(prefixed,0), COALESCE(key_rpm,0)
+		`SELECT id, name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro, enabled, COALESCE(dynamic,0), COALESCE(prefixed,0), COALESCE(key_rpm,0), COALESCE(strict_key_idx,0)
 		 FROM admin_lines ORDER BY rowid`)
 	if err != nil {
 		return nil, err
@@ -99,8 +100,8 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	out := []config.Line{}
 	for rows.Next() {
 		var l config.Line
-		var enabled, dynamic, prefixed, keyRPM int
-		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.AuthStyle, &l.Proxy, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic, &prefixed, &keyRPM); err != nil {
+		var enabled, dynamic, prefixed, keyRPM, strictKeyIdx int
+		if err := rows.Scan(&l.ID, &l.Name, &l.Mode, &l.BaseURL, &l.AuthStyle, &l.Proxy, &l.VipNum, &l.VipDen, &l.KeyFaceMicro, &enabled, &dynamic, &prefixed, &keyRPM, &strictKeyIdx); err != nil {
 			return nil, err
 		}
 		if enabled == 0 {
@@ -109,31 +110,51 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 		l.Dynamic = dynamic != 0
 		l.Prefixed = prefixed != 0
 		l.KeyRPM = keyRPM
+		l.StrictKeyIdx = strictKeyIdx != 0
 		out = append(out, l)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// keys（剔除 dead 钥；台账 used>=initial 的超卖钥也不进池——上游面值已耗尽，
-	// 留在池里只会反复 402/502，直到管理台恢复 dead 标记或补台账）
+	// keys（20260919 修复：装载全部钥，不再在 SQL 层剔除 dead/超卖钥）。
+	// 原实现在装载时剔除，导致内存池的「死钥到期复活」机制永远失效——
+	// 生产实锤：codex 线 50 把钥死 10 把，重启后这 10 把被直接排除在池外，
+	// 即使上游配额窗口已刷新也无法回归，可用池只减不增（失败率攀升至 97%）。
+	// 现改为全部装载 + 标记死标（DeadUntil 由内存池管理），复活逻辑集中在 KeyPool.usable。
 	krows, err := d.Query(
-		`SELECT k.line_id, k.idx, k.key FROM admin_line_keys k
-		 LEFT JOIN line_keys f ON f.line_id=k.line_id AND f.idx=k.idx
-		 WHERE k.dead=0 AND NOT (COALESCE(f.initial_micro,0)>0 AND COALESCE(f.used_micro,0)>=COALESCE(f.initial_micro,0))
+		`SELECT k.line_id, k.idx, k.key, COALESCE(k.dead,0)
+		 FROM admin_line_keys k
 		 ORDER BY k.line_id, k.idx`)
 	if err != nil {
 		return nil, err
 	}
 	defer krows.Close()
+	type deadMark struct {
+		lineID string
+		idx    int
+	}
+	var deads []deadMark
 	for krows.Next() {
 		var lineID, key string
-		var idx int
-		if err := krows.Scan(&lineID, &idx, &key); err != nil {
+		var idx, dead int
+		if err := krows.Scan(&lineID, &idx, &key, &dead); err != nil {
 			return nil, err
 		}
 		for i := range out {
 			if out[i].ID == lineID {
 				out[i].Keys = append(out[i].Keys, key)
+				out[i].KeyIdxs = append(out[i].KeyIdxs, idx) // 与 Keys 一一对应的 DB 原始 idx（专属钥/台账统一口径）
+				if dead == 1 {
+					deads = append(deads, deadMark{lineID, idx})
+				}
+			}
+		}
+	}
+	// 把 DB 死标注入线路（NewClient 建池时应用；DB 死钥带 30 分钟复活窗口）
+	for _, dm := range deads {
+		for i := range out {
+			if out[i].ID == dm.lineID {
+				out[i].DeadKeyIdxs = append(out[i].DeadKeyIdxs, dm.idx)
 			}
 		}
 	}
@@ -144,7 +165,8 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	mrows, err := d.Query(
 		`SELECT line_id, site_id, upstream_id, image, per_call_sell, per_call_cost,
 		        per_image_sell, per_image_cost, in_sell_rate10, cache_sell_rate10, out_sell_rate10,
-		        in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1)
+		        in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1),
+		        COALESCE(no_vision,0), COALESCE(max_output_tokens,0), COALESCE(maintenance,0)
 		 FROM admin_line_models ORDER BY line_id, site_id`)
 	if err != nil {
 		return nil, err
@@ -152,9 +174,10 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 	defer mrows.Close()
 	for mrows.Next() {
 		var lineID, siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx, noVision, maxOut, maintenance int64
 		if err := mrows.Scan(&lineID, &siteID, &upID, &image, &perCall, &perCallCost,
-			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx); err != nil {
+			&perImgSell, &perImgCost, &inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx,
+			&noVision, &maxOut, &maintenance); err != nil {
 			return nil, err
 		}
 		for i := range out {
@@ -166,6 +189,8 @@ func linesFromDB(d *sql.DB) ([]config.Line, error) {
 					InSellRate10: inR, CacheSellRate10: cacheR, OutSellRate10: outR,
 					InCostRate10: inC, CacheCostRate10: cacheC, OutCostRate10: outC,
 					Degraded: degraded != 0, KeyIdx: keyIdx,
+					NoVision: noVision != 0, MaxOutputTokens: maxOut,
+					Maintenance: maintenance != 0,
 				})
 			}
 		}
@@ -319,11 +344,11 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name            string  `json:"name"`
 		BaseURL         string  `json:"base_url"`
-		AuthStyle       *string `json:"auth_style"` // nil=不改动；""=bearer
-		Proxy           *string `json:"proxy"`      // nil=不改动；""=清空代理
-		VipNum          int64   `json:"vip_num"`
-		VipDen          int64   `json:"vip_den"`
-		KeyFaceMicro    int64   `json:"key_face_micro"`
+		AuthStyle       *string `json:"auth_style"`     // nil=不改动；""=bearer
+		Proxy           *string `json:"proxy"`          // nil=不改动；""=清空代理
+		VipNum          *int64  `json:"vip_num"`        // nil=不改动（部分更新不得清零）
+		VipDen          *int64  `json:"vip_den"`        // nil=不改动
+		KeyFaceMicro    *int64  `json:"key_face_micro"` // nil=不改动
 		Enabled         *bool   `json:"enabled"`
 		Dynamic         *bool   `json:"dynamic"`
 		ConfirmPassword string  `json:"confirm_password"`
@@ -339,7 +364,8 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var name, mode, baseURL, authStyle, proxy string
-	if err := a.DB.QueryRow("SELECT name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,'') FROM admin_lines WHERE id=?", lineID).Scan(&name, &mode, &baseURL, &authStyle, &proxy); err == sql.ErrNoRows {
+	var vipNum, vipDen, keyFace int64
+	if err := a.DB.QueryRow("SELECT name, mode, base_url, COALESCE(auth_style,''), COALESCE(proxy,''), vip_num, vip_den, key_face_micro FROM admin_lines WHERE id=?", lineID).Scan(&name, &mode, &baseURL, &authStyle, &proxy, &vipNum, &vipDen, &keyFace); err == sql.ErrNoRows {
 		errAdmin(w, 404, "not_found", "线路不存在")
 		return
 	} else if err != nil {
@@ -357,6 +383,15 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Proxy != nil {
 		proxy = strings.TrimSpace(*req.Proxy)
+	}
+	if req.VipNum != nil {
+		vipNum = *req.VipNum
+	}
+	if req.VipDen != nil {
+		vipDen = *req.VipDen
+	}
+	if req.KeyFaceMicro != nil {
+		keyFace = *req.KeyFaceMicro
 	}
 	enabled := 1
 	if req.Enabled != nil {
@@ -380,7 +415,7 @@ func (a *App) handleAdminLineUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := a.DB.Exec(
 		`UPDATE admin_lines SET name=?, base_url=?, auth_style=?, proxy=?, vip_num=?, vip_den=?, key_face_micro=?, enabled=?, dynamic=?, updated_ts=? WHERE id=?`,
-		name, baseURL, authStyle, proxy, req.VipNum, req.VipDen, req.KeyFaceMicro, enabled, dynamic, time.Now().Unix(), lineID); err != nil {
+		name, baseURL, authStyle, proxy, vipNum, vipDen, keyFace, enabled, dynamic, time.Now().Unix(), lineID); err != nil {
 		errAdmin(w, 500, "internal_error", "更新失败")
 		return
 	}
@@ -420,13 +455,25 @@ func (a *App) handleAdminLineDelete(w http.ResponseWriter, r *http.Request) {
 		errAdmin(w, 400, "bad_request", "请先停用线路再删除")
 		return
 	}
+	// 同事务原子删除四表：台账（line_keys）不同步清会留孤儿行，聚合出幽灵余额
+	tx, err := a.DB.Begin()
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "删除失败")
+		return
+	}
 	for _, q := range []string{
 		"DELETE FROM admin_lines WHERE id=?", "DELETE FROM admin_line_keys WHERE line_id=?", "DELETE FROM admin_line_models WHERE line_id=?",
+		"DELETE FROM line_keys WHERE line_id=?",
 	} {
-		if _, err := a.DB.Exec(q, lineID); err != nil {
+		if _, err := tx.Exec(q, lineID); err != nil {
+			_ = tx.Rollback()
 			errAdmin(w, 500, "internal_error", "删除失败")
 			return
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		errAdmin(w, 500, "internal_error", "删除失败")
+		return
 	}
 	a.auditAppend("line_delete", 0, "线="+lineID, ip)
 	_ = a.reloadLines()
@@ -668,7 +715,11 @@ func (a *App) handleAdminLineKeysCalibrate(w http.ResponseWriter, r *http.Reques
 			_, _ = a.DB.Exec(`INSERT INTO line_keys (line_id, idx, initial_micro, used_micro, dead, updated_ts) VALUES (?,?,?,0,0,?)`,
 				lineID, x.idx, bal, now)
 		} else if err == nil {
-			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", init-bal, now, lineID, x.idx)
+			used = init - bal
+			if used < 0 {
+				used = 0 // 上游余额高于本地 initial（赠送额度等）时不落负已用，防台账聚合出假余额
+			}
+			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", used, now, lineID, x.idx)
 		}
 		revived = append(revived, x.idx)
 	}
@@ -790,7 +841,11 @@ func (a *App) handleAdminLineKeysCalibrateAuto(w http.ResponseWriter, r *http.Re
 			_, _ = a.DB.Exec(`INSERT INTO line_keys (line_id, idx, initial_micro, used_micro, dead, updated_ts) VALUES (?,?,?,0,0,?)`,
 				lineID, x.idx, bal, now)
 		} else if err == nil {
-			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", init-bal, now, lineID, x.idx)
+			used := init - bal
+			if used < 0 {
+				used = 0 // 同手动校准口径：上游余额高于本地 initial 时不落负已用
+			}
+			_, _ = a.DB.Exec("UPDATE line_keys SET used_micro=?, dead=0, updated_ts=? WHERE line_id=? AND idx=?", used, now, lineID, x.idx)
 		}
 		revived = append(revived, x.idx)
 	}
@@ -813,7 +868,8 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	lineID := r.PathValue("line")
 	rows, err := a.DB.Query(
 		`SELECT site_id, upstream_id, image, per_call_sell, per_call_cost, per_image_sell, per_image_cost,
-		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1)
+		        in_sell_rate10, cache_sell_rate10, out_sell_rate10, in_cost_rate10, cache_cost_rate10, out_cost_rate10, COALESCE(degraded,0), COALESCE(key_idx,-1),
+		        COALESCE(no_vision,0), COALESCE(max_output_tokens,0), COALESCE(maintenance,0)
 		 FROM admin_line_models WHERE line_id=? ORDER BY site_id`, lineID)
 	if err != nil {
 		errAdmin(w, 500, "internal_error", "查询失败")
@@ -823,9 +879,9 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var siteID, upID string
-		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx int64
+		var image, perCall, perCallCost, perImgSell, perImgCost, inR, cacheR, outR, inC, cacheC, outC, degraded, keyIdx, noVision, maxOut, maintenance int64
 		if rows.Scan(&siteID, &upID, &image, &perCall, &perCallCost, &perImgSell, &perImgCost,
-			&inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx) == nil {
+			&inR, &cacheR, &outR, &inC, &cacheC, &outC, &degraded, &keyIdx, &noVision, &maxOut, &maintenance) == nil {
 			items = append(items, map[string]any{
 				"site_id": siteID, "upstream_id": upID, "image": image != 0,
 				"per_call_sell": perCall, "per_call_cost": perCallCost,
@@ -833,6 +889,8 @@ func (a *App) handleAdminLineModels(w http.ResponseWriter, r *http.Request) {
 				"in_sell_rate10": inR, "cache_sell_rate10": cacheR, "out_sell_rate10": outR,
 				"in_cost_rate10": inC, "cache_cost_rate10": cacheC, "out_cost_rate10": outC,
 				"degraded": degraded != 0, "key_idx": keyIdx,
+				"no_vision": noVision != 0, "max_output_tokens": maxOut,
+				"maintenance": maintenance != 0,
 			})
 		}
 	}
@@ -861,7 +919,11 @@ func (a *App) handleAdminLineModelUpsert(w http.ResponseWriter, r *http.Request)
 		CacheCostRate10 int64  `json:"cache_cost_rate10"`
 		OutCostRate10   int64  `json:"out_cost_rate10"`
 		// KeyIdx 模型专属钥池序：nil/-1=自动；≥0 锁定非 dead 钥排序后的第 N 把。指针防 JSON 零值误绑 0
-		KeyIdx          *int64 `json:"key_idx"`
+		KeyIdx *int64 `json:"key_idx"`
+		// 模型能力口径（20260920）：指针语义 = 未传即保持原值（管理台表单没这两个字段时，
+		// 保存其他价格不会被清零）；显式传值才覆盖
+		NoVision        *bool  `json:"no_vision"`
+		MaxOutputTokens *int64 `json:"max_output_tokens"`
 		ConfirmPassword string `json:"confirm_password"`
 	}
 	if err := adminBody(r, 8192, &req); err != nil {
@@ -913,10 +975,34 @@ func (a *App) handleAdminLineModelUpsert(w http.ResponseWriter, r *http.Request)
 		errAdmin(w, 500, "internal_error", "保存失败")
 		return
 	}
+	// 模型能力口径：仅显式传值才覆盖（未传保持原值，避免管理台旧表单把能力位清零）
+	if req.NoVision != nil {
+		if _, err := a.DB.Exec("UPDATE admin_line_models SET no_vision=? WHERE line_id=? AND site_id=?",
+			b2i(*req.NoVision), lineID, req.SiteID); err != nil {
+			errAdmin(w, 500, "internal_error", "保存失败")
+			return
+		}
+	}
+	if req.MaxOutputTokens != nil {
+		if _, err := a.DB.Exec("UPDATE admin_line_models SET max_output_tokens=? WHERE line_id=? AND site_id=?",
+			*req.MaxOutputTokens, lineID, req.SiteID); err != nil {
+			errAdmin(w, 500, "internal_error", "保存失败")
+			return
+		}
+	}
 	seeded := a.seedModelPricing(lineID, mode, req.SiteID, req.PerCallSell, req.InSellRate10, req.CacheSellRate10, req.OutSellRate10)
+	// 按量亏本告警（20260919 计费审计）：管理台改价是绕过播种防线的入口，
+	// 保存时即校验"售价 ≥ 成本/0.97"，亏本配置落审计 + 日志（不阻断保存，站长有权定价）
+	warn := ""
+	if below, why := billing.IsBelowCost(mode, req.InSellRate10, req.CacheSellRate10, req.OutSellRate10,
+		req.InCostRate10, req.CacheCostRate10, req.OutCostRate10); below {
+		warn = "⚠️ 亏本配置：" + why
+		log.Printf("[admin] %s %s/%s %s", warn, lineID, req.SiteID, "（每卖一次亏一次）")
+		a.auditAppend("line_model_below_cost", 0, fmt.Sprintf("线=%s 模型=%s %s", lineID, req.SiteID, why), ip)
+	}
 	a.auditAppend("line_model_upsert", 0, fmt.Sprintf("线=%s 模型=%s 播种价 %d 组", lineID, req.SiteID, seeded), ip)
 	_ = a.reloadLines()
-	jsonOut(w, 200, map[string]any{"ok": true, "pricing_seeded": seeded})
+	jsonOut(w, 200, map[string]any{"ok": true, "pricing_seeded": seeded, "warning": warn})
 }
 
 // seedModelPricing 新模型价格播种（幂等；vip = normal × vipnum/vipden）。返回播种组数。
@@ -1025,6 +1111,49 @@ func (a *App) handleAdminLineModelDegraded(w http.ResponseWriter, r *http.Reques
 	a.auditAppend("line_model_degraded", 0, fmt.Sprintf("%s：线=%s 模型=%s", state, lineID, siteID), ip)
 	_ = a.reloadLines()
 	jsonOut(w, 200, map[string]any{"ok": true, "degraded": req.Degraded})
+}
+
+// POST /v1/admin/lines/{line}/models/{site}/maintenance {maintenance, confirm_password}（二次密码）
+// 维护标记（20260923 站长指令：软下架）：模型对外不可见（/v1/models 不列出）+ 不可调用（503）。
+// 与 degraded 的区别：degraded 只是"可用但透出降级提示"，本标记是真正的**临时下架**。
+// **不删除任何 DB 记录**（admin_line_models 行 / pricing 价目 / 密钥绑定全留），清标记即恢复。
+func (a *App) handleAdminLineModelMaintenance(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
+	lineID := r.PathValue("line")
+	siteID := r.PathValue("site")
+	var req struct {
+		Maintenance     bool   `json:"maintenance"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := adminBody(r, 4096, &req); err != nil {
+		errAdmin(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	ip := clientIP(r)
+	if !adminPasswordOk(req.ConfirmPassword) {
+		a.auditAppend("line_model_maintenance_fail", 0, lineID, ip)
+		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
+		return
+	}
+	res, err := a.DB.Exec("UPDATE admin_line_models SET maintenance=?, updated_ts=? WHERE line_id=? AND site_id=?",
+		b2i(req.Maintenance), time.Now().Unix(), lineID, siteID)
+	if err != nil {
+		errAdmin(w, 500, "internal_error", "更新失败")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		errAdmin(w, 404, "not_found", "模型不存在")
+		return
+	}
+	state := "恢复上架"
+	if req.Maintenance {
+		state = "标记维护（软下架）"
+	}
+	a.auditAppend("line_model_maintenance", 0, fmt.Sprintf("%s：线=%s 模型=%s", state, lineID, siteID), ip)
+	_ = a.reloadLines()
+	jsonOut(w, 200, map[string]any{"ok": true, "maintenance": req.Maintenance})
 }
 
 // POST /v1/admin/lines/reload 手动全量热重载

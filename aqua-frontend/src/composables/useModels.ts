@@ -8,7 +8,6 @@ export interface ModelRow {
   id: string
   platform: string
   type: string
-  health?: { score?: number; total?: number; ok?: number; avg_latency_ms?: number } | null
   status?: string
   status_msg?: string
   /** 收费模型：价格（微元）+ 活动价标记 */
@@ -35,6 +34,12 @@ export interface ModelRow {
   floor_micro?: number
   /** 限时补贴档标记（v4-flash） */
   subsidized?: boolean
+  /** 常态扣费倍率（20260923 展示价分离）：>0 时主价应显示 base_*（官方原价），并标该倍率角标 */
+  charge_rate?: number
+  /** 展示分组标记（'external' = 外模专线，前端单独成板块） */
+  section?: string
+  /** 2 号折扣钱包专用（20260924）：该模型只能用折扣钱包余额调用，主钱包会被拒绝 */
+  wallet2_only?: boolean
 }
 
 /** offline fallback：仅 auto（离线不展示任何模型清单，避免运营数据进代码） */
@@ -78,7 +83,6 @@ export function useModels() {
           ...classifyModel(id),
           // 特殊计费类型（image/video…）以后端下发的 type 字段为准（配置化，前端零硬编码），仅离线兜底时走本地推断
           type: (raw as any).type || classifyModel(id).type,
-          health: raw.health || null,
           status: raw.status || undefined,
           status_msg: raw.status_msg || undefined,
           paid: raw.paid === true,
@@ -102,6 +106,12 @@ export function useModels() {
           base_floor_micro: raw.base_floor_micro,
           base_per_image: raw.base_per_image,
           subsidized: raw.subsidized === true,
+          // 展示价与实收价分离（20260923）：charge_rate 与 base_* 需透传到详情页，
+          // 否则列表页显示官方原价、详情页显示实收价 → 同一模型两个价
+          charge_rate: raw.charge_rate,
+          section: raw.section,
+          // 2 号折扣钱包专用标记（20260924）：卡片需提示"用折扣钱包余额调用"
+          wallet2_only: raw.wallet2_only === true,
         }
       })
       loadedAt.value = Date.now()

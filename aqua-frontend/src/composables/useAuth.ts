@@ -80,7 +80,27 @@ export async function logout() {
 
 /* ===== 个人控制台 API ===== */
 
-export interface KeyItem { id: number; prefix: string; name: string; revoked: boolean; created_ts: number; can_reveal?: boolean; billing_grp?: string }
+export interface KeyItem {
+  id: number; prefix: string; name: string; revoked: boolean; created_ts: number
+  can_reveal?: boolean; billing_grp?: string
+  /* —— 密钥分发配额（P4，20260919）—— */
+  type?: string          // ''=不限 | count=按次数 | amount=按金额
+  limit?: number         // 限额值（次数 或 微元）
+  used?: number          // 本周期已用
+  remaining?: number     // 剩余额度
+  reset?: string         // ''=不重置 | daily | monthly
+  next_reset_at?: number // 下次重置时刻（unix 秒）
+  rate_num?: number
+  rate_den?: number
+  expires_at?: number
+  expires_in_sec?: number
+  note?: string
+  /* 代理口径换算（倍率仅展示，不影响实扣） */
+  cost_micro?: number
+  retail_micro?: number
+  profit_micro?: number
+  remain_retail_micro?: number
+}
 
 export async function listKeys(): Promise<KeyItem[]> {
   const j = await apiJson<any>('/my/keys', { session: true })
@@ -90,13 +110,81 @@ export async function listKeys(): Promise<KeyItem[]> {
 /** 计费分组：per_call=免费+按次计费；per_token=免费+按量计费；free=纯免费（仅可调免费模型）；''=旧式未分组 */
 export type BillingGrp = '' | 'per_call' | 'per_token' | 'free' | 'official'
 
-export async function createKey(name: string, billingGrp: BillingGrp = ''): Promise<{ key: string; prefix: string; billing_grp: string }> {
-  return apiJson('/my/keys', { method: 'POST', session: true, body: { name, billing_grp: billingGrp } })
+/** 密钥配额（P4）：限额方向 / 重置周期 / 倍率 / 有效期 / 备注 */
+export interface KeyQuotaInput {
+  quota_type?: string
+  quota_limit?: number
+  quota_reset?: string
+  rate_num?: number
+  rate_den?: number
+  expires_at?: number
+  note?: string
+}
+
+export async function createKey(name: string, billingGrp: BillingGrp = '', quota?: KeyQuotaInput): Promise<{ key: string; prefix: string; billing_grp: string }> {
+  return apiJson('/my/keys', { method: 'POST', session: true, body: { name, billing_grp: billingGrp, ...(quota || {}) } })
 }
 
 /** 随时切换密钥计费分组（立即生效，无需重建密钥） */
 export async function changeKeyGroup(id: number, billingGrp: BillingGrp): Promise<void> {
   await apiJson(`/my/keys/${id}/group`, { method: 'PATCH', session: true, body: { billing_grp: billingGrp } })
+}
+
+/** 保存密钥分发配额（限额/重置周期/倍率/有效期/备注；仅传要改的字段） */
+export async function setKeyQuota(id: number, q: KeyQuotaInput): Promise<void> {
+  await apiJson(`/my/keys/${id}/quota`, { method: 'PATCH', session: true, body: q })
+}
+
+/** 手动清零该密钥本周期用量 */
+export async function resetKeyQuota(id: number): Promise<void> {
+  await apiJson(`/my/keys/${id}/quota`, { method: 'PATCH', session: true, body: { action: 'reset' } })
+}
+
+/* ===== 自定义域名与证书（P5，20260919） ===== */
+export interface DomainItem {
+  id: number
+  domain: string
+  status: 'pending' | 'active' | 'failed' | 'disabled' | string
+  verify_method?: string
+  dns_checked_ts?: number
+  cert_type?: string        // upload | letsencrypt
+  cert_expires_ts?: number
+  cert_days_left?: number
+  last_error?: string
+  created_ts?: number
+  activated_ts?: number
+}
+export interface DomainsData {
+  domains: DomainItem[]
+  enabled: boolean
+  cname: string
+  max: number
+  le_available: boolean
+}
+
+export async function listDomains(): Promise<DomainsData> {
+  const j = await apiJson<any>('/my/domains', { session: true })
+  return { domains: j.domains || [], enabled: !!j.enabled, cname: j.cname || '', max: j.max || 2, le_available: !!j.le_available }
+}
+
+export async function addDomain(domain: string, test: boolean): Promise<any> {
+  return apiJson('/my/domains', { method: 'POST', session: true, body: { domain, test } })
+}
+
+export async function verifyDomain(id: number): Promise<any> {
+  return apiJson(`/my/domains/${id}/verify`, { method: 'POST', session: true })
+}
+
+export async function uploadDomainCert(id: number, fullchain: string, privkey: string): Promise<any> {
+  return apiJson(`/my/domains/${id}/cert/upload`, { method: 'POST', session: true, body: { fullchain, privkey } })
+}
+
+export async function issueDomainCert(id: number): Promise<any> {
+  return apiJson(`/my/domains/${id}/cert/issue`, { method: 'POST', session: true })
+}
+
+export async function deleteDomain(id: number): Promise<void> {
+  await apiJson(`/my/domains/${id}`, { method: 'DELETE', session: true })
 }
 
 /* ===== 财务管理中心 ===== */

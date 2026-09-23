@@ -138,7 +138,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   shorten: {
     id: 'shorten',
     title: '短链生成',
-    desc: '长网址一键变短链（aqua.ltzy.top/s/xxx），90 天无访问自动清理',
+    desc: '长网址一键变短链（acu.ltzy.top/s/xxx），90 天无访问自动清理',
     category: 'net',
     load: () => import('@/tools/shorten/Tool.vue'),
   },

@@ -190,12 +190,36 @@ func Login(d *sql.DB, account, password string) (int64, error) {
 
 // CreateAPIKey 为用户签发 API 密钥（key_plain_enc 存明文供控制台 reveal；
 // 站长若需强安全可改为主密钥加密，见 data/master.key）。
-// billingGrp：密钥计费分组 ''|per_call|per_token（统一前缀路由依据，调用方已标准化）
+// billingGrp：密钥计费分组 ”|per_call|per_token（统一前缀路由依据，调用方已标准化）
 func CreateAPIKey(d *sql.DB, uid int64, name, billingGrp string) (string, error) {
 	plain := NewPlainKey()
 	prefix := plain[:9] + "…" + plain[len(plain)-4:]
 	_, err := d.Exec(
 		"INSERT INTO api_keys (user_id, key_hash, key_prefix, name, revoked, created_ts, key_plain_enc, billing_grp) VALUES (?,?,?,?,0,?,?,?)",
 		uid, Sha256Hex(plain), prefix, name, time.Now().Unix(), plain, billingGrp)
+	return plain, err
+}
+
+// CreateAPIKeyFull 签发密钥并一并写入分发配额（P4）。
+// 新建即带配额可省去"先创建再改"的两步操作（代理批量开下游密钥场景）。
+// 参数校验由调用方完成；此处只负责落库（rate 默认 1/1 防除零）。
+func CreateAPIKeyFull(d *sql.DB, uid int64, name, billingGrp, quotaType string, quotaLimit int64,
+	quotaReset string, rateNum, rateDen, expiresAt int64, note string) (string, error) {
+	if rateDen <= 0 {
+		rateDen = 1
+	}
+	if rateNum <= 0 {
+		rateNum = 1
+	}
+	plain := NewPlainKey()
+	prefix := plain[:9] + "…" + plain[len(plain)-4:]
+	now := time.Now().Unix()
+	_, err := d.Exec(
+		`INSERT INTO api_keys (user_id, key_hash, key_prefix, name, revoked, created_ts, key_plain_enc,
+		 billing_grp, quota_type, quota_limit, quota_used, quota_reset, quota_reset_at,
+		 rate_num, rate_den, expires_at, key_note)
+		 VALUES (?,?,?,?,0,?,?,?,?,?,0,?,?,?,?,?,?)`,
+		uid, Sha256Hex(plain), prefix, name, now, plain, billingGrp,
+		quotaType, quotaLimit, quotaReset, now, rateNum, rateDen, expiresAt, note)
 	return plain, err
 }

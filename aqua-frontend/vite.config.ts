@@ -19,7 +19,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/v1': { target: 'https://aqua.zhuafs.com', changeOrigin: true },
+      // dev 代理指向站点主域（20260920 起统一为 acu.ltzy.top；旧 aqua.ltzy.top 仅作防呆域）
+      '/v1': { target: 'https://acu.ltzy.top', changeOrigin: true },
     },
   },
   build: {

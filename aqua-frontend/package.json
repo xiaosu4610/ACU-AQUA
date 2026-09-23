@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/check-size.mjs",
+    "build": "vite build && node scripts/prerender.mjs && node scripts/seo-lint.mjs && node scripts/check-size.mjs",
     "preview": "vite preview",
     "deploy": "npm run build && node scripts/deploy.mjs",
     "rollback": "node scripts/rollback.mjs",

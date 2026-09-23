@@ -14,16 +14,23 @@ import (
 
 var _ = time.Now
 
-// handleRegister 注册
+// handleRegister 注册（遗留端点，前端已改走 /v1/auth/*）。
+// 20260919 修复：此前完全跳过邮箱验证码，整个验证体系被本端点架空——
+// 现强制与 authRegister 同一验证口径（code 必填且校验通过）
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username   string `json:"username"`
 		Email      string `json:"email"`
 		Password   string `json:"password"`
+		Code       string `json:"code"`
 		InviteCode string `json:"invite_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errOut(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	if !a.verifyCode(req.Email, "register", req.Code) {
+		errOut(w, 400, "invalid_code", "验证码错误或已过期（请先 POST /v1/auth/send-code 获取）")
 		return
 	}
 	uid, err := auth.Register(a.DB.DB, req.Username, req.Email, req.Password)
@@ -43,8 +50,12 @@ func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"ok": true, "token": tok, "user_id": uid})
 }
 
-// handleLogin 登录
+// handleLogin 登录（遗留端点，前端已改走 /v1/auth/*；同样接入 per-IP 限频防爆破）
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	var req struct {
 		Account  string `json:"account"`
 		Password string `json:"password"`

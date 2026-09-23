@@ -27,7 +27,8 @@ export function classifyModel(id: string): { platform: string; type: string } {
 }
 
 export function platformLabel(p: string): string {
-  return ({ nvidia: 'Nvidia', acu: '官方自营' } as Record<string, string>)[p] || p
+  // 20260919 站长要求：对用户不暴露上游供应商品牌（nvidia）——统一称"公益通道"
+  return ({ nvidia: '公益通道', acu: '官方自营' } as Record<string, string>)[p] || p
 }
 
 export function typeLabel(t: string): string {

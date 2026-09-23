@@ -28,7 +28,7 @@ stripThink(s)                 // 树洞用：剥 </think> 思维链
 
 // @/composables/useModels —— 全局单例（多页面共享，去重 + auto 置顶 + 离线兜底）
 const { models, loading, error, loadedAt, load } = useModels()
-// models: ModelRow[] { id, platform, type, health?, status?, status_msg? }；health 内嵌于 /v1/models 响应
+// models: ModelRow[] { id, platform, type, status?, status_msg? }；实时性能（FRT/TPS）走 /v1/models/status
 // 切页时调 load() 即可（内部防重复请求）
 
 // @/composables/modelMeta

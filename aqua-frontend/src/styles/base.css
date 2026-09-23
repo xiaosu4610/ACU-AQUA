@@ -62,7 +62,7 @@ body::after {
 }
 
 /* ---- 排版 ---- */
-h1, h2, h3, h4 { color: var(--txt0); line-height: 1.3; font-weight: 700; letter-spacing: -.015em; }
+h1, h2, h3, h4 { color: var(--txt0); line-height: 1.3; font-weight: 700; letter-spacing: -.015em; text-wrap: balance; }
 h1 { font-size: 30px; } h2 { font-size: 22px; } h3 { font-size: 17px; }
 p  { color: var(--txt1); }
 a  { color: var(--acc); text-decoration: none; transition: color var(--t-fast); }
@@ -106,7 +106,12 @@ button { font-family: inherit; }
   to   { background-position: 400px 0; }
 }
 
-body::before, body::after { display: none; }
+/* 20260919 审美恢复：氛围层为纯静态渐变（无动画，性能安全）——此前被整体 display:none
+   导致页面偏平；网格透明度 0.35→0.22 更克制。低端机若需再关，加 media 即可。 */
+body::before { display: block; }
+body::after { display: block; opacity: .22; }
+:root[data-theme='light'] body::after { opacity: .14; }
+
 pre { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

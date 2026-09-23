@@ -1,9 +1,10 @@
 package httpapi
 
 // 众筹池（acu/ 公共算力池）：与个人余额物理隔离的共享钱包。
-// 计费口径（站点额度）：充值 1:1 到账，acu/ 模型按次从池子扣账（pricing 表 acu/% 生效档）；
-// 扣池价不对外展示具体数字（制度 v5 §3.3：前端众筹卡隐藏价目）；每一笔充值/扣费落 pool_flows 全透明可查，
-// 榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
+// 计费口径（站点额度）：注资 1:1 到账（在线充值 product=pool / 个人余额划拨两条路），
+// acu/ 模型按次从池子扣账（pricing 表 acu/% 生效档）；
+// 每一笔注资/扣费落 pool_flows 全透明可查，榜单（充值/用量/荣誉/净贡献）全部由流水实时聚合。
+// 20260919 曾整体下线（acu/ 转纯免费），20260921 站长定稿恢复——上游由商汤换成 kabuai（与按次线同款）。
 
 import (
 	"database/sql"
@@ -21,6 +22,8 @@ import (
 const (
 	poolID       = "acu"
 	poolDailyCap = 2_000_000 // 单用户每日扣费上限（微元，¥2.00 站点额度）——防单人掏空公共池
+	// poolTransferMin 个人余额划拨到池子的单次下限（¥1.00）
+	poolTransferMin = 1_000_000
 )
 
 var (
@@ -74,13 +77,14 @@ func poolQuotaAdd(uid, amount int64) {
 
 // poolConsume 众筹池结算扣账（acu/ 请求响应后按实际 usage 以普通渠道零售价扣站点额度；final<=0 不扣）。
 // 允许轻微透支至 0 以下（下一笔 gate 熔断），账实相符；失败重试 2 次后落错误中心。
+// 当日配额在扣池成功后才累计：失败路径不加配额，防虚占日额度（20260919）
 func (a *App) poolConsume(uid, final, rid int64, note string) {
 	if final <= 0 {
 		return
 	}
-	poolQuotaAdd(uid, final)
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := a.poolConsumeOnce(uid, final, rid, note); err == nil {
+			poolQuotaAdd(uid, final) // 扣池成功的那次之后才累计当日配额
 			return
 		}
 		if attempt < 2 {
@@ -114,9 +118,10 @@ func (a *App) poolConsumeOnce(uid, final, rid int64, note string) error {
 	return tx.Commit()
 }
 
-// poolChargeTx 众筹池充值入账（融入 epaySettle 外部事务）：站点额度口径——1:1 到账
+// poolChargeTx 众筹池入账（融入调用方事务）：站点额度口径——1:1 到账
 // （实付 amount → 到账 amount 站点额度）；池子此前余额 ≤ 0 时标记 revival（救场英雄）。
-func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
+// kind 为注资来源（"众筹充值" / "余额划拨"），只影响流水备注便于审计对账。
+func poolChargeTx(tx *sql.Tx, uid, amount int64, kind string) error {
 	credit := amount // 1:1 注入：实付 amount → 到账 amount 站点额度
 	var prev int64
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&prev); err != nil {
@@ -140,11 +145,86 @@ func poolChargeTx(tx *sql.Tx, uid, amount int64) error {
 	if err := tx.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&balance); err != nil {
 		return err
 	}
-	flowNote := fmt.Sprintf("充值注入 实付¥%.2f · 到账¥%.2f 站点额度", float64(amount)/1e6, float64(credit)/1e6)
+	flowNote := fmt.Sprintf("%s：¥%.2f → 池子到账 ¥%.2f 站点额度", kind, float64(amount)/1e6, float64(credit)/1e6)
 	_, err := tx.Exec(
 		"INSERT INTO pool_flows (user_id, type, amount_micro, balance_after, revival, note, ts) VALUES (?, 'charge', ?, ?, ?, ?, ?)",
 		uid, credit, balance, revival, flowNote, time.Now().Unix())
 	return err
+}
+
+// handleMyPoolTransfer POST /v1/my/pool/transfer {amount_micro}
+// 个人余额 → 公共池划拨（20260921 站长定稿：**单向不可撤回**——池子是公共资金，
+// 允许撤回会引发挤兑；误操作只能由站长后台人工回退）。
+// 银行级口径：① 条件扣减（balance_micro>=amount）绝不透支；② 个人出账、池子入账、
+// 双方流水全部在同一事务内，同生共死。
+func (a *App) handleMyPoolTransfer(w http.ResponseWriter, r *http.Request) {
+	actx := auth.Authenticate(a.DB.DB, r)
+	if actx == nil {
+		errOut(w, 401, "unauthorized", "请先登录")
+		return
+	}
+	var req struct {
+		AmountMicro int64 `json:"amount_micro"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+		errOut(w, 400, "bad_request", "请求体格式错误")
+		return
+	}
+	if req.AmountMicro < poolTransferMin {
+		errOut(w, 400, "bad_request", fmt.Sprintf("单次划拨最低 ¥%.2f", float64(poolTransferMin)/1e6))
+		return
+	}
+	tx, err := a.DB.Begin()
+	if err != nil {
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	now := time.Now().Unix()
+	// 条件扣减：余额不足时影响 0 行 → 回滚拒绝（先付后用，绝不透支）
+	res, err := tx.Exec("UPDATE users SET balance_micro=balance_micro-? WHERE id=? AND balance_micro>=?",
+		req.AmountMicro, actx.UserID, req.AmountMicro)
+	if err != nil {
+		_ = tx.Rollback()
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		_ = tx.Rollback()
+		errOut(w, 429, "insufficient_quota", "余额不足，无法划拨")
+		return
+	}
+	var balance int64
+	if err := tx.QueryRow("SELECT balance_micro FROM users WHERE id=?", actx.UserID).Scan(&balance); err != nil {
+		_ = tx.Rollback()
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	// 个人出账流水（资金侧，方向为负；与在线充值 topup 同一张表，便于个人账目统一对账）
+	if _, err := tx.Exec(
+		`INSERT INTO balance_flows (user_id, request_id, type, amount_micro, balance_before_micro, balance_after_micro, unit_price_micro, note, operator, ts)
+		 VALUES (?,0,'pool_transfer',?,?,?,0,'划拨至公共众筹池','user',?)`,
+		actx.UserID, -req.AmountMicro, balance+req.AmountMicro, balance, now); err != nil {
+		_ = tx.Rollback()
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	// 池子入账（内含 revival 判定：池子此前 ≤0 时本次划拨记入救场英雄）
+	if err := poolChargeTx(tx, actx.UserID, req.AmountMicro, "余额划拨"); err != nil {
+		_ = tx.Rollback()
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		errOut(w, 500, "internal_error", "划拨失败")
+		return
+	}
+	var poolBal int64
+	_ = a.DB.QueryRow("SELECT balance_micro FROM pool_wallet WHERE id=?", poolID).Scan(&poolBal)
+	a.auditAppend("pool_transfer", actx.UserID, "amount="+strconv.FormatInt(req.AmountMicro, 10), clientIP(r))
+	jsonOut(w, 200, map[string]any{
+		"ok": true, "transferred_micro": req.AmountMicro,
+		"balance_micro": balance, "pool_balance_micro": poolBal,
+	})
 }
 
 // handlePoolStatus GET /v1/pool/status（公开）：池子余额 + 累计 + 今日消耗 + 供血状态
@@ -243,10 +323,10 @@ type poolRankEntry struct {
 	Note        string  `json:"note,omitempty"`
 }
 
-// poolRankCharge 充值榜：累计充值排序 + 占比
+// poolRankCharge 充值榜：累计充值排序 + 占比（total 与明细同用 since 条件，保证占比分母同窗）
 func (a *App) poolRankCharge(w http.ResponseWriter, since int64) {
 	var total int64
-	_ = a.DB.QueryRow("SELECT COALESCE(SUM(amount_micro),0) FROM pool_flows WHERE type='charge' AND user_id>0").Scan(&total)
+	_ = a.DB.QueryRow("SELECT COALESCE(SUM(amount_micro),0) FROM pool_flows WHERE type='charge' AND user_id>0 AND ts>=?", since).Scan(&total)
 	rows, err := a.DB.Query(`
 		SELECT f.user_id, COALESCE(u.username,''), SUM(f.amount_micro) s
 		FROM pool_flows f LEFT JOIN users u ON u.id=f.user_id

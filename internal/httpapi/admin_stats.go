@@ -18,7 +18,7 @@ import (
 const beijingOffset = int64(28800) // UTC+8
 
 // paidLineCond 计费线归属 SQL 条件（机制化，线 ID 来自配置）：
-// 统一前缀时代按 requests.resolved_line 归属实际线；旧数据（resolved_line=''）按模型前缀推断。
+// 统一前缀时代按 requests.resolved_line 归属实际线；旧数据（resolved_line=”）按模型前缀推断。
 func (a *App) paidLineCond(mode string) string {
 	id := ""
 	if l := a.lineForMode(mode); l != nil {
@@ -89,6 +89,19 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 	}
+	// 全期按次成本（同口径去掉时间条件）：利润必须全期收入对全期成本，7 日成本只用于日均燃烧
+	costAll := int64(0)
+	if rows, err := a.DB.Query(
+		`SELECT model, COUNT(*) FROM requests WHERE ` + a.paidLineCond("per_call") + ` AND bill_state='billed' GROUP BY model`); err == nil {
+		for rows.Next() {
+			var model string
+			var n int64
+			if rows.Scan(&model, &n) == nil {
+				costAll += a.perCallCostFor(model) * n
+			}
+		}
+		rows.Close()
+	}
 	costBilled := cost7d // 已计费口径成本（近 7 日）
 	dailyCost := cost7d / 7
 	daysLeft := int64(-1)
@@ -115,8 +128,8 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		"cost_per_call_micro": costPerCall, "topup_total_micro": topupTotal,
 		"cost_micro": cost7d, "cost_billed_micro": costBilled,
 		"fee_micro": feeSum, "fee_rate": feeRate, "fee_est_micro": feeEst,
-		"profit_micro":     incomeAll - cost7d,
-		"profit_net_micro": incomeAll - cost7d - feeEst,
+		"profit_micro":     incomeAll - costAll,
+		"profit_net_micro": incomeAll - costAll - feeEst,
 		"circuit_open":     circuitOpen, "days_left": daysLeft,
 	}
 
@@ -127,7 +140,8 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		).Scan(&total, &ok)
 		return
 	}
-	allT, allOK := a.queryInt64("SELECT COUNT(*) FROM requests WHERE bill_state!=''"), a.queryInt64("SELECT COALESCE(SUM(ok),0) FROM requests WHERE bill_state!=''")
+	var allT, allOK int64
+	_ = a.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(ok),0) FROM requests WHERE bill_state!=''").Scan(&allT, &allOK)
 	todayT, todayOK := callWindows(today0)
 	weekT, weekOK := callWindows(week0)
 	monthT, monthOK := callWindows(month0)
@@ -144,19 +158,20 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	// 用户负债
-	liability := a.queryInt64(`SELECT COALESCE(SUM(balance_micro),0) FROM users WHERE balance_micro>0`)
-	withBalance := a.queryInt64(`SELECT COUNT(*) FROM users WHERE balance_micro>0`)
+	// 用户负债（20260924：含 2 号折扣钱包——两钱包都是站方对用户的真实负债）
+	// 注意：分母口径仍是"有哪些钱包"，只要任一钱包有余额就计入持仓人数
+	liability := a.queryInt64(`SELECT COALESCE(SUM(balance_micro + balance2_micro),0) FROM users WHERE balance_micro>0 OR balance2_micro>0`)
+	withBalance := a.queryInt64(`SELECT COUNT(*) FROM users WHERE balance_micro>0 OR balance2_micro>0`)
 
 	// tide 专线（按量口径：resolved_line 归属实际按量线，旧数据按前缀推断）
-	tideIncome := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.`+a.paidLineCond("per_token"))
+	tideIncome := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.` + a.paidLineCond("per_token"))
 	tideIncomeToday := a.queryInt64(`SELECT COALESCE(SUM(b.unit_price_micro),0) FROM balance_flows b JOIN requests r ON r.rowid=b.request_id WHERE b.type='billed' AND r.`+a.paidLineCond("per_token")+` AND b.ts>=?`, today0)
-	tideCalls := a.queryInt64(`SELECT COUNT(*) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
-	tideIn := a.queryInt64(`SELECT COALESCE(SUM(prompt_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
-	tideCached := a.queryInt64(`SELECT COALESCE(SUM(cached_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
-	tideOut := a.queryInt64(`SELECT COALESCE(SUM(completion_tokens),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed'`)
+	tideCalls := a.queryInt64(`SELECT COUNT(*) FROM requests WHERE ` + a.paidLineCond("per_token") + ` AND bill_state='billed'`)
+	tideIn := a.queryInt64(`SELECT COALESCE(SUM(prompt_tokens),0) FROM requests WHERE ` + a.paidLineCond("per_token") + ` AND bill_state='billed'`)
+	tideCached := a.queryInt64(`SELECT COALESCE(SUM(cached_tokens),0) FROM requests WHERE ` + a.paidLineCond("per_token") + ` AND bill_state='billed'`)
+	tideOut := a.queryInt64(`SELECT COALESCE(SUM(completion_tokens),0) FROM requests WHERE ` + a.paidLineCond("per_token") + ` AND bill_state='billed'`)
 	faceToday := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed' AND ts>=?`, today0)
-	face7d := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE model LIKE 'tide/%' AND bill_state='billed' AND ts>=?`, week0)
+	face7d := a.queryInt64(`SELECT COALESCE(SUM(tide_face_micro),0) FROM requests WHERE `+a.paidLineCond("per_token")+` AND bill_state='billed' AND ts>=?`, week0)
 	faceTotal := a.queryInt64(`SELECT COALESCE(SUM(initial_micro),0) FROM line_keys WHERE line_id='tide'`)
 	faceUsed := a.queryInt64(`SELECT COALESCE(SUM(used_micro),0) FROM line_keys WHERE line_id='tide'`)
 	if faceUsed > faceTotal {
@@ -195,7 +210,7 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			var day, calls, inc int64
 			if rows.Scan(&day, &calls, &inc) == nil {
 				trend = append(trend, map[string]any{
-					"date": strconv.FormatInt(day*86400-beijingOffset, 10),
+					"date":  strconv.FormatInt(day*86400-beijingOffset, 10),
 					"calls": calls, "income_micro": inc,
 				})
 			}
@@ -222,8 +237,37 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	prices, priceMicro := a.currentPrices()
 	floorSafety := a.floorSafety()
 
+	// billing_modes 在役收费线的计费模式（20260923 修：管理台"计费模式"KPI 此前由前端**硬编码**
+	// "按次计费"，站长报"明明是按量计费却显示按次计费"）。
+	// 口径：**排除全模型维护（maintenance）的线**——那种线对外不可用，计入会让管理台展示的
+	// 模式与实际可调能力不符；免费/官方中转/众筹/codex 走独立前缀，不属"收费线计费模式"。
+	billingModes := []string{}
+	seenMode := map[string]bool{}
+	{
+		ls := a.linesSnap()
+		for i := range ls {
+			l := &ls[i]
+			if l.Mode == "free" || l.Mode == "official" || l.Mode == "crowd" || l.AuthStyle == "codex" {
+				continue
+			}
+			live := false
+			for j := range l.Models {
+				if !l.Models[j].Maintenance {
+					live = true
+					break
+				}
+			}
+			if !live || seenMode[l.Mode] {
+				continue
+			}
+			seenMode[l.Mode] = true
+			billingModes = append(billingModes, l.Mode)
+		}
+	}
+
 	adminJSON(w, map[string]any{
 		"income": income, "upstream": upstream,
+		"billing_modes": billingModes,
 		"calls": map[string]any{
 			"all": allT, "all_ok": allOK, "today": todayT, "today_ok": todayOK,
 			"week": weekT, "week_ok": weekOK, "month": monthT, "month_ok": monthOK,
@@ -234,9 +278,9 @@ func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		"trend":  trend,
 		"top":    top,
 		"prices": prices, "price_micro": priceMicro,
-		"floor_safety":      floorSafety,
-		"promo_ends_at":     0, "billing_switch_at": 0,
-		"now":               now,
+		"floor_safety":  floorSafety,
+		"promo_ends_at": 0, "billing_switch_at": 0,
+		"now": now,
 	})
 }
 
@@ -544,8 +588,9 @@ func (a *App) handleAdminSupervision(w http.ResponseWriter, r *http.Request) {
 	if priceNow == 0 {
 		priceNow = 2000
 	}
-	liability := a.queryInt64(`SELECT COALESCE(SUM(balance_micro),0) FROM users WHERE balance_micro>0`)
-	holders := a.queryInt64(`SELECT COUNT(*) FROM users WHERE balance_micro>0`)
+	// 用户负债（20260924：含 2 号折扣钱包）
+	liability := a.queryInt64(`SELECT COALESCE(SUM(balance_micro + balance2_micro),0) FROM users WHERE balance_micro>0 OR balance2_micro>0`)
+	holders := a.queryInt64(`SELECT COUNT(*) FROM users WHERE balance_micro>0 OR balance2_micro>0`)
 	bNow := int64(0)
 	if priceNow > 0 {
 		bNow = (liability + priceNow - 1) / priceNow
@@ -619,22 +664,24 @@ func (a *App) handleAdminSupervision(w http.ResponseWriter, r *http.Request) {
 		lrows.Close()
 	}
 
-	// 余额持有 TOP20
+	// 余额持有 TOP20（20260924：主钱包 + 折扣钱包合计排序）
 	top := []map[string]any{}
 	if rows, err := a.DB.Query(
-		`SELECT u.id, u.username, u.email, u.balance_micro,
+		`SELECT u.id, u.username, u.email, u.balance_micro, u.balance2_micro,
 		        COALESCE((SELECT SUM(amount_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='topup'),0),
 		        0,
 		        COALESCE((SELECT SUM(unit_price_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='billed'),0),
 		        COALESCE((SELECT COUNT(*) FROM requests rq WHERE rq.user_id=u.id AND rq.bill_state='billed'),0)
-		 FROM users u WHERE u.balance_micro>0 ORDER BY u.balance_micro DESC LIMIT 20`); err == nil {
+		 FROM users u WHERE u.balance_micro>0 OR u.balance2_micro>0
+		 ORDER BY (u.balance_micro + u.balance2_micro) DESC LIMIT 20`); err == nil {
 		for rows.Next() {
-			var id, balance, topup, deduct, spent, calls int64
+			var id, balance, balance2, topup, deduct, spent, calls int64
 			var username, email string
-			if rows.Scan(&id, &username, &email, &balance, &topup, &deduct, &spent, &calls) == nil {
+			if rows.Scan(&id, &username, &email, &balance, &balance2, &topup, &deduct, &spent, &calls) == nil {
 				top = append(top, map[string]any{
 					"id": id, "username": username, "email": email,
-					"balance_micro": balance, "topup_micro": topup, "deduct_micro": deduct,
+					"balance_micro": balance, "balance2_micro": balance2,
+					"topup_micro": topup, "deduct_micro": deduct,
 					"spent_micro": spent, "billed_calls": calls,
 				})
 			}

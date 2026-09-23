@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,9 @@ type Ctx struct {
 	Via     string // session | key | admin
 	KeyHash string // sk- 密钥认证时为密钥哈希（落 requests.key_hash 用），其余为空
 	KeyGrp  string // sk- 密钥的计费分组：''（未分组旧密钥）| per_call | per_token（统一前缀路由用）
+	KeyID   int64  // sk- 密钥行 id（密钥级配额/有效期判定用；非密钥认证为 0）
+	// KeyExpired 密钥已过期（仅在 KeyExpiredStrict 模式下返回非 nil Ctx，供调用方区分错误码）
+	KeyExpired bool
 }
 
 type ctxKey struct{}
@@ -68,10 +72,21 @@ func Authenticate(d *sql.DB, r *http.Request) *Ctx {
 	var uid int64
 	var status int
 	var keyGrp string
+	var keyID, expiresAt int64
 	kh := Sha256Hex(cred)
-	err := d.QueryRow("SELECT user_id, COALESCE(billing_grp,''), (SELECT status FROM users WHERE id=api_keys.user_id) FROM api_keys WHERE key_hash=? AND revoked=0", kh).Scan(&uid, &keyGrp, &status)
+	err := d.QueryRow("SELECT id, user_id, COALESCE(billing_grp,''), COALESCE(expires_at,0), (SELECT status FROM users WHERE id=api_keys.user_id) FROM api_keys WHERE key_hash=? AND revoked=0", kh).Scan(&keyID, &uid, &keyGrp, &expiresAt, &status)
 	if err == nil && status == 1 {
-		return &Ctx{UserID: uid, Via: "key", KeyHash: kh, KeyGrp: keyGrp}
+		// 密钥有效期（P4）：已过期返回带 KeyExpired 标记的 Ctx，调用方按 key_expired 口径拒绝
+		// （与 invalid_api_key 区分，便于下游排查"是密钥过期还是密钥错"）
+		if expiresAt > 0 && now >= expiresAt {
+			return &Ctx{UserID: uid, Via: "key", KeyHash: kh, KeyGrp: keyGrp, KeyID: keyID, KeyExpired: true}
+		}
+		return &Ctx{UserID: uid, Via: "key", KeyHash: kh, KeyGrp: keyGrp, KeyID: keyID}
+	}
+	if err != nil && err != sql.ErrNoRows {
+		// DB 瞬时故障（busy 超时/IO 错）不能伪装成"密钥不存在"——留痕便于诊断
+		// （20260919：单连接 + WAL 下偶发抖动曾表现为莫名 401）
+		log.Printf("[auth] 密钥查询失败(非不存在): %v", err)
 	}
 	// 用户会话令牌
 	err = d.QueryRow("SELECT user_id FROM sessions WHERE token=? AND last_seen_ts > ?", cred, now-SessionTTL).Scan(&uid)
@@ -101,7 +116,9 @@ func FromCtx(ctx context.Context) *Ctx {
 // extractCredential 提取凭证：Authorization Bearer / X-Api-Key / cookie session
 func extractCredential(r *http.Request) string {
 	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") {
+	// scheme 大小写不敏感（RFC 7235）：小写 "bearer xxx" 此前被拒为 401，
+	// 部分 SDK/网关（如某些 one-api 分发端）确实发小写 scheme
+	if len(h) >= 7 && strings.EqualFold(h[:7], "Bearer ") {
 		return strings.TrimSpace(h[7:])
 	}
 	if k := r.Header.Get("X-Api-Key"); k != "" {

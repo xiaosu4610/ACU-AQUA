@@ -29,6 +29,23 @@ import (
 	"acu-aqua/gateway/internal/upstream"
 )
 
+// codexExhausted 判断该 codex 线的全部账号是否已余量耗尽（20260919 自动下线）。
+// 口径：账号总数 N > 0，且"耗尽数"（used_pct >= codexExhaustedPct 或 dead=1）== N。
+// 兜底：查询出错或该线无账号记录 → 返回 false（保守不隐藏，避免误摘可用服务）。
+// 恢复：账号补充余量后 used_pct 回落，下次调用自动重新上线（无需重启）。
+func (a *App) codexExhausted(lineID string) bool {
+	var total, exhausted int
+	err := a.DB.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN used_pct >= ? OR dead = 1 THEN 1 ELSE 0 END), 0)
+		FROM admin_line_keys WHERE line_id = ?`, codexExhaustedPct, lineID).Scan(&total, &exhausted)
+	if err != nil || total == 0 {
+		return false // 查询失败/无账号：保守放行
+	}
+	return exhausted == total
+}
+
+const codexExhaustedPct = 99.0 // 余量耗尽阈值（百分比）：used_pct >= 该值视为该账号不可用
+
 // recordCodexUsage codex 官方实时用量头落库（每次真实请求零成本更新；非 codex 线/无钥直接返回）
 func (a *App) recordCodexUsage(line *config.Line, key *upstream.KeyState, resp *http.Response) {
 	if line == nil || key == nil || resp == nil || line.AuthStyle != "codex" {
@@ -45,7 +62,7 @@ func (a *App) recordCodexUsage(line *config.Line, key *upstream.KeyState, resp *
 	resetAt, _ := strconv.ParseInt(resp.Header.Get("X-Codex-Primary-Reset-At"), 10, 64)
 	plan := resp.Header.Get("X-Codex-Plan-Type")
 	_, _ = a.DB.Exec("UPDATE admin_line_keys SET used_pct=?, reset_at=?, plan_type=? WHERE line_id=? AND idx=?",
-		pct, resetAt, plan, line.ID, key.Idx)
+		pct, resetAt, plan, line.ID, key.RawIdx)
 }
 
 const (

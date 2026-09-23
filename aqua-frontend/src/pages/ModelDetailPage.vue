@@ -3,9 +3,9 @@
  * 接口对接（与旧版 1:1）：
  * - route params id（vue-router 解码一次，再兜底解码）
  * - /v1/models（useModels.load，session:true，60 秒轮询 + classify 离线兜底渲染）
- * - /v1/models/status（apiJson('/models/status')，20 秒轮询：实时状态 + 会话内健康趋势采样，静默失败）
+ * - /v1/models/status（apiJson('/models/status')，20 秒轮询：实时首字延迟 / TPS，静默失败）
  * 档案数据（PARAM_TEMPLATES / MODEL_SPECS / MODEL_NOTES / ACU_PROFILES）与旧版逐条平移 */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
@@ -48,20 +48,6 @@ const statusTag = computed(() => {
   if (st === 'exhausted') return { cls: 'bad', text: '额度已耗尽' }
   if (st === 'unavailable') return { cls: 'warn', text: '暂时不可用' }
   return null
-})
-
-/* ---- 健康评分（旧 healthTag 平移）：后端按近 100 次调用计算，0-100 ---- */
-const health = computed(() => {
-  const h = row.value?.health
-  if (!h || !h.total) return null
-  const score = h.score != null ? h.score | 0 : 0
-  let dot: 'ok' | 'warn' | 'bad' = 'bad'
-  if (score >= 90) dot = 'ok'
-  else if (score >= 70) dot = 'ok'
-  else if (score >= 50) dot = 'warn'
-  const rate = Math.round(((h.ok || 0) / h.total) * 100)
-  const lat = h.avg_latency_ms != null ? (h.avg_latency_ms / 1000).toFixed(1) + 's' : '-'
-  return { score, dot, tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
 })
 
 /* ---- 按能力类型定义「支持的请求体参数」模板（旧 PARAM_TEMPLATES 平移） ---- */
@@ -345,7 +331,7 @@ const MODEL_NOTES: ModelNote[] = [
   { match: /llama-3\.1-405b/, name: "Llama 3.1 405B", desc: "Meta 最大规模开源模型，405B 参数顶级能力，适合复杂任务。" },
   { match: /llama-3\.1-70b/, name: "Llama 3.1 70B", desc: "70B 参数的强对话模型，能力与成本的优秀平衡点。" },
   { match: /llama-3\.2-(1b|3b)/, name: "Llama 3.2 小模型", desc: "轻量级模型，低延迟、低资源占用，适合简单对话与移动端场景。" },
-  { match: /nemotron/, name: "Nvidia Nemotron", desc: "Nvidia 自家对话系列，面向指令跟随与推理优化，参数规模选择丰富。" },
+  { match: /nemotron/, name: "Nemotron 系列", desc: "公益通道的对话系列，面向指令跟随与推理优化，参数规模选择丰富。" },
   { match: /gemma-3/, name: "Gemma 3", desc: "Google 开源轻量模型，多模态与多语言，边端友好。" },
   { match: /phi-3|phi-4/, name: "Phi 系列", desc: "Microsoft 小模型系列，以较小参数量达成较强常识推理能力。" },
   { match: /mistral-large/, name: "Mistral Large", desc: "Mistral 高端旗舰，多语言能力强，适合复杂推理任务。" },
@@ -362,6 +348,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
     limits: [
       "官方原版满血 DeepSeek-V4-Flash-0731：MoE 总参 284B / 激活 13B（MIT 开源权重）",
       "上下文 1M tokens，单次最大输出 384K tokens",
+      "纯文本模型：不支持图片 / 视觉输入（请求含图片会被网关拒绝，返回 vision_not_supported）",
       "思考模式：支持非思考与思考双模式（默认思考，最高 Think Max 深度档）",
       "官方支持 Tool Calls / JSON Output / 结构化输出 / 对话前缀续写，请求体参数原样透传",
       "AQUA api 专线通道有全局并发保护，高峰期自动排队等待，请勿重复提交"
@@ -408,7 +395,7 @@ const ACU_PROFILES: Record<string, AcuProfile> = {
   'aqua/glm-5.3-flash': {
     limits: [
       "官方原版满血 GLM-5.3-Flash：320B-A18B MoE（MIT 开源权重），稀疏 + 线性混合注意力架构",
-      "上下文 1M tokens，单次最大输出 128K tokens",
+      "上下文 1M tokens，单次最大输出 128K tokens（请求中 max_tokens 超过 128K 将被网关自动钳制到 128K）",
       "深度思考默认开启且不可关闭，reasoning_effort 支持 low / high / max",
       "GLM-5 系列首个原生多模态基座（文本 / 图片 / 视频输入），本站专线当前以文本对话为主",
       "官方支持 Tool Calls / JSON 结构化输出 / 上下文缓存 / 流式输出，请求体参数原样透传",
@@ -437,7 +424,7 @@ const profile = computed(() => {
     limits.length = 0
     limits.push(...acu.limits)
   } else if (m.platform === 'nvidia') {
-    limits.unshift("由 Nvidia NIM 提供，网关密钥池自动轮换（单密钥 38 次/分钟）")
+    limits.unshift("由公益免费通道提供，网关密钥池自动轮换（单密钥 38 次/分钟）")
   }
   return {
     typeText: typeLabel(t),
@@ -448,6 +435,37 @@ const profile = computed(() => {
     spec: modelSpec(mid),
     unsupported: acu ? acu.unsupported : base.unsupported || []
   }
+})
+
+/* ---- SEO：动态模型页的唯一标题 / 描述 ----
+ * 路由表里 /model/:id 的标题是静态的「模型详情」，会让所有模型页标题雷同（Bing 报「标题重复」）。
+ * 静态抓取走 prerender 产物；这里保证执行 JS 的爬虫（Google / Bing）也看到唯一标题与描述。 */
+const seoName = computed(() => profile.value.noteName || row.value?.id || id.value)
+const seoPrice = computed(() => {
+  const m = row.value
+  if (!m) return '计费方式与实时价格以模型广场为准'
+  if (m.mode === 'per_call' && m.price_micro) return `按次计费 ${microYuan(m.price_micro)} 元/次`
+  if (m.mode === 'per_token') return `按量计费：输入 ${perMYuan(dispPrice.value.in)} / 输出 ${perMYuan(dispPrice.value.out)} 元每百万 tokens`
+  return '公益免费调用（不扣个人余额）'
+})
+function setHeadMeta(name: string, content: string, attr: 'name' | 'property' = 'name') {
+  let el = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${name}"]`)
+  if (!el) {
+    el = document.createElement('meta')
+    el.setAttribute(attr, name)
+    document.head.appendChild(el)
+  }
+  el.content = content
+}
+watchEffect(() => {
+  if (!row.value) return
+  const n = seoName.value
+  const title = `${n} — ${seoPrice.value}｜AQUA api`
+  const desc = `${n} 在 AQUA api 的调用与计费：${seoPrice.value}。OpenAI 兼容，任何 SDK 改 base_url 即可接入；附实时首字延迟、能力说明与可复制的 curl / Python 示例，免费额度与低价档可在模型广场实时比价。`
+  document.title = title
+  setHeadMeta('description', desc)
+  setHeadMeta('og:title', title, 'property')
+  setHeadMeta('og:description', desc, 'property')
 })
 
 /* ---- 调用示例（旧 modelExample 平移为 cURL；另生成 Python / JS 版本） ---- */
@@ -538,59 +556,60 @@ const exJs = computed(() => {
 const exLang = ref<'curl' | 'python' | 'js'>('curl')
 const exCode = computed(() => (exLang.value === 'python' ? exPy.value : exLang.value === 'js' ? exJs.value : exCurl.value))
 
-/* ---- 实时状态 + 会话内健康趋势（/v1/models/status，20 秒采样，静默失败） ---- */
-type LiveRow = { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; avg_first_ms?: number; avg_tps?: number; last_ts: number }
+/* ---- 实时性能指标（/v1/models/status，20 秒采样，静默失败） ---- */
+type LiveRow = { model: string; samples: number; avg_latency_ms?: number; avg_first_ms?: number; avg_tps?: number; last_ts: number }
 /* 展示口径：优先首字延迟（用户感知的响应速度），旧数据无首字段时回退总耗时 */
 function latOf(r?: LiveRow): number {
   if (!r) return 0
   return r.avg_first_ms || r.avg_latency_ms || 0
 }
 const live = ref<LiveRow | null>(null)
-const trendPts = ref<{ t: number; rate: number; lat: number }[]>([])
 let liveTimer = 0
 async function loadLive() {
   try {
     const j = await apiJson<{ data: LiveRow[]; generated_ts: number }>('/models/status')
     const r = (j.data || []).find((x: LiveRow) => x.model === id.value)
-    if (r) {
-      live.value = r
-      const last = trendPts.value[trendPts.value.length - 1]
-      if (!last || last.t !== (r.last_ts || j.generated_ts)) {
-        trendPts.value.push({ t: r.last_ts || j.generated_ts, rate: Math.round(r.ok_rate * 100), lat: latOf(r) })
-        if (trendPts.value.length > 12) trendPts.value.shift()
-      }
-    }
+    if (r) live.value = r
   } catch { /* 静默：下一轮自动重试 */ }
 }
 function fmtLat(ms?: number): string {
   if (!ms) return '--'
   return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
 }
-function liveDot(): 'ok' | 'warn' | 'bad' | '' {
+/* 后端不再下发健康评级：仅按是否有近期采样给中性文案 */
+function liveDot(): 'ok' | 'warn' | '' {
   if (!live.value) return ''
-  if (live.value.status === 'great' || live.value.status === 'ok') return 'ok'
-  if (live.value.status === 'degraded') return 'warn'
-  return 'bad'
+  return 'ok'
 }
 function liveText(): string {
-  if (!live.value) return '待命中'
-  if (live.value.status === 'great') return '状态极佳'
-  if (live.value.status === 'ok') return '运行正常'
-  if (live.value.status === 'degraded') return '部分异常'
-  return '故障'
+  return live.value ? '有近期数据' : '暂无数据'
 }
 
 /* ---- 头部价格标签（付费模型三态文案，与旧版 1:1） ---- */
 /* 代理拿货价视角（20260919 代理体系）：展示拿货价 + 官网零售原价对比 */
 const isAgentView = computed(() => (row.value as any)?.price_view === 'agent')
 const agentBasePrice = computed(() => (row.value as any)?.base_price_micro as number | undefined)
+/* 常态扣费倍率（20260923 展示价与实收价分离）：
+   >0 时本页主价须与列表页一致地显示 base_*（官方原价），并标注该倍率；
+   否则会出现「列表页 ¥2.00 / 详情页 ¥1.00」的同一模型两个价。 */
+const chargeRate = computed(() => (row.value as any)?.charge_rate as number | undefined)
+/* 展示用三段价：命中倍率取官方原价（base_*），否则取实收价 */
+const dispPrice = computed(() => {
+  const r = row.value as any
+  if (r?.charge_rate && r.base_in_price != null) {
+    return { in: r.base_in_price, cache: r.base_cache_price, out: r.base_out_price }
+  }
+  return { in: r?.in_price, cache: r?.cache_price, out: r?.out_price }
+})
 const priceTag = computed(() => {
   const r = row.value
   if (!r?.paid) return null
   if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
     return {
-      text: '收费 · 按量 ¥' + perMYuan(r.in_price) + '/百万tokens 起' + (isTide.value ? '' : (r.subsidized ? ' · 限时补贴' : '')),
-      title: '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明',
+      text: '收费 · 按量 ¥' + perMYuan(dispPrice.value.in) + '/百万tokens 起' + (isTide.value ? '' : (r.subsidized ? ' · 限时补贴' : '')) + (chargeRate.value ? ' · ' + chargeRate.value + '×' : ''),
+      title: chargeRate.value
+        ? '卡片展示官方原价，实际按官方原价 ' + chargeRate.value + ' 倍扣费；输入/缓存命中/输出分段计价'
+        : '按量计费：输入/缓存命中/输出分段计价，用多少付多少，详见下方计费说明',
     }
   }
   if (r.price_micro || r.per_image != null) {
@@ -611,12 +630,17 @@ const priceRows = computed<[string, string][] | null>(() => {
   const r = row.value
   if (!r?.paid) return null
   if (r.mode === 'per_token' && r.in_price != null && r.per_image == null) {
-    return [
+    const rows: [string, string][] = [
       ['计费方式', '按量三段价 · 用多少付多少'],
-      ['输入', '¥' + perMYuan(r.in_price) + ' / 百万 tokens'],
-      ['缓存命中', '¥' + perMYuan(r.cache_price) + ' / 百万 tokens'],
-      ['输出', '¥' + perMYuan(r.out_price) + ' / 百万 tokens'],
+      ['输入', '¥' + perMYuan(dispPrice.value.in) + ' / 百万 tokens'],
+      ['缓存命中', '¥' + perMYuan(dispPrice.value.cache) + ' / 百万 tokens'],
+      ['输出', '¥' + perMYuan(dispPrice.value.out) + ' / 百万 tokens'],
     ]
+    if (chargeRate.value) {
+      // 展示价与实收价分离：上表为官方原价，此处显式声明实际结算倍率（与列表页角标口径一致）
+      rows.push(['实际结算', '官方原价 × ' + chargeRate.value + '（上表为官方原价）'])
+    }
+    return rows
   }
   if (isTideImage.value) {
     return [['计费方式', '按张计费 · n 参数控制张数（1~10 张）'], ['单价', '¥' + microYuan(r.price_micro ?? r.per_image) + ' / 张']]
@@ -654,7 +678,6 @@ const priceRows = computed<[string, string][] | null>(() => {
             <span v-if="priceTag" class="tag grad" :title="priceTag.title">{{ priceTag.text }}</span>
             <span v-else-if="meta.platform" class="tag ok">免费模型</span>
             <span v-if="statusTag" class="tag" :class="statusTag.cls">{{ statusTag.text }}</span>
-            <span v-if="health" class="tag" :title="health.tip"><span class="dot" :class="health.dot"></span>健康 {{ health.score }}</span>
             <span v-if="live" class="tag"><span class="dot" :class="liveDot()"></span>{{ liveText() }}</span>
           </div>
         </div>
@@ -754,7 +777,7 @@ const priceRows = computed<[string, string][] | null>(() => {
           </div>
         </div>
 
-        <!-- ================= 右：调用示例 + 健康趋势 ================= -->
+        <!-- ================= 右：调用示例 + 性能指标 ================= -->
         <div class="col-side">
           <div class="card">
             <div class="row between">
@@ -770,38 +793,20 @@ const priceRows = computed<[string, string][] | null>(() => {
           </div>
 
           <div class="card mt16">
-            <b><AqIcon name="activity" :size="16" />健康状态</b>
+            <b><AqIcon name="activity" :size="16" />性能指标</b>
             <div class="row mt12" style="gap: 14px;">
-              <div class="health-score">
-                <b class="num" v-if="health">{{ health.score }}</b>
-                <b v-else>--</b>
-                <span class="dim">健康分</span>
-              </div>
               <div style="min-width: 0; flex: 1;">
                 <div class="row" style="gap: 7px; font-size: 12.5px;">
                   <span class="dot" :class="liveDot() || 'warn'"></span>{{ liveText() }}
                   <span v-if="live" class="dim" style="margin-left: auto; font-size: 11px;">近 {{ live.samples }} 次 · 最近活动 {{ live.last_ts ? new Date(live.last_ts * 1000).toLocaleTimeString() : '--' }}</span>
                 </div>
                 <div class="row wrap mt8" style="gap: 6px;">
-                  <span class="tag">首字 {{ live ? fmtLat(latOf(live)) : '--' }}</span>
+                  <span class="tag">首字延迟 {{ live ? fmtLat(latOf(live)) : '--' }}</span>
                   <span class="tag">速度 {{ live?.avg_tps ? live.avg_tps.toFixed(1) + ' tok/s' : '--' }}</span>
-                  <span class="tag">成功率 {{ live ? (live.ok_rate * 100).toFixed(1) + '%' : '--' }}</span>
                 </div>
               </div>
             </div>
-            <!-- 会话内趋势采样（每 20 秒一点，成功率%） -->
-            <div class="mt12" style="border-top: 1px dashed var(--line); padding-top: 10px;">
-              <div class="row between" style="font-size: 11.5px; color: var(--txt2);">
-                <span>健康趋势（本页停留期间 · 每 20 秒采样成功率）</span><span class="num">0–100%</span>
-              </div>
-              <div v-if="trendPts.length" class="trend-bars">
-                <span v-for="p in trendPts" :key="p.t" :title="new Date(p.t * 1000).toLocaleTimeString() + ' · ' + p.rate + '%'">
-                  <i :style="{ height: Math.max(8, p.rate) + '%' }" :class="p.rate >= 90 ? 'ok' : p.rate >= 50 ? 'warn' : 'bad'"></i>
-                </span>
-              </div>
-              <div v-else class="empty" style="padding: 14px 0;"><b>等待采样</b><div class="dim" style="font-size: 12px;">每 20 秒自动拉取一次该模型实时状态</div></div>
-            </div>
-            <div v-if="health" class="dim mt8" style="font-size: 11.5px;">{{ health.tip }}</div>
+            <p class="dim mt8" style="font-size: 11.5px;">指标来自最近 200 次真实请求采样（每 20 秒自动刷新），仅反映客观性能，不构成可用性承诺。</p>
           </div>
 
           <div class="card">
@@ -852,13 +857,6 @@ const priceRows = computed<[string, string][] | null>(() => {
 .bill-notes { padding-left: 18px; display: grid; gap: 5px; font-size: 13px; color: var(--txt2); }
 .bill-notes b { color: var(--txt0); }
 
-/* ---- 调用示例 / 健康趋势 ---- */
+/* ---- 调用示例 / 性能指标 ---- */
 .ex-code { min-height: 250px; max-height: 380px; white-space: pre; margin-top: 0; }
-.health-score { text-align: center; flex: none; }
-.health-score b { display: block; font-size: 34px; font-weight: 800; color: var(--txt0); line-height: 1.1; }
-.trend-bars { display: flex; align-items: flex-end; gap: 4px; height: 52px; margin-top: 8px; }
-.trend-bars span { flex: 1; height: 100%; display: flex; align-items: flex-end; }
-.trend-bars i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--acc-grad); }
-.trend-bars i.warn { background: var(--warn); }
-.trend-bars i.bad { background: var(--bad); }
 </style>

@@ -9,15 +9,50 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"acu-aqua/gateway/internal/config"
 )
 
 // nvidiaSyncInterval 同步周期：每小时（上游 NIM 目录变动低频，足够灵敏）
 const nvidiaSyncInterval = time.Hour
+
+// catalogProbeMax 单轮目录探针上限（防目录异常膨胀时同步周期被拖长）
+const catalogProbeMax = 160
+
+// probeConcurrency 探针并发度（上游限流敏感，取保守值）
+const probeConcurrency = 8
+
+// probeModelStatus 对单个上游模型发一次最小探针（1 token），返回 HTTP 状态码；
+// 传输层失败返回 0（不作结论）。语义由调用方解释：200=可用、404/410=上游确无此模型。
+func (a *App) probeModelStatus(line *config.Line, upstreamID string) int {
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"max_tokens":1}`, upstreamID)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(line.BaseURL, "/")+"/chat/completions", strings.NewReader(body))
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if len(line.Keys) > 0 {
+		req.Header.Set("Authorization", "Bearer "+line.Keys[0])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode
+}
 
 // startNvidiaSyncer 后台同步循环：启动 30s 后首跑，此后每 nvidiaSyncInterval 一次。
 // 无 dynamic 免费线时静默不启动（未配置该功能的环境零开销）。
@@ -145,7 +180,22 @@ func (a *App) syncNvidiaModels() (added, removed int, err error) {
 	for low, up := range existing {
 		key := strings.ToLower(up)
 		if key == "" {
-			key = low
+			// 存量裸名行 upstream_id 为空：裸名还在上游目录时补全 upstream_id（进 toAdd
+			// 走 INSERT OR REPLACE），不删除——否则本轮"只删不补"（全名键查不到裸名），
+			// 模型目录空窗一个同步周期（1 小时）
+			found := ""
+			for _, orig := range upstreamSet {
+				if strings.ToLower(bareOf(orig)) == low {
+					found = orig
+					break
+				}
+			}
+			if found != "" && !configured[low] {
+				toAdd = append(toAdd, [2]string{low, found})
+			} else {
+				toRemove = append(toRemove, low) // 上游已无此模型 / 已进配置目录：照旧清理
+			}
+			continue
 		}
 		if strings.Contains(low, "/") {
 			toRemove = append(toRemove, low) // 存量全名行：统一裸名口径清理
@@ -155,23 +205,69 @@ func (a *App) syncNvidiaModels() (added, removed int, err error) {
 			toRemove = append(toRemove, low) // 上游已无此模型：清理
 		}
 	}
-	// —— 3.5 retired 误标自愈：仍在上游目录、标记超 1h 无新失败的行自动复活。
-	// 场景：上游瞬时 404/抖动误标 → 列表错误隐藏；真下线的模型上游目录也会消失，
-	// 由下方 toRemove 清出展示，retired 行随 TTL 过期，无需保留。
+	// —— 3.5 全目录探针：判活（自愈）/ 判死（隐藏幽灵模型）——
+	// ⚠️ 20260922 事故：原自愈以"仍在上游 /models 目录里"为依据，但 NVIDIA 目录会长期列出
+	// **实际推理已下架**的模型（实测 meta/llama2-70b、deepseek-ai/deepseek-coder-6.7b-instruct、
+	// nvidia/llama-3.1-nemotron-70b-instruct 等 20+ 个：目录里有、/chat/completions 恒 404/410）。
+	// 于是死循环：目录一直宣传 → 用户选中调用 410 → 标记 retired → 下一轮同步又被复活。
+	// 生产实锤：每小时"复活 6~49 个"、近 2h 产生 992 次 410 model_retired。
+	// 现改为每轮同步对目录发最小探针，把依据从"目录声称"换成"实测可用"：
+	//   200     → 撤销 retired（覆盖瞬时抖动误标，原自愈的本意）
+	//   404/410 → **直接判死**（hits 置 2，立即从 /v1/models 隐藏 + 调用端 410，不再打扰用户）
+	//   其他     → 不作结论（429/5xx/网络抖动绝不误判为下线）
 	{
-		healBefore := time.Now().Unix() - 3600
-		var healed int64
-		for low := range upstreamSet {
-			res, err := a.DB.Exec(
-				"DELETE FROM retired_models WHERE lower(model)=? AND retired_ts < ?", low, healBefore)
-			if err == nil {
-				if n, _ := res.RowsAffected(); n > 0 {
-					healed += n
+		targets := map[string]bool{} // upstream_id 去重
+		for _, orig := range upstreamSet {
+			targets[orig] = true
+		}
+		for _, up := range existing {
+			if up != "" {
+				targets[up] = true
+			}
+		}
+		probeList := make([]string, 0, len(targets))
+		for up := range targets {
+			probeList = append(probeList, up)
+		}
+		sort.Strings(probeList) // 稳定顺序，便于日志比对
+		if len(probeList) > catalogProbeMax {
+			probeList = probeList[:catalogProbeMax]
+		}
+		statuses := make([]int, len(probeList))
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, probeConcurrency)
+		for i, up := range probeList {
+			wg.Add(1)
+			go func(i int, up string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				statuses[i] = a.probeModelStatus(line, up)
+			}(i, up)
+		}
+		wg.Wait() // 探针期间不持有 DB 连接（SQLite MaxOpenConns(1)）
+
+		now := time.Now().Unix()
+		var healed, killed int
+		for i, up := range probeList {
+			switch statuses[i] {
+			case http.StatusOK:
+				if res, err := a.DB.Exec("DELETE FROM retired_models WHERE model=?", up); err == nil {
+					if n, _ := res.RowsAffected(); n > 0 {
+						healed++
+					}
+				}
+			case http.StatusNotFound, http.StatusGone:
+				if _, err := a.DB.Exec(
+					"INSERT INTO retired_models (model, retired_ts, hits) VALUES (?,?,2) "+
+						"ON CONFLICT(model) DO UPDATE SET hits=MAX(hits,2), retired_ts=?",
+					up, now, now); err == nil {
+					killed++
 				}
 			}
 		}
-		if healed > 0 {
-			log.Printf("[nvidia] retired 误标自愈：复活 %d 个仍在上游目录的模型", healed)
+		if healed > 0 || killed > 0 {
+			log.Printf("[nvidia] 目录探针（%d 个）：判活自愈 %d 个，判死隐藏 %d 个幽灵模型", len(probeList), healed, killed)
 		}
 	}
 

@@ -68,3 +68,17 @@ upstream_id = "vendor-image-model"
 image = true
 per_image_cost = 200000    # 成本（微元/张）
 per_image_sell = 100000    # 售价（微元/张，普通组）
+
+# 系统在线更新（双镜像源：gitee 主仓库 + github 自动同步镜像，管理后台入口）
+# 支持 AQUA_UPDATE_REPO / AQUA_UPDATE_TOKEN / AQUA_UPDATE_ASSET_NAME / AQUA_UPDATE_SERVICE / AQUA_UPDATE_ENABLED 环境变量覆盖
+[update]
+enabled = false            # 是否启用在线更新入口（默认关；启用后管理后台才显示"检查更新"）
+repo = "your-gitee-user/your-repo"      # gitee 主仓库（release 元数据 + release 附件源）
+mirror_repo = "your-github-user/your-repo"   # github 镜像仓库（服务器侧主源：tags + raw 下载）
+# gitee 私有仓库访问令牌（公开仓库可空）——机密字段，建议用环境变量 AQUA_UPDATE_TOKEN 注入，不落盘
+token = ""
+asset_name = "aqua-gateway-go-linux-amd64"   # 发行版附件名（linux-amd64 二进制），留空用默认
+asset_dir = "assets"       # 仓库内附件目录（raw 下载路径前缀），留空用默认
+service = "aqua-gateway-go"   # systemd 服务名（更新后自重启），留空用默认
+api_base = ""              # gitee v5 API 地址（默认官方 https://gitee.com/api/v5；服务器无法直连 gitee 时可指向国内跳板反代）
+proxy = ""                 # 出站代理（http://host:port），更新请求走代理（海外服务器被 gitee CDN 拦截时使用；空=走环境代理/直连）

@@ -10,6 +10,10 @@ import (
 // ErrInsufficientBalance 余额不足（429 insufficient_quota 口径）
 var ErrInsufficientBalance = errors.New("INSUFFICIENT_BALANCE")
 
+// ErrAccountDisabled 账户被禁用（403 account_disabled 口径，与余额不足区分，
+// 避免把禁用用户引导去充值——充了也调不了）
+var ErrAccountDisabled = errors.New("ACCOUNT_DISABLED")
+
 // tx 事务包装：SQLite busy/locked（与 Rust 版双进程共库时偶发）自动退避重试
 func tx(d *sql.DB, fn func(*sql.Tx) error) error {
 	var err error

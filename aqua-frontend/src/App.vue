@@ -14,7 +14,7 @@ const { meta, loadMeta } = useMeta()
 onMounted(() => { loadMeta(); if (sessionToken.value) loadMe() })
 
 /* 工作台壳路径；/admin 为独立入口：无任何壳、无任何导航引用，仅站长手动输入 URL 进入 */
-const BENCH = ['/console', '/finance', '/usage', '/pool']
+const BENCH = ['/console', '/finance', '/usage']
 const isBench = computed(() => BENCH.includes(route.path))
 const isStandalone = computed(() => route.path === '/admin')
 
@@ -25,11 +25,11 @@ const PORTAL_NAV: { label: string; to: string; match: string[]; children?: NavLe
   { label: '模型与价格', to: '/models', match: ['/models', '/model'] },
   { label: '接入文档', to: '/api', match: ['/api'] },
   { label: '服务状态', to: '/status', match: ['/status'] },
-  { label: '体验与生态', to: '/playground', match: ['/playground', '/treehole', '/tools', '/prompts', '/arena', '/community', '/pool', '/sponsor'], children: [
+  { label: '体验与生态', to: '/playground', match: ['/playground', '/treehole', '/tools', '/prompts', '/arena', '/community', '/sponsor'], children: [
     { label: 'AI 对话', to: '/playground' }, { label: '树洞', to: '/treehole' },
     { label: '工具箱', to: '/tools' }, { label: '提示词工坊', to: '/prompts' },
     { label: '模型竞技场', to: '/arena' }, { label: '社区交流', to: '/community' },
-    { label: '公共池贡献', to: '/pool' }, { label: '自愿赞助', to: '/sponsor' },
+    { label: '自愿赞助', to: '/sponsor' },
   ] },
 ]
 const mobileOpen = ref(false)
@@ -48,7 +48,6 @@ const BENCH_NAV = [
       { label: '总览 · 密钥', to: '/console', icon: 'layout', match: ['/console'] },
       { label: '账单中心', to: '/finance', icon: 'wallet', match: ['/finance'] },
       { label: '我的用量', to: '/usage', icon: 'chart', match: ['/usage'] },
-      { label: '众筹池', to: '/pool', icon: 'coin', match: ['/pool'] },
     ],
   },
   {
@@ -189,24 +188,24 @@ async function doLogout() {
 
     <footer class="foot">
       <div class="foot-in">
-        <div>{{ siteName }} · OpenAI 兼容模型接口 · acu/ 纯免费 · aqua/ 按次 · codex/ 按量</div>
+        <div>{{ siteName }} · OpenAI 兼容模型接口 · acu/ 纯免费 · aqua/ 按次与按量 · codex/ 按量</div>
         <div class="row" style="justify-content: center; flex-wrap: wrap;">
           <a href="https://gitee.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">Gitee</a> ·
           <a href="https://github.com/xiaosu4610/aqua-rust-workers" target="_blank" rel="noopener">GitHub</a> ·
           <router-link to="/finance">财务管理中心</router-link> ·
           <router-link to="/sponsor">赞助支持</router-link>
-          <template v-if="meta?.qq_group_url"> ·
-            <a :href="meta.qq_group_url" target="_blank" rel="noopener">Q 群 {{ meta.qq_group }}</a>
-          </template>
           <template v-if="meta?.qq_group_url2"> ·
             <a :href="meta.qq_group_url2" target="_blank" rel="noopener">Q 群 {{ meta.qq_group2 }}</a>
+          </template>
+          <template v-if="meta?.qq_group_url"> ·
+            <a :href="meta.qq_group_url" target="_blank" rel="noopener">Q 群 {{ meta.qq_group }}</a>
           </template>
         </div>
       </div>
     </footer>
 
-    <a v-if="meta?.qq_group_url" class="qq-fab" :href="meta.qq_group_url" target="_blank" rel="noopener">
-      <AqIcon name="message" :size="15" />Q 群
+    <a v-if="meta?.qq_group_url2 || meta?.qq_group_url" class="qq-fab" :href="meta?.qq_group_url2 || meta?.qq_group_url" target="_blank" rel="noopener">
+      <AqIcon name="message" :size="15" />Q 群二群
     </a>
   </template>
 </template>

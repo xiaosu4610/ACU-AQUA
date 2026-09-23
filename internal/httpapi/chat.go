@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,9 +29,11 @@ type readerBody struct {
 
 // chatReq chat/completions 请求体（透传字段用 raw 保真）
 type chatReq struct {
-	Model         string      `json:"model"`
-	Stream        bool        `json:"stream"`
-	MaxTokens     json.Number `json:"max_tokens,omitempty"`
+	Model     string      `json:"model"`
+	Stream    bool        `json:"stream"`
+	MaxTokens json.Number `json:"max_tokens,omitempty"`
+	// Messages 请求消息原文（仅用于无上游 usage 时的输入侧保守估算，20260919 亏本防线）
+	Messages      json.RawMessage `json:"messages,omitempty"`
 	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
@@ -60,7 +63,7 @@ var legacyPaidRetired = map[string]string{
 	"deepseek-v4-pro": "aqua/deepseek-v4-1-flash",
 }
 
-//	→ 预扣→上游→结算（多退少补）
+// → 预扣→上游→结算（多退少补）
 func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	// 通道防刷：per-IP 滑窗限流（挡在打上游之前，保 kabuai 上游不被刷满殃及正常计费线）
@@ -82,17 +85,25 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	// （无前缀裸模型 / 旧厂商前缀 zhipu/glm-4-flash / auto 智能路由 / 动态目录）
 	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
 	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
-	// 裸名兼容路由（20260918 紧急修复）：旧众筹时代客户端以裸名调用收费模型
-	// （deepseek-v4-pro / glm-5.3 / kimi-k3 等），此前被免费线同名模型截胡——
-	// 调到商汤免费体验线吃 429/断流，用户误以为"收费渠道故障"。
-	// 裸名命中非免费线模型 → 视同统一前缀调用（鉴权+计费），免费线只服务裸名免费模型。
-	if !hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && a.paidLineForSiteID(req.Model) != nil {
+	// 裸名兼容路由（20260918 引入，20260922 修正）：旧众筹时代客户端以裸名调用收费模型
+	// （deepseek-v4-pro 等），此前被免费线同名模型截胡，用户误以为"收费渠道故障"。
+	//
+	// ⚠️ 20260922 事故：原判断只查了「裸名是不是收费线的 SiteID」，**漏了"非免费线"这半边**，
+	// 而 glm-5.3 / glm-5.3-flash / kimi-k3 / deepseek-v4.1-flash 等**同时在免费目录与收费线**
+	// （都是收费线的 SiteID）→ 用户调裸名想用免费公益通道，却被路由到 aqua/prime **扣了钱**。
+	// 生产实锤：22 个用户、1432 次请求被误扣 ¥18.58。
+	// 修正口径（即原注释本意）：**裸名只要由免费线提供（配置目录或动态目录），一律走免费**——
+	// /v1/models 里它就是以免费模型示人的，绝不能静默扣费；只有免费线没有的裸名才视同统一前缀计费。
+	if !hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" &&
+		a.paidLineForSiteID(req.Model) != nil && !a.freeLineHasModel(req.Model) {
 		unified = true
 		siteID = config.NormalizeModel(req.Model)
 	}
 	// 裸名命中已下架收费模型：410 明确指引，不落免费线（20260919 路由隔离）
 	if !unified && !hasPrefix {
 		if alt, ok := legacyPaidRetired[config.NormalizeModel(req.Model)]; ok {
+			// 410 拒绝落 requests（此前盲区）：此点尚未鉴权，按匿名口径记录
+			a.failRequest0(0, "", req.Model, req.Stream, "model_retired", 410)
 			errOut(w, 410, "model_retired",
 				"模型 "+req.Model+" 已正式下架：旗舰由 "+alt+" 全面代偿（按次计费）；免费体验请使用 acu/"+config.NormalizeModel(req.Model))
 			return
@@ -124,6 +135,19 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
 	}
+	// 密钥有效期（P4）：过期密钥单独错误码，便于下游区分"过期"与"密钥错"
+	if actx.KeyExpired {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "key_expired", 401)
+		errOut(w, 401, "key_expired", "该 API 密钥已过期：请在控制台延长有效期或新建一把密钥")
+		return
+	}
+	// 密钥分发配额（P4）：超限拦截（虚拟额度，不涉及资金扣减；实扣仍在账户余额）
+	keyQ, _ := a.keyQuotaGet(actx.KeyID)
+	if code, msg := keyQuotaCheck(keyQ); code != "" {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, code, 403)
+		errOut(w, 403, code, msg)
+		return
+	}
 	// 秒败风暴断路器：该密钥连续快速上游失败已触发冷却 → 429 拦截（保护上游配额，逼迫客户端退避）
 	if !stormCheck(actx.KeyHash) {
 		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "storm_cooldown", 429)
@@ -142,10 +166,11 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if line != nil && line.Mode == "crowd" {
-		// acu/ 众筹专线：所有分组密钥可调（含纯免费），计费走众筹池（不碰个人余额）
-		// 闸门 = 池子有余额 + 用户当日配额未超；池子归零即熔断，充值即复活
-		if sc, code, msg := a.poolGate(actx.UserID); sc != 0 {
-			errOut(w, sc, code, msg)
+		// acu/ 众筹线（20260921 恢复）：请求前过**池子闸门**（池子有余额 + 用户当日配额未超），
+		// 不预扣个人余额（池子是共享钱包，个人余额不受影响）。
+		if st, code, msg := a.poolGate(actx.UserID); st != 0 {
+			a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, code, st)
+			errOut(w, st, code, msg)
 			return
 		}
 		// 防刷：每用户在途并发上限（失败请求不占配额，无并发闸会让单用户无限打上游）
@@ -180,7 +205,8 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 				errOut(w, 403, "per_call_suspended", "按次计费已并入众筹池：任意密钥可直接调用众筹模型（acu/ 前缀，按次扣站点额度）；按量模型请切换「按量计费」分组（免费模型不受影响）")
 				return
 			}
-			errOut(w, 503, "service_unavailable", "未配置 "+grp+" 计费线，请联系站长")
+			// 20260919：笼统 503"未配置计费线"改为可行动的 404——错分组调模型是客户端侧可修复的
+			errOut(w, 404, "model_not_found", "模型 "+req.Model+" 不在当前计费分组（"+grp+"）的可用范围：按次模型请用「免费 + 收费」分组密钥，按量模型请用「按量计费」分组密钥；可在控制台切换或新建对应分组密钥")
 			return
 		}
 	}
@@ -202,28 +228,46 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	fullID := config.ModelFullName(line.ID, siteID)
 
+	// 软下架（20260923 站长指令）：模型标记维护 → 503 拒绝。
+	// 与"模型不存在"（404）刻意区分：维护是**临时的**，DB 记录/价目/密钥绑定全部保留，
+	// 清标记即恢复——客户端据此提示"稍后再试"而非"换个模型"。
+	// 检查点在预扣与落库之前，故不产生任何计费痕迹。
+	if model.Maintenance {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "model_maintenance", 503)
+		errOut(w, 503, "model_maintenance",
+			"模型 "+req.Model+" 维护中，暂不可用（配置与数据已保留，恢复后即可继续调用）；其他模型不受影响")
+		return
+	}
+
+	// 模型能力口径（20260920）：名义模型与上游真实模型能力对齐。
+	// ① 纯文本模型拒收图片——宁可在网关侧给明确中文错误，也不把 image_url 转给不支持
+	//    视觉的上游（上游原文报错用户看不懂，还会污染错误统计）；
+	// ② 输出上限钳制——名义模型标称上限高于上游真实上限时（如 GLM-5.3-Flash 官方 128K）
+	//    静默钳到真实值，避免"看起来支持 384K"的口径错位。
+	if model.NoVision && hasImageContent(body) {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, req.Stream, "vision_not_supported", 400)
+		errOut(w, 400, "vision_not_supported",
+			"模型 "+req.Model+" 为纯文本模型，不支持图片/视觉输入；如需图像理解请改用支持视觉的模型")
+		return
+	}
+
 	// 上游模型名替换
 	upBody, err := replaceModel(body, model.UpstreamID)
 	if err != nil {
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
 	}
-
-	// 伪流式（20260916 站长指令）：上游非流式链路快且稳（免 300s 流式硬切/首帧前断流），
-	// 客户端要流式时向上游发非流式请求，完整返回后转换为标准 OpenAI SSE 帧序列——
-	// 对客户端完全透明。codex 协议线（RT→AT 转换依赖上游 SSE 事件流）不适用；
-	// settings fake_stream=1 总开关 + fake_stream_models 裸名白名单
-	// （20260917 站长指令：仅 V4 Flash / V4 Pro 上游非流式，其余模型真流式透传）。
-	fake := false
-	includeUsage := false
-	if req.Stream && line.AuthStyle != "codex" && a.fakeStreamFor(req.Model) {
-		fake = true
-		includeUsage = req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		if upBody, err = forceNonStream(upBody); err != nil {
-			errOut(w, 500, "internal_error", "请求处理失败")
-			return
-		}
+	if upBody, err = clampMaxTokens(upBody, model.MaxOutputTokens); err != nil {
+		errOut(w, 500, "internal_error", "请求处理失败")
+		return
 	}
+
+	// 上游透传（20260922 站长指令）：**不做伪流式转换**——客户端请求体原样转发
+	// （保留 stream / stream_options），上游响应直接回传，网关不插帧、不改写。
+	//
+	// 历史复盘：伪流式（上游非流式 → 网关转 SSE）曾用于规避流式硬切、提升计费精度，
+	// 但代价是 kabuai 缓存命中率大幅下降（v4-flash 流式 91.0% → 非流式 0.0%、
+	// v4-pro 93.8% → 78.7%），且会把"首字延迟"卖点变成整段生成时间。现已全线下线。
 
 	// 价格组与生效价目（pricing 键 = 目标线全名，与密钥分组解耦）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, line.Mode)
@@ -235,6 +279,18 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	if pricing == nil {
 		errOut(w, 404, "model_not_found", "该模型已下架或暂不可用")
 		return
+	}
+	// —— 2 号折扣钱包 · 强制模型-钱包划分（20260924 站长指令）——
+	// 判据：该模型是否存在 pricing(model,'wallet2') 价目行。
+	//   命中 → 该模型**只能**用 2 号钱包 + 折扣价（当前 = prime/TokenLinks 国模 8 个）
+	//   未命中 → 主钱包 + 常规分组价（现状完全不变）
+	// 用价目行而非硬编码线 ID：加一行 = 开通一个模型的折扣钱包权限，零代码改动；
+	// 白名单与价格同源，不会出现"配了价但没开权限"或反之。
+	wallet := billing.WalletMain
+	if line.Mode == "per_token" {
+		if w2, e := billing.CurrentPricing(a.DB.DB, fullID, "wallet2"); e == nil && w2 != nil {
+			pricing, wallet, grp = w2, billing.WalletDiscount, "wallet2"
+		}
 	}
 
 	// 请求落库（拿 rowid 供面值回写；resolved_line 记实际线，统计口径）
@@ -250,15 +306,31 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	if line.Mode != "crowd" {
 		prehold = a.preholdAmount(model, pricing, upBody)
 
-		if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
+		if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid, wallet); err != nil {
+			if errors.Is(err, billing.ErrAccountDisabled) {
+				a.failRequest(rid, "account_disabled", 403)
+				errOut(w, 403, "account_disabled", "账户已被禁用，请联系站长处理")
+				return
+			}
 			if errors.Is(err, billing.ErrInsufficientBalance) {
 				a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写，不留 (empty) 盲区
+				if wallet == billing.WalletDiscount {
+					// 折扣钱包**绝不回落主钱包**（站长红线）：静默回落会按原价扣主钱包，
+					// 用户以为还在打折 → 账目争议高发。明确拒绝并指路去充折扣钱包。
+					errOut(w, 429, "insufficient_quota",
+						"折扣钱包余额不足：该模型为折扣钱包专用（按折扣价结算），请到控制台「充值」页为折扣钱包独立充值后重试（两钱包资金独立，不支持互转）")
+					return
+				}
 				errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
 				return
 			}
 			a.failRequest(rid, "prehold_error", 500)
 			errOut(w, 500, "internal_error", "预扣失败")
 			return
+		}
+		// 台账口径：本次实际扣费钱包落库（用量日志/对账据此区分主钱包与折扣钱包）
+		if wallet == billing.WalletDiscount {
+			_, _ = a.DB.Exec("UPDATE requests SET wallet=? WHERE rowid=?", wallet, rid)
 		}
 	}
 
@@ -279,11 +351,10 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
-	if fake {
-		// 伪流式：网关内自管拨号/重拨/转帧/结算（上游非流式），不走下方真流式管道
-		a.serveFakeStreamChat(w, r, ctx, actx.UserID, prehold, rid, client, line, model, start, req, upBody, includeUsage, actx.KeyHash)
-		return
-	}
+	// 密钥配额消耗（P4）：defer 挂在最外层，两条 serve 路径（真流式/非流式）
+	// 各自内部结算完成后统一在此累加配额——无需改动两个 serve 函数的签名。
+	// 内部从 requests 回读实扣金额与计费状态，失败/退款请求不占配额。
+	defer a.keyQuotaSettle(rid, actx.KeyID, keyQ)
 	resp, key, err := client.DoKey(ctx, upBody, req.Stream, "/chat/completions", model.KeyIdx)
 	if err != nil {
 		log.Printf("[chat] 上游失败 model=%s line=%s err=%v", req.Model, line.ID, err)
@@ -295,15 +366,26 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
-		stormFail(actx.KeyHash)
+		// 5xx 状态错误对付费线不计入秒败风暴（上游容量问题，非用户滥用；见 storm.go）
+		if stormCountable(line.Mode, err) {
+			stormFail(actx.KeyHash, stormPaidMode(line.Mode))
+		}
 		a.failRequest(rid, "upstream_error", 502)
 		a.upstreamFailOut(w, line, err)
 		return
 	}
-	defer resp.Body.Close()
+	// defer 绑定闭包而非当次 body：下方探测循环换钥重试会整体替换 resp（含 Body），
+	// 固定 defer 只会关旧 body，重试成功后的新 body 将永不被关闭（连接泄漏）。
+	// 每次换钥前旧 body 已在探测分支内显式 Close，最终响应由本闭包统一关闭。
+	closeBody := func() {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}
+	defer closeBody()
 	stormReset(actx.KeyHash) // 上游拨号成功：清零秒败计数
 	if key != nil {
-		a.setRequestKeyIdx(rid, key.Idx) // codex 账号粒度记账：记实际使用的钥池序（换号后以最终为准）
+		a.setRequestKeyIdx(rid, key.RawIdx) // codex 账号粒度记账：记实际使用的钥原始 idx（换号后以最终为准）
 	}
 	a.recordCodexUsage(line, key, resp) // 官方实时用量头落库（429 满额头也有价值）
 
@@ -329,9 +411,9 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 			if probe == 2 {
 				log.Printf("[chat] 首帧前断流 model=%s line=%s，重试耗尽", req.Model, line.ID)
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
-				stormFail(actx.KeyHash)
-				a.failRequest(rid, "upstream_error", 502)
-				errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+				stormFail(actx.KeyHash, stormPaidMode(line.Mode))
+				a.failRequest(rid, "first_frame_timeout", 502)
+				errOut(w, 502, "first_frame_timeout", "上游已连接但未返回首帧（已自动重试 2 次仍失败），通常为瞬时抖动，请稍后重试")
 				return
 			}
 			log.Printf("[chat] 首帧前断流 model=%s line=%s，换钥重试(%d/2)", req.Model, line.ID, probe+1)
@@ -347,13 +429,15 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
-				stormFail(actx.KeyHash)
+				if stormCountable(line.Mode, err) {
+					stormFail(actx.KeyHash, stormPaidMode(line.Mode))
+				}
 				a.failRequest(rid, "upstream_error", 502)
 				a.upstreamFailOut(w, line, err)
 				return
 			}
 			if key != nil {
-				a.setRequestKeyIdx(rid, key.Idx)
+				a.setRequestKeyIdx(rid, key.RawIdx)
 				a.recordCodexUsage(line, key, resp)
 			}
 			if resp.StatusCode != 200 {
@@ -365,63 +449,19 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start)
+		a.serveStreamChat(w, r, resp, actx.UserID, prehold, rid, client, key, line, model, start, billing.EstPromptTokens(body), grp)
 		return
 	}
-	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model, start)
-}
-
-// ---------------------------------------------------------------------------
-// 伪流式：上游非流式 → 客户端流式（20260916）
-// ---------------------------------------------------------------------------
-
-// fakeStreamOn 全站伪流式总开关（settings 表 fake_stream=1；默认关。codex 协议线代码级排除）
-func (a *App) fakeStreamOn() bool { return a.settingsGet("fake_stream") == "1" }
-
-// fakeStreamFor 模型级伪流式判定（20260917 站长指令：仅 V4 Flash / V4 Pro 上游非流式，
-// 其余模型流式正常透传）。总开关 fake_stream=1 不变；fake_stream_models=逗号分隔裸名白名单，
-// 空 = 全部模型（兼容 20260916 全站行为）。匹配按去线前缀（aqua/ acu/ 等）后的裸名精确比对。
-// ⚠️ 20260917 复盘：kabuai 上游对非流式请求【不命中前缀缓存】——伪流式开启期间
-// v4-flash/v4-pro 的 cached_tokens/prompt 从 83~92% 崩到 0~3%（长上下文用户每轮全量重算，
-// first 恶化到 8.3s+/90s+），已关闭总开关（fake_stream=0）恢复全部真流式透传。
-// 机制保留但再次开启前务必先用 cached_tokens 数据验证该模型在非流式下仍有缓存命中。
-func (a *App) fakeStreamFor(siteModel string) bool {
-	if !a.fakeStreamOn() {
-		return false
-	}
-	list := strings.TrimSpace(a.settingsGet("fake_stream_models"))
-	if list == "" {
-		return true
-	}
-	m := strings.ToLower(strings.TrimSpace(siteModel))
-	if i := strings.IndexByte(m, '/'); i >= 0 {
-		m = m[i+1:]
-	}
-	for _, s := range strings.Split(list, ",") {
-		if s = strings.ToLower(strings.TrimSpace(s)); s != "" && m == s {
-			return true
-		}
-	}
-	return false
-}
-
-// forceNonStream 伪流式前置：请求体 stream 置 false 并剥除 stream_options
-// （部分上游在 stream=false 时携带 stream_options 会拒绝请求）
-func forceNonStream(body []byte) ([]byte, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, err
-	}
-	m["stream"] = []byte("false")
-	delete(m, "stream_options")
-	return json.Marshal(m)
+	a.serveJSONChat(w, resp, actx.UserID, prehold, rid, client, key, line, model, start, billing.EstPromptTokens(body), grp)
 }
 
 // paidLineForSiteID 裸名是否命中非免费线（收费/官方等计费线）的模型：
-// 裸名兼容路由用——裸名撞收费线模型时优先走计费路径，绝不被免费线同名模型截胡
+// 裸名兼容路由用——裸名撞收费线模型时优先走计费路径，绝不被免费线同名模型截胡。
+// 读快照遍历（热重载在 linesMu 写锁内整体替换 slice，直读 a.Cfg.Lines 存在数据竞争）
 func (a *App) paidLineForSiteID(siteID string) *config.Line {
-	for i := range a.Cfg.Lines {
-		l := &a.Cfg.Lines[i]
+	ls := a.linesSnap()
+	for i := range ls {
+		l := &ls[i]
 		if l.Mode == "free" {
 			continue
 		}
@@ -434,267 +474,78 @@ func (a *App) paidLineForSiteID(siteID string) *config.Line {
 	return nil
 }
 
+// freeLineHasModel 该裸名是否由**免费线**提供（配置目录 admin_line_models + 动态目录 nvidia_models 都算）。
+// 用途：裸名路由消歧（20260922）。同时存在于免费与收费目录的模型名（glm-5.3-flash / kimi-k3 /
+// deepseek-v4.1-flash 等）一律按**免费**处理——/v1/models 里它们就是以免费模型示人的，
+// 绝不能静默扣费。含已 retired 的条目：那种情况应返回 410 model_retired 明确告知，
+// 而不是"悄悄按收费线跑一遍再扣钱"。
+func (a *App) freeLineHasModel(name string) bool {
+	if name == "" {
+		return false
+	}
+	ls := a.linesSnap()
+	for i := range ls {
+		l := &ls[i]
+		if l.Mode != "free" {
+			continue
+		}
+		for j := range l.Models {
+			if strings.EqualFold(l.Models[j].SiteID, name) {
+				return true
+			}
+		}
+		if l.Dynamic {
+			var one int
+			if a.DB.QueryRow("SELECT 1 FROM nvidia_models WHERE lower(id)=lower(?) LIMIT 1", name).Scan(&one) == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // upstreamFailOut 上游 Do/DoKey 失败统一转译（报错站点化：客户端只见站点中文错误码）。
 // 全池纯配额耗尽（429 insufficient_quota）→ 503 line_exhausted 业务态（引导切线），
 // 全池纯限流（429 tpm/rpm）→ 429 line_busy 业务态（不当故障处理）；
-// 其余一律 502 upstream_error 通用繁忙文案（上游原文绝不透传）。
+// 故障码细分（20260919：此前 ≥25 种故障共用 upstream_error，客户端/用户无法区分）：
+//   - UPSTREAM_AUTH_DEAD → 502 upstream_auth_dead（GPT 账号池令牌链失效，已判死换号）
+//   - UPSTREAM_STATUS_401/403 → 502 upstream_auth（上游鉴权异常）
+//   - 其余 → 502 upstream_error 通用繁忙（上游原文绝不透传）
 func (a *App) upstreamFailOut(w http.ResponseWriter, line *config.Line, derr error) {
+	if derr != nil && strings.Contains(derr.Error(), "KEY_IDX_UNAVAILABLE") {
+		// 分组隔离线：该模型绑定的专属钥当前不可用（冷却/判死），且无可替代钥
+		// （同线其他钥属于不同上游分组，调本模型必失败）。给出可操作提示而非笼统"线路繁忙"。
+		errOut(w, 503, "model_channel_unavailable",
+			"该模型所属的专属通道当前暂不可用（上游限流或维护中），请稍后重试；其他模型不受影响")
+		return
+	}
 	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_QUOTA_EXHAUSTED") {
 		errOut(w, 503, "line_exhausted", line.Name+"本时段额度已用完，请改用其他模型或稍后再试")
 		return
 	}
-	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_RATE_LIMITED") {
+	if derr != nil && (strings.Contains(derr.Error(), "UPSTREAM_RATE_LIMITED") || strings.Contains(derr.Error(), "UPSTREAM_STATUS_429")) {
+		// 限流（含分组隔离线专属钥限流）：网关已内部重试至预算耗尽才到这里 → 业务态 429
 		errOut(w, 429, "line_busy", line.Name+"当前访问过于火爆，请稍后重试或改用其他模型")
+		return
+	}
+	if derr != nil && strings.Contains(derr.Error(), "UPSTREAM_AUTH_DEAD") {
+		errOut(w, 502, "upstream_auth_dead", line.Name+"可用账号的授权已全部失效（失效账号已自动摘除），等待补充后自动恢复，请稍后再试")
+		return
+	}
+	if derr != nil && (strings.Contains(derr.Error(), "UPSTREAM_STATUS_401") || strings.Contains(derr.Error(), "UPSTREAM_STATUS_403")) {
+		errOut(w, 502, "upstream_auth", "上游鉴权异常，已通知站长处理，请稍后再试")
 		return
 	}
 	errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
 }
 
-// serveFakeStreamChat 伪流式主路径：向上游发非流式请求，完整响应到手后转换为
-// 标准 OpenAI chat.completion.chunk SSE 流回放给客户端（首帧 role → reasoning →
-// content 分片 → tool_calls → finish_reason → [可选 usage 帧] → [DONE]）。
-// 稳定性：拨号失败/畸形响应自动换钥重拨一次（Do 内部已含同钥退避+换钥重试与
-// 渠道级快速失败，此处只兜 200-但-内容畸形的尾部的尾部）；客户端在等待期断开记
-// client_cancel（499），与模型健康无关；计费与真流式同口径（usage actual 优先，
-// 缺失按保底/单价，面值台账照记）。首字（first_ms）= 完整响应到手时刻——伪流式下
-// 用户真实等待时长，如实记录。
-func (a *App) serveFakeStreamChat(w http.ResponseWriter, r *http.Request, ctx context.Context, uid, prehold, rid int64, c *upstream.Client, line *config.Line, m *config.Model, start time.Time, req chatReq, upBody []byte, includeUsage bool, keyHash string) {
-	var raw []byte
-	var key *upstream.KeyState
-	for attempt := 0; ; attempt++ {
-		rp, k, derr := c.DoKey(ctx, upBody, false, "/chat/completions", m.KeyIdx)
-		if derr != nil {
-			log.Printf("[chat] 伪流式上游失败 model=%s line=%s err=%v", req.Model, line.ID, derr)
-			if ctxDone(r.Context()) || errors.Is(derr, context.Canceled) {
-				// 客户端在等待上游响应期间主动断开：与模型健康无关
-				a.settleFor(line, uid, prehold, 0, rid, 0, "client_cancel")
-				a.failRequest(rid, "client_cancel", 499)
-				return
-			}
-			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
-			stormFail(keyHash)
-			a.failRequest(rid, "upstream_error", 502)
-			a.upstreamFailOut(w, line, derr)
-			return
-		}
-		stormReset(keyHash) // 上游拨号成功：清零秒败计数
-		if k != nil {
-			key = k
-			a.setRequestKeyIdx(rid, k.Idx)
-		}
-		if rp.StatusCode != 200 {
-			// 非最终 200（Do 已完成同钥退避/换钥/渠道级快速失败）：错误转译透传
-			eb, _ := io.ReadAll(io.LimitReader(rp.Body, 64<<10))
-			_ = rp.Body.Close()
-			a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_"+fmt.Sprint(rp.StatusCode))
-			a.failRequest(rid, "upstream_status", rp.StatusCode)
-			upstreamErrOut(w, rp.StatusCode, eb)
-			return
-		}
-		rw, rerr := io.ReadAll(io.LimitReader(rp.Body, 32<<20))
-		_ = rp.Body.Close()
-		if rerr == nil && fakeParse(rw) {
-			raw = rw
-			break
-		}
-		// 畸形响应（200 但非合法 JSON / 缺 choices）：换钥重拨一次
-		if attempt == 0 && !ctxDone(r.Context()) {
-			log.Printf("[chat] 伪流式响应畸形 model=%s line=%s，换钥重拨", req.Model, line.ID)
-			c.Pool.Advance()
-			select {
-			case <-ctx.Done():
-			case <-time.After(300 * time.Millisecond):
-			}
-			continue
-		}
-		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_malformed")
-		a.failRequest(rid, "upstream_malformed", 502)
-		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
-		return
-	}
-
-	// —— 解析完整响应 ——
-	var jr struct {
-		ID      string `json:"id"`
-		Created int64  `json:"created"`
-		Model   string `json:"model"`
-		Choices []struct {
-			Message struct {
-				Role             string           `json:"role"`
-				Content          json.RawMessage  `json:"content"`
-				ReasoningContent string           `json:"reasoning_content"`
-				ToolCalls        []map[string]any `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason json.RawMessage `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *usageJSON `json:"usage"`
-	}
-	_ = json.Unmarshal(raw, &jr)
-
-	// —— 计费（与 serveJSONChat 同口径）——
-	u := usageFromJSON(jr.Usage)
-	p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
-	final, face := int64(0), int64(0)
-	src := "estimated"
-	if jr.Usage != nil {
-		src = "actual"
-		if p != nil && p.Mode == "per_call" {
-			final = p.PriceMicro
-		} else {
-			final = billing.MeterTokens(u, p)
-		}
-		face = billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
-	} else if p != nil {
-		if p.Mode == "per_call" {
-			final = p.PriceMicro
-		} else {
-			final = p.FloorMicro
-		}
-	}
-	a.settleFor(line, uid, prehold, final, rid, final, "billed")
-	if face > 0 && key != nil {
-		c.Pool.ReportFace(key, face)
-		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
-	}
-	waitMs := time.Since(start).Milliseconds()
-	a.okRequestGen(rid, u, final, face, src, waitMs, 200, waitMs, waitMs)
-
-	// —— 转换为 SSE 帧序列 ——
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(200)
-	flusher, _ := w.(http.Flusher)
-
-	id := jr.ID
-	if id == "" {
-		id = fmt.Sprintf("chatcmpl-fake-%d", rid)
-	}
-	created := jr.Created
-	if created == 0 {
-		created = time.Now().Unix()
-	}
-	mdl := jr.Model
-	if mdl == "" {
-		mdl = req.Model
-	}
-	chunk := func(delta map[string]any, finish any, usage map[string]any) {
-		frame := map[string]any{
-			"id": id, "object": "chat.completion.chunk", "created": created, "model": mdl,
-			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
-		}
-		if usage != nil {
-			frame["usage"] = usage
-			frame["choices"] = []any{} // OpenAI 口径：usage 终帧 choices 为空数组
-		}
-		b, _ := json.Marshal(frame)
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
-	}
-
-	var msg *struct {
-		Role             string           `json:"role"`
-		Content          json.RawMessage  `json:"content"`
-		ReasoningContent string           `json:"reasoning_content"`
-		ToolCalls        []map[string]any `json:"tool_calls"`
-	}
-	if len(jr.Choices) > 0 {
-		msg = &jr.Choices[0].Message
-	}
-	chunk(map[string]any{"role": "assistant", "content": ""}, nil, nil) // 首帧 role（SDK 兼容基线）
-	if msg != nil {
-		if rc := msg.ReasoningContent; rc != "" {
-			for _, s := range chunkText(rc, 48) {
-				chunk(map[string]any{"reasoning_content": s}, nil, nil)
-			}
-		}
-		if content := fakeContentText(msg.Content); content != "" {
-			for _, s := range chunkText(content, 48) {
-				chunk(map[string]any{"content": s}, nil, nil)
-			}
-		}
-		if len(msg.ToolCalls) > 0 {
-			// 完整 tool_calls 单帧下发（补 index 供客户端按位聚合）
-			for i := range msg.ToolCalls {
-				msg.ToolCalls[i]["index"] = i
-			}
-			chunk(map[string]any{"tool_calls": msg.ToolCalls}, nil, nil)
-		}
-	}
-	finish := any(nil)
-	if len(jr.Choices) > 0 {
-		var fr string
-		if json.Unmarshal(jr.Choices[0].FinishReason, &fr) == nil && fr != "" {
-			finish = fr
-		}
-	}
-	chunk(map[string]any{}, finish, nil)
-	if includeUsage {
-		uf := map[string]any{
-			"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
-			"total_tokens": u.PromptTokens + u.CompletionTokens,
-		}
-		if u.CachedTokens > 0 {
-			uf["prompt_tokens_details"] = map[string]any{"cached_tokens": u.CachedTokens}
-		}
-		chunk(nil, nil, uf)
-	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
-}
-
-// fakeParse 伪流式形状探测：合法 JSON 且带 choices（兼容上游错误体带 error 字段的场景交由上层转译，这里只认 200+choices）
-func fakeParse(raw []byte) bool {
-	var probe struct {
-		Choices []json.RawMessage `json:"choices"`
-	}
-	if json.Unmarshal(raw, &probe) != nil {
-		return false
-	}
-	return len(probe.Choices) > 0
-}
-
-// fakeContentText message.content 归一化为文本（string | null | [{type:text,text}] 数组）
-func fakeContentText(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var parts []struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var b strings.Builder
-		for _, pt := range parts {
-			b.WriteString(pt.Text)
-		}
-		return b.String()
-	}
-	return ""
-}
-
-// chunkText 按 rune 分片（伪流式回放粒度，48 字符/帧——渐进可见且帧数可控）
-func chunkText(s string, n int) []string {
-	rs := []rune(s)
-	if len(rs) <= n {
-		return []string{s}
-	}
-	out := []string{}
-	for i := 0; i < len(rs); i += n {
-		e := i + n
-		if e > len(rs) {
-			e = len(rs)
-		}
-		out = append(out, string(rs[i:e]))
-	}
-	return out
-}
-
-// serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写
-func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
+// serveJSONChat 非流式：读全量 → 校验形状 → 剥层 → 结算 → 回写。
+// inTokens = 客户端请求输入 token（billing.EstPromptTokens，20260923 标准化的统一口径）；
+// 仅在上游未报 usage 时作为保守计费下界（20260919 亏本防线）。
+// grp = 结算用的价格组（20260924 钱包化）：主钱包 → 用户分组价（normal/vip/agent）；
+// 折扣钱包 → "wallet2"。**必须与预扣时同一组**，否则会出现"预扣按折扣价、结算按原价"
+// 的双重口径（实测过：折扣钱包被按官方原价扣，用户多付一倍）。
+func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time, inTokens int64, grp string) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		a.settleFor(line, uid, prehold, 0, rid, 0, "read_error")
@@ -715,38 +566,46 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 		errOut(w, 502, "upstream_error", "上游返回了格式异常的响应，请稍后重试")
 		return
 	}
+	// 200 但 body 携带 error 对象（上游内部错误伪装 200）：此前照常走计费路径，
+	// 用户会为失败请求买单——按 Do 失败同口径全额退款 + 502 业务态（与 malformed
+	// 失败分支同格式；"error": null 视为无错误，不影响正常响应）
+	if len(probe.Error) > 0 && string(probe.Error) != "null" {
+		a.settleFor(line, uid, prehold, 0, rid, 0, "upstream_error")
+		a.failRequest(rid, "upstream_error", 502)
+		errOut(w, 502, "upstream_error", "上游返回了错误响应，请稍后重试")
+		return
+	}
 	u := usageFromJSON(probe.Usage)
 	final := int64(0)
 	face := int64(0)
-	if probe.Usage != nil {
-		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
-		// per_call：不看 usage，收单价；per_token：三段精算
-		if p != nil && p.Mode == "per_call" {
-			final = p.PriceMicro
-		} else {
-			final = billing.MeterTokens(u, p)
-		}
-		face = billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
-	} else {
-		// 无 usage：按保底/单价收
-		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
-		if p != nil {
-			if p.Mode == "per_call" {
-				final = p.PriceMicro
-			} else {
-				final = p.FloorMicro
-			}
-		}
-		face = 0
+	// usage 有效性：必须至少一个维度 >0。上游返回 `"usage":{...全 0...}`（部分渠道在
+	// 极短输出/缓存全命中时报 0）时，走 actual 分支会按 0 token 计费——**漏记**。
+	// 20260919 计费审计：全 0 usage 视同无 usage，落保守估算路径（宁可多记不可少记）。
+	hasUsage := probe.Usage != nil && (probe.Usage.PromptTokens > 0 || probe.Usage.CompletionTokens > 0)
+	p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, grp)
+	switch {
+	case p == nil:
+		final = prehold // 价目缺失（活动价过期无历史行/被删）：服务已交付，fail-closed 绝不免费放行
+	case p.Mode == "per_call":
+		final = p.PriceMicro // 按次：不看 usage，收单价
+	case hasUsage:
+		final = billing.MeterTokens(u, p) // 按量有 usage：三段精算
+	default:
+		// 按量无 usage：按观测内容保守估算（20260919 亏本防线）——
+		// 旧实现落 FloorMicro，上游实际产出的长文本会被按保底少收（实测少记约 5 倍）
+		final = billing.MeterObserved(p, inTokens, jsonContentTokens(raw))
 	}
+	a.warnIfBelowCost(line, p, m, final)
+	// 面值成本统一口径（按次取配置成本 / 按量按 usage 或观测估算）
+	face = faceCostOf(p, m, u, hasUsage, inTokens, jsonContentTokens(raw))
 	// 结算（多退少补）+ 面值台账 + 请求回写
 	a.settleFor(line, uid, prehold, final, rid, final, "billed")
 	if face > 0 && key != nil {
 		c.Pool.ReportFace(key, face)
-		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
+		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.RawIdx, key.InitialMicro, face, rid)
 	}
 	src := "estimated"
-	if probe.Usage != nil {
+	if hasUsage {
 		src = "actual"
 	}
 	a.okRequest(rid, u, final, face, src, time.Since(start).Milliseconds(), 200)
@@ -757,8 +616,12 @@ func (a *App) serveJSONChat(w http.ResponseWriter, resp *http.Response, uid, pre
 	_, _ = w.Write(out)
 }
 
-// serveStreamChat SSE 流式：逐行转发 + 首尾事件计费
-func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time) {
+// serveStreamChat SSE 流式：逐行转发 + 首尾事件计费。
+// inTokens = 客户端请求输入 token（billing.EstPromptTokens，20260923 标准化统一口径）；
+// 仅在上游未报 usage 时作为保守计费下界（20260919 亏本防线）。
+// grp = 结算用的价格组（20260924 钱包化）：主钱包 → 用户分组价；折扣钱包 → "wallet2"。
+// 必须与预扣同一组，否则"预扣折扣价、结算原价"会多扣用户一倍。
+func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, uid, prehold, rid int64, c *upstream.Client, key *upstream.KeyState, line *config.Line, m *config.Model, start time.Time, inTokens int64, grp string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		a.settleFor(line, uid, prehold, 0, rid, 0, "no_flusher")
@@ -778,23 +641,32 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 	settled := false
 	sawDone := false     // 上游是否已发 [DONE]（未发即中断 → 客户端拿到的是截断流）
 	interrupted := false // 上游异常中断（区别于客户端主动断开）
+	truncated := false   // codex 流截断（已发部分内容+length 帧，ErrCodexTruncated 经 pipe 传来）：内容有效，保底计费
+	// outTokens 已转发给客户端的正文 token 数（无 usage 时的保守计费下界，20260919 亏本防线）
+	outTokens := int64(0)
 	settle := func() {
 		if settled {
 			return
 		}
 		settled = true
-		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, billing.UserPriceGrp(a.DB.DB, uid, line.Mode))
-		if u.PromptTokens > 0 || u.CompletionTokens > 0 {
+		p, _ := billing.CurrentPricing(a.DB.DB, line.ID+"/"+m.SiteID, grp)
+		hasUsage := u.PromptTokens > 0 || u.CompletionTokens > 0
+		if hasUsage {
 			if p != nil && p.Mode == "per_call" {
 				// per_call：不看 usage，收单价
 				final = p.PriceMicro
-			} else {
+			} else if p != nil {
 				final = billing.MeterTokens(u, p)
+			} else {
+				// 价目缺失：服务已交付，按预扣额收（fail-closed）
+				final = prehold
 			}
-			faceTotal = billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
+			// 面值成本统一口径（按次取配置成本，修复此前按次恒 0 的漏记）
+			a.warnIfBelowCost(line, p, m, final)
+			faceTotal = faceCostOf(p, m, u, true, inTokens, outTokens)
 			if faceTotal > 0 && key != nil {
 				c.Pool.ReportFace(key, faceTotal)
-				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, faceTotal, rid)
+				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.RawIdx, key.InitialMicro, faceTotal, rid)
 			}
 			a.settleFor(line, uid, prehold, final, rid, final, "billed")
 			a.okRequestGen(rid, u, final, faceTotal, "actual", time.Since(start).Milliseconds(), 200, genMs(firstByte), ttftOf(firstByte, start))
@@ -802,18 +674,28 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 			// 一帧有效内容都没有且上游异常中断：全额退回
 			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
 			a.failRequest(rid, "stream_incomplete", 502)
-		} else if p != nil {
-			// 上游正常收尾但未发 usage：按保底/单价收（与原口径一致，防薅羊毛）
-			if p.Mode == "per_call" {
-				final = p.PriceMicro
+		} else {
+			// 上游正常收尾但未发 usage：按观测字节保守估算（亏本防线）——
+			// 旧实现落 FloorMicro，实测少记约 5 倍；价目缺失时按预扣额收（fail-closed）。
+			// per_call 不受影响（收单价，与 usage 无关）
+			if p != nil {
+				if p.Mode == "per_call" {
+					final = p.PriceMicro
+				} else {
+					final = billing.MeterObserved(p, inTokens, outTokens)
+				}
 			} else {
-				final = p.FloorMicro
+				final = prehold
+			}
+			// 面值成本统一口径：上游确实消耗了（内容已产出），成本必须留痕
+			a.warnIfBelowCost(line, p, m, final)
+			faceTotal = faceCostOf(p, m, u, false, inTokens, outTokens)
+			if faceTotal > 0 && key != nil {
+				c.Pool.ReportFace(key, faceTotal)
+				_ = billing.LineKeyReport(a.DB.DB, line.ID, key.RawIdx, key.InitialMicro, faceTotal, rid)
 			}
 			a.settleFor(line, uid, prehold, final, rid, final, "billed")
 			a.okRequestGen(rid, u, final, faceTotal, "estimated", time.Since(start).Milliseconds(), 200, genMs(firstByte), ttftOf(firstByte, start))
-		} else {
-			a.settleFor(line, uid, prehold, 0, rid, 0, "stream_incomplete")
-			a.failRequest(rid, "stream_incomplete", 502)
 		}
 	}
 	defer settle()
@@ -840,19 +722,41 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				}
 				lineBytes := buf[:i]
 				buf = buf[i+1:]
-				if bytes.Contains(lineBytes, []byte("[DONE]")) {
+				if isSSEDone(lineBytes) {
 					sawDone = true
 				}
 				out := sanitizeStreamLine(lineBytes, &u)
+				outTokens += contentTokens(lineBytes)
 				_, _ = w.Write(out)
 				_, _ = w.Write([]byte("\n"))
 				flusher.Flush()
 			}
+			// 单行超限（上游无换行狂吐/异常）：完整行已转发，残留 buf 无上限增长会
+			// 打爆内存——8MB 封顶，按上游中断收尾（未发 [DONE] 记 interrupted 走失败退款）
+			if len(buf) > 8<<20 {
+				log.Printf("[chat] 流式单行超过 8MB 上限 line=%s model=%s，按中断收尾", line.ID, m.SiteID)
+				if !sawDone && !ctxDone(r.Context()) {
+					interrupted = true
+					errFrame := map[string]any{"error": map[string]any{
+						"message": "上游流式响应中断，内容可能不完整，请重试",
+						"type":    "api_error", "code": "stream_incomplete", "param": nil,
+					}}
+					eb, _ := json.Marshal(errFrame)
+					_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", eb)
+					flusher.Flush()
+				}
+				return
+			}
 		}
 		if err != nil {
+			// codex 流截断（有部分内容）：finish_reason=length 帧已转发、内容有效，
+			// 不按异常中断处理（不补错误帧、结算不退款走保底计费），只补 [DONE] 收尾
+			if errors.Is(err, upstream.ErrCodexTruncated) {
+				truncated = true
+			}
 			// 上游中断且从未发过 [DONE]：补发一帧 OpenAI 错误事件再正常收尾，
 			// 客户端 SDK 才能感知截断（否则表现为静默缺内容）
-			if !sawDone && !ctxDone(r.Context()) {
+			if !sawDone && !truncated && !ctxDone(r.Context()) {
 				interrupted = true
 				errFrame := map[string]any{"error": map[string]any{
 					"message": "上游流式响应中断，内容可能不完整，请重试",
@@ -860,6 +764,10 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 				}}
 				eb, _ := json.Marshal(errFrame)
 				_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", eb)
+				flusher.Flush()
+			}
+			if truncated && !sawDone && !ctxDone(r.Context()) {
+				fmt.Fprint(w, "data: [DONE]\n\n")
 				flusher.Flush()
 			}
 			return
@@ -870,6 +778,83 @@ func (a *App) serveStreamChat(w http.ResponseWriter, r *http.Request, resp *http
 // ctxDone 请求上下文是否已取消（客户端断开/超时：无需再写响应）
 func ctxDone(ctx context.Context) bool {
 	return ctx.Err() != nil
+}
+
+// isSSEDone SSE [DONE] 帧精确判定（与 sanitizeStreamLine 同口径：剥 data: 前缀后
+// TrimSpace 精确比对——Contains 会把正文恰好含 "[DONE]" 字样的内容帧误判为流结束）
+func isSSEDone(line []byte) bool {
+	s := strings.TrimSpace(string(line))
+	if strings.HasPrefix(s, "data:") {
+		s = strings.TrimSpace(s[5:])
+	}
+	return s == "[DONE]"
+}
+
+// jsonContentTokens 统计非流式响应中正文（content / reasoning_content）的 token 数。
+// 用途：上游未报 usage 时的保守计费下界（与 contentTokens 同口径）。
+// 20260923 标准化：返回 token 数（billing.EstTokens，CJK 感知），不再返回字节数。
+func jsonContentTokens(raw []byte) int64 {
+	var jr struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(raw, &jr) != nil {
+		return 0
+	}
+	var sb strings.Builder
+	for i := range jr.Choices {
+		sb.WriteString(jr.Choices[i].Message.Content)
+		sb.WriteString(jr.Choices[i].Message.ReasoningContent)
+	}
+	if sb.Len() == 0 {
+		return 0
+	}
+	return billing.EstTokens(sb.String())
+}
+
+// contentTokens 统计 SSE data 行中**正文增量**（content / reasoning_content）的 token 数。
+// 用途：上游未报 usage 时的保守计费下界（20260919 亏本防线）——只数真正交付给用户的内容，
+// 不数 JSON 骨架/元数据，避免把协议开销当 token 多收。
+// 20260923 标准化：返回 token 数（billing.EstTokens，CJK 感知），不再返回字节数。
+func contentTokens(line []byte) int64 {
+	s := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(s, "data:") {
+		return 0
+	}
+	payload := strings.TrimSpace(s[5:])
+	if payload == "" || payload == "[DONE]" {
+		return 0
+	}
+	var m struct {
+		Choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"delta"`
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(payload), &m) != nil {
+		return 0
+	}
+	var sb strings.Builder
+	for i := range m.Choices {
+		sb.WriteString(m.Choices[i].Delta.Content)
+		sb.WriteString(m.Choices[i].Delta.ReasoningContent)
+		sb.WriteString(m.Choices[i].Message.Content)
+		sb.WriteString(m.Choices[i].Message.ReasoningContent)
+	}
+	if sb.Len() == 0 {
+		return 0
+	}
+	return billing.EstTokens(sb.String())
 }
 
 // sanitizeStreamLine SSE data 行处理：抓 usage（末帧）+ 剥除成本/计费/追踪类字段（信息隔离）
@@ -886,10 +871,14 @@ func sanitizeStreamLine(line []byte, u *billing.Usage) []byte {
 	if json.Unmarshal([]byte(payload), &m) != nil {
 		return line
 	}
-	// usage 抓取（多个帧带 usage 时取最后一个非零值）
+	// usage 抓取（多个帧带 usage 时取最后一个非零值）。
+	// 20260919 计费审计修复：原条件仅认 `prompt_tokens>0`——部分上游（如仅报输出侧的
+	// 实现/中断前的 usage 帧）只给 completion_tokens，原逻辑会**整帧丢弃**该 usage，
+	// 结算退化到 estimated 估算路径。改为任一维度 >0 即采纳（usageFromJSON 内部已做
+	// cached<=prompt 防御），宁可多记不可少记。
 	if ur, ok := m["usage"]; ok && ur != nil && string(ur) != "null" {
 		var uj usageJSON
-		if json.Unmarshal(ur, &uj) == nil && uj.PromptTokens > 0 {
+		if json.Unmarshal(ur, &uj) == nil && (uj.PromptTokens > 0 || uj.CompletionTokens > 0) {
 			*u = usageFromJSON(&uj)
 		}
 	}
@@ -944,6 +933,117 @@ func replaceModel(body []byte, newModel string) ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// hasImageContent 检测 messages 中是否含图片内容块（image_url / input_image / image）。
+// 纯文本模型（no_vision）入参拦截用。
+func hasImageContent(body []byte) bool {
+	var m struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return false
+	}
+	for _, msg := range m.Messages {
+		if len(msg.Content) == 0 {
+			continue
+		}
+		// content 为字符串（纯文本）时 Unmarshal 失败，跳过
+		var parts []struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(msg.Content, &parts); err != nil {
+			continue
+		}
+		for _, p := range parts {
+			switch p.Type {
+			case "image_url", "input_image", "image":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// clampMaxTokens 把请求体 max_tokens / max_completion_tokens 钳到 limit（limit<=0 表示不限）。
+// 用 map[string]json.RawMessage 保真透传（除被钳字段外一字不动）；未超限时原样返回，不做无谓重编码。
+func clampMaxTokens(body []byte, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return body, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, k := range []string{"max_tokens", "max_completion_tokens"} {
+		raw, ok := m[k]
+		if !ok {
+			continue
+		}
+		var v int64
+		if err := json.Unmarshal(raw, &v); err != nil || v <= limit {
+			continue
+		}
+		nb, _ := json.Marshal(limit)
+		m[k] = nb
+		changed = true
+	}
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(m)
+}
+
+// warnIfBelowCost 实收低于成本时的运行期亏本告警（20260919 计费审计）。
+//
+// 与播种/管理台的事前防线互补：这里是**事后兜底**——覆盖管理台直接改 DB、
+// 活动价配置失误、成本率填错等绕过事前校验的场景。只告警不阻断（站长有权定价），
+// 但会把事实写进日志 + 错误中心，让亏本不可能悄悄发生。
+func (a *App) warnIfBelowCost(line *config.Line, p *billing.PricingInfo, m *config.Model, charged int64) {
+	if p == nil || charged <= 0 {
+		return
+	}
+	var cost int64
+	switch {
+	case m.Image:
+		cost = m.PerImageCost // 图片按张：与 mode 无关，先判
+	case p.Mode == "per_call":
+		cost = m.PerCallCost
+	default:
+		return // 按量成本随 token 变化，逐笔比对无意义（由 IsBelowCost 在价目维度校验）
+	}
+	if cost <= 0 {
+		return
+	}
+	// 含 3% 支付通道费：实收 × 0.97 须覆盖成本
+	if charged*97 < cost*100 {
+		log.Printf("[billing] ⚠️ 亏本告警：%s/%s 实收 %d 微元 < 成本 %d 微元（含 3%% 通道费，每笔亏 %d）",
+			line.ID, m.SiteID, charged, cost, cost-charged)
+		a.logError("below_cost", line.ID+"/"+m.SiteID, 0, 0,
+			"charged="+strconv.FormatInt(charged, 10)+" cost="+strconv.FormatInt(cost, 10))
+	}
+}
+
+// faceCostOf 面值成本口径统一（内部成本台账，绝不外泄）。
+//
+// 20260919 计费审计修复（成本漏记 → 利润统计虚高、掩盖真实亏损）：
+//   - **按次（per_call）**：成本 = 配置的单次成本 `m.PerCallCost`。此前统一走 FaceCostMicro
+//     （三段 rate10），而按次模型根本不配 rate10 成本字段 → 恒返回 0。
+//     生产实测：aqua 线 33,754 笔 billed 中 32,763 笔 face_cost_micro=0（97% 漏记），
+//     收入 2.73 亿微元对应的成本只记了 0.85 亿——利润被严重高估。
+//   - 按量（per_token）有 usage：三段 rate10 精算（原口径不变）
+//   - 按量无 usage：按观测字节保守估算（不虚构，宁多勿少）
+func faceCostOf(p *billing.PricingInfo, m *config.Model, u billing.Usage, hasUsage bool, inTokens, outTokens int64) int64 {
+	if p != nil && p.Mode == "per_call" {
+		return m.PerCallCost
+	}
+	if hasUsage {
+		return billing.FaceCostMicro(u, m.InCostRate10, m.CacheCostRate10, m.OutCostRate10)
+	}
+	return billing.FaceCostObserved(m.InCostRate10, m.OutCostRate10, inTokens, outTokens)
+}
+
 // stripSensitive 信息隔离：剥除上游响应中的成本/计费/追踪字段
 func stripSensitive(raw []byte) []byte {
 	var m map[string]json.RawMessage
@@ -969,7 +1069,17 @@ func stripSensitive(raw []byte) []byte {
 
 // preholdAmount 预扣额（one-api/new-api 同款门槛哲学：预扣只做防白嫖门槛，超支由 Settle 补扣兜底）：
 // per_call=单次价；per_token=输入估算+max_tokens×输出价，≥floor。
-// maxOut 未传默认 4096（保持存量体验，实际输出超出部分由结算补扣收回）；上限 100000 对齐 new-api maxTokensLimit 防溢出
+//
+// 20260919 计费审计修复（亏本防线，站长红线：宁可多记不可少记）：
+//  1. 认 `max_completion_tokens`（OpenAI 新标准字段，新版 SDK / o 系列用它替代 max_tokens）——
+//     此前只读 max_tokens，客户端只传该字段时预扣按兜底值算，长输出必超支；
+//  2. 无输出上限时兜底 4096 → **8192**：主流客户端不传上限时输出常超 4096，
+//     超支部分要等 Settle 追扣，若用户余额恰好被扣光即成站方亏损；
+//  3. 兼容 completions 风格 `prompt` 字段（原仅读 messages，缺失时输入估算退化为 16）。
+//  4. 20260923 标准化：输入估算改走 billing.EstPromptTokens（只数正文文本），
+//     不再按 messages 原文 JSON 字节 /4。
+//
+// 上限 100000 对齐 new-api maxTokensLimit 防溢出。
 func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte) int64 {
 	if p == nil {
 		return 1000
@@ -977,16 +1087,23 @@ func (a *App) preholdAmount(m *config.Model, p *billing.PricingInfo, body []byte
 	if p.Mode == "per_call" {
 		return p.PriceMicro
 	}
-	// 输入估算：消息体长度/4 × 1.2 保守余量（与 Rust 版口径一致）
 	var req struct {
-		Messages  json.RawMessage `json:"messages"`
-		MaxTokens int64           `json:"max_tokens"`
+		MaxTokens           int64 `json:"max_tokens"`
+		MaxCompletionTokens int64 `json:"max_completion_tokens"`
 	}
 	_ = json.Unmarshal(body, &req)
-	est := int64(float64(len(req.Messages))/4*1.2) + 16
+	// 输入估算（20260923 标准化）：只统计正文文本 token（billing.EstPromptTokens），
+	// 不再按 messages 原文 JSON 字节 /4 —— 旧口径把 role/content 字段名与引号括号
+	// 都算成了 token，短消息密集的会话虚增数倍（预扣过高会把余额本就够用的用户拦在门外）。
+	// 仍保留 1.2 保守余量：预扣只是防白嫖门槛，实际扣费以 Settle 精算为准。
+	est := billing.EstPromptTokens(body)
+	est = est * 6 / 5
 	maxOut := req.MaxTokens
 	if maxOut <= 0 {
-		maxOut = 4096
+		maxOut = req.MaxCompletionTokens // OpenAI 新标准字段
+	}
+	if maxOut <= 0 {
+		maxOut = 8192
 	}
 	if maxOut > 100000 {
 		maxOut = 100000
@@ -1015,7 +1132,8 @@ func (a *App) insertRequestLine(uid int64, keyHash, endpoint, model string, stre
 	return id
 }
 
-// setRequestKeyIdx 回写实际使用的钥池序（codex 账号粒度用量/利润记账，换号后以最终为准）
+// setRequestKeyIdx 回写实际使用的钥原始 idx（codex 账号粒度用量/利润记账，换号后以最终为准；
+// 与 admin_line_keys.idx 同一 DB 口径，非密钥池内序）
 func (a *App) setRequestKeyIdx(rid int64, idx int) {
 	if rid == 0 || idx < 0 {
 		return

@@ -193,6 +193,9 @@ func (a *App) handleToolTimestampGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// tsCST 东八区：时间戳↔日期互转统一口径（正反向同一时区，结果才可互逆）
+var tsCST = time.FixedZone("UTC+8", 8*3600)
+
 var tsLayouts = []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006/01/02 15:04:05", "2006-01-02"}
 
 // handleToolTimestampPost POST /v1/tools/timestamp
@@ -203,7 +206,7 @@ func (a *App) handleToolTimestampPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, has := v["timestamp"]; has {
 		ts := intOf(v, "timestamp", 0)
-		t := time.Unix(ts, 0).In(time.FixedZone("UTC+8", 8*3600))
+		t := time.Unix(ts, 0).In(tsCST)
 		jsonOut(w, 200, map[string]any{
 			"timestamp":     ts,
 			"datetime_utc8": t.Format("2006-01-02 15:04:05"),
@@ -213,7 +216,7 @@ func (a *App) handleToolTimestampPost(w http.ResponseWriter, r *http.Request) {
 	if _, has := v["datetime"]; has {
 		ds := strOf(v, "datetime")
 		for _, layout := range tsLayouts {
-			if t, err := time.ParseInLocation(layout, ds, time.UTC); err == nil {
+			if t, err := time.ParseInLocation(layout, ds, tsCST); err == nil {
 				jsonOut(w, 200, map[string]any{"datetime": ds, "timestamp": t.Unix()})
 				return
 			}
@@ -641,7 +644,19 @@ func (a *App) handleToolTokenCount(w http.ResponseWriter, r *http.Request) {
 // 开发者工具：短链 / Webhook 收集器
 // ---------------------------------------------------------------------------
 
-const shortLinkBase = "https://aqua.zhuafs.com"
+// siteBase 站点对外基址（短链 / Webhook 展示用）：优先配置 [site] domain，未配置时回落请求 Host。
+// 20260920：此前硬编码 aqua.zhuafs.com——该域已不可达，生成的短链全是死链；且违反
+// 「代码不含运营事实」铁律。改为配置驱动后换域只需改 config-go.toml 的 [site] domain。
+func (a *App) siteBase(r *http.Request) string {
+	host := strings.TrimSpace(a.Cfg.Site.Domain)
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return ""
+	}
+	return "https://" + host
+}
 
 // handleToolShorten POST /v1/tools/shorten
 func (a *App) handleToolShorten(w http.ResponseWriter, r *http.Request) {
@@ -682,7 +697,7 @@ func (a *App) handleToolShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOut(w, 200, map[string]any{
-		"short": shortLinkBase + "/s/" + code,
+		"short": a.siteBase(r) + "/s/" + code,
 		"code":  code, "url": u,
 		"retention": "90 天无访问自动清理",
 	})
@@ -737,8 +752,8 @@ func (a *App) handleToolWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOut(w, 200, map[string]any{
 			"id":    id,
-			"url":   "https://aqua.zhuafs.com/hook/" + id,
-			"usage": fmt.Sprintf("向 https://aqua.zhuafs.com/hook/%s 发送任意方法的请求即被记录，用 action=list 查看（保留 24 小时）", id),
+			"url":   a.siteBase(r) + "/hook/" + id,
+			"usage": fmt.Sprintf("向 %s/hook/%s 发送任意方法的请求即被记录，用 action=list 查看（保留 24 小时）", a.siteBase(r), id),
 		})
 	case "list":
 		id := strings.TrimSpace(strOf(v, "id"))
@@ -822,7 +837,7 @@ func (a *App) handleHookCollect(w http.ResponseWriter, r *http.Request) {
 		hookID, method, path, string(hj), body, ts)
 	jsonOut(w, 200, map[string]any{
 		"ok":   true,
-		"hint": fmt.Sprintf("请求已记录。在 https://aqua.zhuafs.com 工具箱查看，或 POST /v1/tools/web {\"action\":\"list\",\"id\":\"%s\"}", hookID),
+		"hint": fmt.Sprintf("请求已记录。在 %s 工具箱查看，或 POST /v1/tools/web {\"action\":\"list\",\"id\":\"%s\"}", a.siteBase(r), hookID),
 	})
 }
 

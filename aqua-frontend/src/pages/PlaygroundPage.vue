@@ -53,11 +53,10 @@ const options = computed(() => listRows.value.map(r => ({
   label: r.id
     + (r.paid && r.mode === 'per_token' && r.in_price != null && r.per_image == null ? ' · 按量 ¥' + r.in_price + '/百万tok 起' : '')
     + (r.paid && r.per_image != null ? ' · ¥' + (r.per_image / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') + '/张' : '')
-    + (r.paid && r.per_image == null && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') + '/次' : '')
-    + (r.health && typeof r.health.score === 'number' ? ' · ' + r.health.score + '分' : ''),
+    + (r.paid && r.per_image == null && (r.mode !== 'per_token' || r.in_price == null) && r.price_micro ? ' · ¥' + (r.price_micro / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') + '/次' : ''),
 })))
 
-/* 保持原选择；否则默认 auto（智能路由）> deepseek-v4-flash（未到下线时刻）> 健康分最高者 > 第一项 */
+/* 保持原选择；否则默认 auto（智能路由）> deepseek-v4-flash（未到下线时刻）> 第一项 */
 function applySelection() {
   const rows = listRows.value
   if (!rows.length) return
@@ -68,9 +67,7 @@ function applySelection() {
   if (autoIdx !== -1) { selected.value = 'auto'; return }
   const prefer = !dsRetired() ? ids.indexOf('deepseek-v4-flash') : -1
   if (prefer !== -1) { selected.value = 'deepseek-v4-flash'; return }
-  let best = -1, bestScore = -1
-  rows.forEach((r, i) => { const s = r.health?.score ?? -1; if (s > bestScore) { bestScore = s; best = i } })
-  selected.value = rows[best !== -1 ? best : 0].id
+  selected.value = rows[0].id
 }
 watch(listRows, applySelection, { immediate: true })
 

@@ -78,6 +78,17 @@ func newTestApp(t *testing.T) (*App, *httptest.Server, string) {
 	return app, up, tmp
 }
 
+// seedRegCode 预置注册验证码（/v1/user/register 契约 20260919 起强制邮箱验证码，
+// 与 /v1/auth/register 同一口径：先 seedRegCode 再注册）
+func seedRegCode(t *testing.T, app *App, email string) {
+	t.Helper()
+	const testRegCode = "852341"
+	if _, err := app.DB.Exec(`INSERT INTO email_codes (email, purpose, code, fails, expire_ts)
+		VALUES (?, 'register', ?, 0, ?)`, email, testRegCode, time.Now().Add(10*time.Minute).Unix()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func doJSON(t *testing.T, h http.Handler, method, path, token string, body any) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	var rd *bytes.Reader
@@ -103,8 +114,9 @@ func TestFullFlow(t *testing.T) {
 	h := app.Routes()
 
 	// 1. 注册
+	seedRegCode(t, app, "t@t.dev")
 	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
-		"username": "tester", "email": "t@t.dev", "password": "password123"})
+		"username": "tester", "email": "t@t.dev", "password": "password123", "code": "852341"})
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
@@ -196,8 +208,9 @@ func TestStreamFlow(t *testing.T) {
 	app, _, _ := newTestApp(t)
 	h := app.Routes()
 
+	seedRegCode(t, app, "s@t.dev")
 	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
-		"username": "streamer", "email": "s@t.dev", "password": "password123"})
+		"username": "streamer", "email": "s@t.dev", "password": "password123", "code": "852341"})
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
@@ -231,8 +244,9 @@ func TestPerCallBilling(t *testing.T) {
 	app, _, _ := newTestApp(t)
 	h := app.Routes()
 
+	seedRegCode(t, app, "p@t.dev")
 	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
-		"username": "percaller", "email": "p@t.dev", "password": "password123"})
+		"username": "percaller", "email": "p@t.dev", "password": "password123", "code": "852341"})
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
@@ -489,8 +503,9 @@ func TestMyConsoleData(t *testing.T) {
 	app, _, _ := newTestApp(t)
 	h := app.Routes()
 
+	seedRegCode(t, app, "bob@t.dev")
 	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
-		"username": "bob", "email": "bob@t.dev", "password": "password123"})
+		"username": "bob", "email": "bob@t.dev", "password": "password123", "code": "852341"})
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
@@ -811,13 +826,17 @@ func TestUnifiedPrefixGroupRouting(t *testing.T) {
 	app.Cfg.Billing.DefaultGrp = "per_call"
 	h := app.Routes()
 
+	seedRegCode(t, app, "grp@t.dev")
 	rec, out := doJSON(t, h, "POST", "/v1/user/register", "", map[string]string{
-		"username": "grptester", "email": "grp@t.dev", "password": "password123"})
+		"username": "grptester", "email": "grp@t.dev", "password": "password123", "code": "852341"})
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
 	tok := out["token"].(string)
-	if _, err := app.DB.Exec("UPDATE users SET balance_micro=100000 WHERE email='grp@t.dev'"); err != nil {
+	// 余额取 1 元（=1,000,000 微元，真实最小充值量级）：20260919 预扣口径收紧后
+	// （无 max_tokens 时兜底 4096→8192，且认 max_completion_tokens），旧值 100000 已低于
+	// 按量线单次预扣额，会在 Prehold 阶段被拦（与"分组路由"测试意图无关）。
+	if _, err := app.DB.Exec("UPDATE users SET balance_micro=1000000 WHERE email='grp@t.dev'"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -863,7 +882,7 @@ func TestUnifiedPrefixGroupRouting(t *testing.T) {
 	if c := chat(keyCall, "aqua/pc1"); c != 200 {
 		t.Fatalf("按次密钥调 aqua/pc1 应 200，得 %d", c)
 	}
-	if b := balOf(); b != 98000 {
+	if b := balOf(); b != 998000 {
 		t.Fatalf("按次计费应扣单价 2000，余额 %d", b)
 	}
 	// 按次密钥：aqua/m1（仅按量分组提供）→ 404

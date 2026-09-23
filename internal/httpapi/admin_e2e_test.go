@@ -139,7 +139,8 @@ func TestAdminBalanceConfirm(t *testing.T) {
 		return rec
 	}
 	// 注册一个用户（走用户面）→ 拿 uid
-	rec := do("POST", "/v1/user/register", `{"username":"user1","email":"user1@t.cn","password":"pw123456"}`, "")
+	seedRegCode(t, app, "user1@t.cn")
+	rec := do("POST", "/v1/user/register", `{"username":"user1","email":"user1@t.cn","password":"pw123456","code":"852341"}`, "")
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %s", rec.Code, rec.Body.String())
 	}
@@ -259,7 +260,8 @@ func TestAdminLinesUserOps(t *testing.T) {
 	}
 
 	// D. 热重载生效：用户密钥直调 x/xm → 200 扣 3000 + 面值台账回写
-	rec, out = doJSON2("POST", "/v1/user/register", `{"username":"grpu","email":"grpu@t.dev","password":"pw123456"}`, "")
+	seedRegCode(t, app, "grpu@t.dev")
+	rec, out = doJSON2("POST", "/v1/user/register", `{"username":"grpu","email":"grpu@t.dev","password":"pw123456","code":"852341"}`, "")
 	if rec.Code != 200 {
 		t.Fatalf("注册失败: %d %v", rec.Code, out)
 	}
@@ -406,7 +408,8 @@ func TestAdminLinesUserOps(t *testing.T) {
 	if rec.Code != 401 {
 		t.Fatalf("注销后密钥应 401，得 %d", rec.Code)
 	}
-	rec, _ = doJSON2("POST", "/v1/user/register", `{"username":"grpu2","email":"grpu@t.dev","password":"pw123456"}`, "")
+	seedRegCode(t, app, "grpu@t.dev")
+	rec, _ = doJSON2("POST", "/v1/user/register", `{"username":"grpu2","email":"grpu@t.dev","password":"pw123456","code":"852341"}`, "")
 	if rec.Code != 200 {
 		t.Fatalf("原邮箱应可重新注册: %d %s", rec.Code, rec.Body.String())
 	}
@@ -446,7 +449,8 @@ func TestAdminLinesUserOps(t *testing.T) {
 		}
 	}
 	// zerobal 用户（先注册供 degraded 路由测试，充一次调用费扣完恰好归零供 429 测试）
-	rec, out = doJSON2("POST", "/v1/user/register", `{"username":"zerobal","email":"zerobal@t.dev","password":"pw123456"}`, "")
+	seedRegCode(t, app, "zerobal@t.dev")
+	rec, out = doJSON2("POST", "/v1/user/register", `{"username":"zerobal","email":"zerobal@t.dev","password":"pw123456","code":"852341"}`, "")
 	if rec.Code != 200 {
 		t.Fatalf("注册 zerobal 失败: %d %v", rec.Code, out)
 	}
@@ -464,6 +468,52 @@ func TestAdminLinesUserOps(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("degraded 恢复应 200: %d", rec.Code)
 	}
+
+	// J3. maintenance 软下架（20260923 站长指令）：对外隐藏 + 调用 503 + DB 记录全留 + 清标记即恢复。
+	// 与 degraded 的本质区别：degraded 是"仍可用、仅透出降级提示"，maintenance 是真正的临时下架。
+	rec, _ = doJSON2("POST", "/v1/admin/lines/x/models/xm/maintenance", `{"maintenance":true,"confirm_password":"testpw"}`, at)
+	if rec.Code != 200 {
+		t.Fatalf("maintenance 标记应 200: %d %s", rec.Code, rec.Body.String())
+	}
+	// ① 调用被拒 503。注意 zkey 此刻余额为 0：维护检查点在预扣之前，故必须是 503 而非 429
+	rec, _ = doJSON2("POST", "/v1/chat/completions", `{"model":"x/xm","messages":[{"role":"user","content":"hi"}]}`, zkey)
+	if rec.Code != 503 {
+		t.Fatalf("维护中模型应 503（且优先于余额检查）: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "model_maintenance") {
+		t.Fatalf("应返回 model_maintenance 错误码: %s", rec.Body.String())
+	}
+	// ② /v1/models 不再列出（对外隐藏）
+	rec, out = doJSON2("GET", "/v1/models", "", "")
+	for _, d := range out["data"].([]any) {
+		if item, ok := d.(map[string]any); ok && strings.Contains(item["id"].(string), "xm") {
+			t.Fatalf("维护中模型不应出现在 /v1/models: %v", item)
+		}
+	}
+	// ③ DB 记录全留（软下架 ≠ 删除：模型行与价目行都必须在，否则就不是"临时"了）
+	var maintCnt int
+	if err := app.DB.QueryRow("SELECT COUNT(*) FROM admin_line_models WHERE line_id='x' AND site_id='xm'").Scan(&maintCnt); err != nil || maintCnt != 1 {
+		t.Fatalf("软下架不得删除模型行: cnt=%d err=%v", maintCnt, err)
+	}
+	if err := app.DB.QueryRow("SELECT COUNT(*) FROM pricing WHERE model='x/xm'").Scan(&maintCnt); err != nil || maintCnt == 0 {
+		t.Fatalf("软下架不得删除价目行: cnt=%d err=%v", maintCnt, err)
+	}
+	// ④ 清标记即恢复（此处不发起调用：zkey 余额为 0，调用会 429 干扰后续断言）
+	rec, _ = doJSON2("POST", "/v1/admin/lines/x/models/xm/maintenance", `{"maintenance":false,"confirm_password":"testpw"}`, at)
+	if rec.Code != 200 {
+		t.Fatalf("maintenance 恢复应 200: %d", rec.Code)
+	}
+	rec, out = doJSON2("GET", "/v1/models", "", "")
+	backInList := false
+	for _, d := range out["data"].([]any) {
+		if item, ok := d.(map[string]any); ok && strings.Contains(item["id"].(string), "xm") {
+			backInList = true
+		}
+	}
+	if !backInList {
+		t.Fatal("清标记后模型应重新出现在 /v1/models")
+	}
+
 	// Prehold 失败路径回写（D2：余额已归零 → 429 + requests.error=insufficient_quota）
 	rec, _ = doJSON2("POST", "/v1/chat/completions", `{"model":"x/xm","messages":[{"role":"user","content":"hi"}]}`, zkey)
 	if rec.Code != 429 {

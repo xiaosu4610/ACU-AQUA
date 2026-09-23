@@ -49,11 +49,14 @@ func (a *App) Routes() http.Handler {
 	// 公开数据端点
 	mux.HandleFunc("GET /v1/stats", a.handleStats)
 
-	// 众筹池（acu/ 公共算力池）：账本/榜单公开透明，个人明细须登录，官方注入须管理员
+	// 众筹池（acu/ 公共算力池，20260921 站长定稿恢复上线）：
+	// acu/ 由"纯免费"改回"众筹"——池子是公共共享钱包，用户充值/划拨注资，
+	// acu/ 请求按次从池子扣账（pricing 表 acu/ 生效档），个人余额不动。
 	mux.HandleFunc("GET /v1/pool/status", a.handlePoolStatus)
 	mux.HandleFunc("GET /v1/pool/flows", a.handlePoolFlows)
 	mux.HandleFunc("GET /v1/pool/ranks", a.handlePoolRanks)
 	mux.HandleFunc("GET /v1/my/pool/flows", a.handleMyPoolFlows)
+	mux.HandleFunc("POST /v1/my/pool/transfer", a.handleMyPoolTransfer)
 	mux.HandleFunc("POST /v1/admin/pool/seed", a.handleAdminPoolSeed)
 
 	// 竞技场（盲测对决 / 投票 / 排行榜）
@@ -110,6 +113,14 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/my/keys", a.myKeysGet)
 	mux.HandleFunc("POST /v1/my/keys", a.myKeysCreate)
 	mux.HandleFunc("PATCH /v1/my/keys/{id}/group", a.myKeysGroup)
+	mux.HandleFunc("PATCH /v1/my/keys/{id}/quota", a.myKeysQuotaSet) // P4 密钥分发配额
+	// P5 自定义域名与证书（用户侧）
+	mux.HandleFunc("GET /v1/my/domains", a.myDomainsGet)
+	mux.HandleFunc("POST /v1/my/domains", a.myDomainsCreate)
+	mux.HandleFunc("POST /v1/my/domains/{id}/verify", a.myDomainsVerify)
+	mux.HandleFunc("POST /v1/my/domains/{id}/cert/upload", a.myDomainsCertUpload)
+	mux.HandleFunc("POST /v1/my/domains/{id}/cert/issue", a.myDomainsCertIssue)
+	mux.HandleFunc("DELETE /v1/my/domains/{id}", a.myDomainsDelete)
 	mux.HandleFunc("DELETE /v1/my/keys/{id}", a.myKeysDelete)
 	mux.HandleFunc("GET /v1/my/keys/{id}/reveal", a.myKeysReveal)
 	mux.HandleFunc("GET /v1/my/finance", a.myFinance)
@@ -184,6 +195,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/lines/{line}/models", a.handleAdminLineModelUpsert)
 	mux.HandleFunc("DELETE /v1/admin/lines/{line}/models/{site}", a.handleAdminLineModelDelete)
 	mux.HandleFunc("POST /v1/admin/lines/{line}/models/{site}/degraded", a.handleAdminLineModelDegraded)
+	mux.HandleFunc("POST /v1/admin/lines/{line}/models/{site}/maintenance", a.handleAdminLineModelMaintenance)
 	// —— 渠道测试与上游模型拉取（诊断 D5）——
 	mux.HandleFunc("POST /v1/admin/lines/test-all", a.handleAdminLinesTestAll)
 	mux.HandleFunc("POST /v1/admin/lines/{line}/test", a.handleAdminLineTest)
@@ -218,6 +230,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/admin/notify/mail/status", a.handleAdminNotifyMailStatus)
 	mux.HandleFunc("GET /v1/admin/settings", a.handleAdminSettingsGet)
 	mux.HandleFunc("POST /v1/admin/settings", a.handleAdminSettingsSave)
+
+	// P5 自定义域名管理（管理端：全量查看 + 违规停用）
+	mux.HandleFunc("GET /v1/admin/domains", a.adminDomainsGet)
+	mux.HandleFunc("POST /v1/admin/domains/{id}/disable", a.adminDomainDisable)
 
 	// 其余全部反代旧网关（绞杀者迁移残留；纯 Go 单体模式下未注册路径 404）
 	mux.HandleFunc("/", a.handleLegacy)
@@ -301,19 +317,36 @@ func jsonOut(w http.ResponseWriter, code int, v any) {
 // errTypes 标准错误码 → 错误类型（OpenAI 兼容口径：invalid_request_error /
 // authentication_error / rate_limit_error / insufficient_quota / api_error）
 var errTypes = map[string]string{
-	"bad_request":         "invalid_request_error",
-	"model_not_found":     "invalid_request_error",
-	"not_found":           "invalid_request_error",
-	"invalid_api_key":     "authentication_error",
-	"unauthorized":        "authentication_error",
-	"invalid_credentials": "authentication_error",
-	"admin_disabled":      "permission_error",
-	"insufficient_quota":  "insufficient_quota",
-	"rate_limit_exceeded": "rate_limit_error",
-	"internal_error":      "api_error",
-	"upstream_error":      "api_error",
-	"service_unavailable": "api_error",
-	"overloaded_error":    "overloaded_error", // 上游渠道级不可用（OpenAI 官方 type）
+	"bad_request":              "invalid_request_error",
+	"model_not_found":          "invalid_request_error",
+	"model_retired":            "invalid_request_error",
+	"not_found":                "invalid_request_error",
+	"invalid_api_key":          "authentication_error",
+	"unauthorized":             "authentication_error",
+	"invalid_credentials":      "authentication_error",
+	"admin_disabled":           "permission_error",
+	"account_disabled":         "permission_error",
+	"official_grp_scope":       "permission_error",
+	"free_grp_restricted":      "permission_error",
+	"per_call_suspended":       "permission_error",
+	"official_line_restricted": "permission_error",
+	"insufficient_quota":       "insufficient_quota",
+	"rate_limited":             "rate_limit_error",
+	"rate_limit_exceeded":      "rate_limit_error",
+	"line_busy":                "rate_limit_error",
+	"crowd_busy":               "rate_limit_error",
+	"crowd_quota_daily":        "rate_limit_error",
+	"crowd_pool_empty":         "rate_limit_error",
+	"free_rate_limited":        "rate_limit_error",
+	"free_busy":                "rate_limit_error",
+	"storm_cooldown":           "rate_limit_error",
+	"internal_error":           "api_error",
+	"upstream_error":           "api_error",
+	"upstream_auth":            "api_error",
+	"upstream_auth_dead":       "api_error",
+	"upstream_no_response":     "api_error",
+	"service_unavailable":      "api_error",
+	"overloaded_error":         "overloaded_error", // 上游渠道级不可用（OpenAI 官方 type）
 }
 
 // errSink 5xx 错误中心埋点钩子（诊断 D2：App 构造时注入，5xx 统一落 error_events）
@@ -342,14 +375,18 @@ func errOut(w http.ResponseWriter, code int, ecode, msg string) {
 // upstreamErrOut 上游错误转译：上游任何报错 → 站点标准错误码（不透传原文，保护上游信息）
 // body 为上游错误响应体（用于识别"模型已下线/无可用通道"，翻译为 model_not_found）
 func upstreamErrOut(w http.ResponseWriter, upstreamStatus int, body []byte) {
+	if upstream.IsModelUnavailable(body) {
+		// 20260919：模型级不可用（上游该模型在本地分组无渠道）优先于渠道级判断——
+		// 生产实锤 kabuai 返回 "No available channel for model X under group Y"，
+		// 此前 IsChannelExhausted 先命中导致误报 503"渠道暂时没有可用节点"（用户以为等一会就好，
+		// 实际是模型维度不可用，换模型才能恢复）。同时含两者措辞时按模型级处理更可行动。
+		errOut(w, 404, "model_not_found", "该模型当前不可用（上游无可用渠道），请改用其他模型或联系站长")
+		return
+	}
 	if upstream.IsChannelExhausted(body) {
 		// 渠道级不可用是**瞬时故障**（与模型是否下线无关），必须与 404 区分开：
 		// 返回 503 overloaded_error（OpenAI 官方 type），引导客户端稍后重试
 		errOut(w, 503, "overloaded_error", "上游渠道暂时没有可用节点，请稍后重试；持续出现请联系站长")
-		return
-	}
-	if upstream.IsModelUnavailable(body) {
-		errOut(w, 404, "model_not_found", "该模型已下线或上游通道不可用，请联系站长")
 		return
 	}
 	switch {
@@ -400,11 +437,10 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 			if rows.Scan(&model, &calls, &succ, &lat, &ttft) == nil {
 				mm := map[string]any{
 					"model": model, "calls_1h": calls,
-					"success_rate":   round1(succ * 100),
 					"avg_latency_ms": round1(lat),
 				}
 				if ttft > 0 {
-					mm["avg_first_ms"] = round1(ttft) // 首字均延迟（用户感知口径，前端优先展示）
+					mm["avg_first_ms"] = round1(ttft) // 首字均延迟（FRT，用户感知口径，前端优先展示）
 				}
 				models = append(models, mm)
 			}
@@ -459,25 +495,50 @@ func (a *App) statusModelNorm() map[string]string {
 	return m
 }
 
+// statusModelNormFree 免费线模型名规范化映射：免费流量 resolved_line 为空且 model 记裸名，
+// 需按免费线目录还原成 /v1/models 实际下发的 ID——acu 线 Prefixed=true → "acu/xxx"；
+// 公益通道等非前缀免费线 → 保持裸名。与 statusModelNorm（收费线）**必须分开**：
+// 裸名 deepseek-v4-flash 在收费线归 aqua/deepseek-v4-flash、在免费线归 acu/deepseek-v4-flash，
+// 二者靠 requests.resolved_line 是否为空区分，合并会互相串味。
+func (a *App) statusModelNormFree() map[string]string {
+	m := map[string]string{}
+	for _, l := range a.linesSnap() {
+		if l.Mode != "free" {
+			continue
+		}
+		for j := range l.Models {
+			sid := l.Models[j].SiteID
+			if l.Prefixed {
+				m[sid] = l.ID + "/" + sid
+			} else {
+				m[sid] = sid
+			}
+		}
+	}
+	return m
+}
+
 // handleModelsStatus 模型实时状态（公开匿名，最近 200 次请求 + 近 6 小时窗口口径）：
 // 每模型取最近 6 小时内最近 200 条真实请求，聚合请求数/成功率/平均时延/平均输出速度，供模型中心模型卡片内嵌展示。
 // 平均输出速度（tok/s）为流式生成阶段口径（首字之后），并剔除 <3 tok/s 异常样本（短输出/保底估算/非流式总耗时口径）。
-// 只统计收费线流量（resolved_line 非空）：免费分发流量（裸名走免费上游、resolved_line 为空）
-// 的上游故障与收费模型健康无关，不得计入（避免免费上游 NIM 故障污染收费模型状态）。
+// 统计范围：收费线与免费线**都统计**，但按 requests.resolved_line 分流归一化——
+// 非空 = 收费线（统一前缀 aqua/、独立前缀 tlk/、codex/）；为空 = 免费分发（acu 自营 → acu/xxx、
+// 公益通道 → 裸名）。分流是硬要求：裸名 deepseek-v4-flash 在两条线是不同的站内 ID，
+// 合在一起会让免费上游（公益通道 NIM）的抖动污染收费模型状态，反之亦然。
 // 成功率剔除与模型健康无关的失败（仅作用 ok=0 行）：
 // 400/404/422/429/402（调用方参数错/限流/面值耗尽）、413（请求体过大，上游拒绝）、
 // 499/client_cancel（客户端等待期间主动断开）——用户侧问题；
 // compensated_prehold（悬空预扣补偿退款，网关侧流水修补）；
 // stream_incomplete（上游对长生成 300s 硬切：上游侧正常完成计费、内容多数已送达，渠道固有行为
 // 而非模型故障——真正反映健康的是 upstream_error/5xx/网络错）；
-// status_code=200 且 error='' 且 ok=0（在途未结算/进程重启被斩的僵尸行，非真实失败）。
+// status_code=200 且 error=” 且 ok=0（在途未结算/进程重启被斩的僵尸行，非真实失败）。
 // 6h 窗口（rc20）：低频模型的历史失败不再永久拖累状态——窗口外请求自然过期，无近期流量则不出现在列表（前端显示待命中）。
 // 状态判定（rc20 放宽）：样本≥10 时 ≥99.5% 状态极佳 / ≥95% 正常 / ≥85% 部分异常 / 其余故障；
 // 小样本有失败最多判"部分异常"，不下重判。
 // 只输出聚合运行指标，不含成本/渠道/用户信息；模型名统一规范化后合并聚合。
 func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(`
-		SELECT model, COUNT(*), COALESCE(SUM(ok),0),
+		SELECT model, resolved_line, COUNT(*), COALESCE(SUM(ok),0),
 		       COALESCE(SUM(CASE WHEN ok=0 AND (status_code IN (400,404,422,429,402,413,499)
 		           OR error IN ('compensated_prehold','stream_incomplete','client_cancel')
 		           OR (status_code=200 AND error='')) THEN 1 ELSE 0 END),0),
@@ -489,19 +550,20 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(SUM(CASE WHEN ok=1 AND tps>=3 THEN 1 ELSE 0 END),0),
 		       MAX(ts)
 		FROM (
-			SELECT model, ok, latency_ms, tps, ts, status_code, error, first_ms,
-			       ROW_NUMBER() OVER (PARTITION BY model ORDER BY rowid DESC) rn
-			FROM (SELECT rowid, model, ok, latency_ms, tps, ts, status_code, error, first_ms
-		      FROM requests WHERE endpoint IN ('chat','images') AND resolved_line != ''
+			SELECT model, resolved_line, ok, latency_ms, tps, ts, status_code, error, first_ms,
+			       ROW_NUMBER() OVER (PARTITION BY model, resolved_line ORDER BY rowid DESC) rn
+			FROM (SELECT rowid, model, resolved_line, ok, latency_ms, tps, ts, status_code, error, first_ms
+		      FROM requests WHERE endpoint IN ('chat','images')
 		        AND ts > strftime('%s','now') - 21600
 		      ORDER BY rowid DESC LIMIT 50000)
-		) WHERE rn <= 200 GROUP BY model`)
+		) WHERE rn <= 200 GROUP BY model, resolved_line`)
 	if err != nil {
 		errOut(w, 500, "internal_error", "查询失败")
 		return
 	}
 	defer rows.Close()
-	norm := a.statusModelNorm()
+	normPaid := a.statusModelNorm()
+	normFree := a.statusModelNormFree()
 	type stAgg struct {
 		total, okN, userErr, latN, tpsN, lastTs int64
 		latSum, tpsSum                          float64
@@ -510,15 +572,21 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	agg := map[string]*stAgg{}
 	order := []string{}
 	for rows.Next() {
-		var model string
+		var model, rline string
 		var total, okN, userErr, latN, tpsN, lastTs, firstSum, firstN int64
 		var latSum, tpsSum float64
-		if rows.Scan(&model, &total, &okN, &userErr, &latSum, &latN, &firstSum, &firstN, &tpsSum, &tpsN, &lastTs) != nil {
+		if rows.Scan(&model, &rline, &total, &okN, &userErr, &latSum, &latN, &firstSum, &firstN, &tpsSum, &tpsN, &lastTs) != nil {
 			continue
+		}
+		// 归一化按流量归属分流：resolved_line 非空 = 收费线（含 tlk/codex/统一前缀）；
+		// 为空 = 免费分发（acu 自营 / 公益通道），二者同名模型必须落到不同站内 ID
+		norm := normPaid
+		if rline == "" {
+			norm = normFree
 		}
 		name, ok := norm[model]
 		if !ok {
-			continue // 免费线与未知模型不输出
+			continue // 不在目录内的未知模型不输出
 		}
 		g := agg[name]
 		if g == nil {
@@ -542,30 +610,12 @@ func (a *App) handleModelsStatus(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for _, name := range order {
 		g := agg[name]
-		denom := g.total - g.userErr // 分母剔除用户参数类错误
-		rate := 1.0
-		if denom > 0 {
-			rate = float64(g.okN) / float64(denom)
-		}
-		status := "ok"
-		if denom >= 10 {
-			switch {
-			case rate < 0.85:
-				status = "down" // 小样本（<30）不下重判：真实证据不足，最多"部分异常"
-				if denom < 30 {
-					status = "degraded"
-				}
-			case rate < 0.95:
-				status = "degraded"
-			case rate >= 0.995 && denom >= 30:
-				status = "great" // 近期表现近乎完美：状态极佳
-			}
-		} else if rate < 1 {
-			status = "degraded" // 小样本：有失败最多"部分异常"，绝不误判故障
-		}
+		// 20260919 站长定稿：对外只暴露**客观性能数据**（FRT 首字延迟 / TPS 每秒 tokens），
+		// 不再下发健康评级（status）与成功率（ok_rate）——避免主观评分误导选型。
+		// 注意：内部统计（model_health 表）保持不变，auto 智能路由仍按成功率筛候选
+		// （见 free.go autoCandidates 直查 DB，不依赖本响应），此处仅收敛对外字段。
 		it := map[string]any{
-			"model": name, "samples": g.total, "ok": g.okN, "ok_rate": rate,
-			"status": status, "last_ts": g.lastTs, "sample_size": 200,
+			"model": name, "samples": g.total, "last_ts": g.lastTs, "sample_size": 200,
 		}
 		if g.latN > 0 {
 			it["avg_latency_ms"] = int64(math.Round(g.latSum / float64(g.latN)))
@@ -595,13 +645,15 @@ func (a *App) handleModels(w http.ResponseWriter, r *http.Request) {
 // promoBase 促销期"官方原价"折算：原价 = 用户实付价目 ÷ 促销倍率（[site] rate_promo / rate_promo_vip）。
 // 仅当生效价目行是活动价（EndsAt>0）且配置了对应倍率时折算；p 为用户实付行，isVip 选 VIP 倍率。
 // 折算结果与上游官方标价一致（如 qwen3.8-27b 输入 0.60/0.2=¥3.00、VIP 0.39/0.13=¥3.00），供前端划线对照。
+// 20260919 修复：倍率走 siteOverride（settings 表优先，toml 兜底）——此前直读 toml，
+// 后台改倍率只影响 /v1/meta 横幅、不影响划线折算，生产实测曾把 ¥1/M 的 5 折价标成 ¥10/M（放大 10 倍）。
 func (a *App) promoBase(p *billing.PricingInfo, isVip bool) *billing.PricingInfo {
 	if p == nil || p.EndsAt <= 0 {
 		return nil
 	}
-	rs := a.Cfg.Site.RatePromo
+	rs := a.siteOverride("rate_promo", a.Cfg.Site.RatePromo)
 	if isVip {
-		rs = a.Cfg.Site.RatePromoVip
+		rs = a.siteOverride("rate_promo_vip", a.Cfg.Site.RatePromoVip)
 	}
 	rate, err := strconv.ParseFloat(strings.TrimSpace(rs), 64)
 	if err != nil || rate <= 0 || rate >= 1 {
@@ -615,6 +667,34 @@ func (a *App) promoBase(p *billing.PricingInfo, isVip bool) *billing.PricingInfo
 	}
 }
 
+// —— 展示价与实收价分离（20260923 站长指令）——
+
+// chargeRates 常态扣费倍率（线 ID → 倍率）。命中时 /v1/models 额外下发：
+//
+//	charge_rate    实际扣费倍率（前端在卡片右上角展示，如 0.5×）
+//	base_*_price   官方原价（= 实收价 / 倍率，供前端把主价显示为官方原价）
+//
+// 语义：**卡片展示官方原价、实收按倍率打折**——展示价与扣费价刻意不一致。
+// 与 promoBase（限时促销，价目行带到期时间）的区别：本表是长期常态，无到期时间。
+//
+// 20260924 起**清空**：prime（TokenLinks 国模）已恢复官方原价，折扣不再走代码倍率，
+// 改由「2 号钱包」价目组（pricing.grp='wallet2'）承载（见 wallet2 方案）。
+var chargeRates = map[string]float64{}
+
+// externalLineID 外模线 ID：其模型在前端「外模专线」板块单独展示。
+// 仅影响展示分组，不动密钥分组（用户仍是「免费 + 按量计费」）与调用路由。
+const externalLineID = "kiro"
+
+// rateRatio 折扣倍率 = 实收价 / 官方原价（保留 3 位小数，如 0.5）。
+// 用于 2 号折扣钱包模型：倍率由两行价目**算出来**，不再硬编码在 chargeRates。
+// 实收 ≥ 原价或任一侧 ≤0 时返回 0（不展示倍率角标，避免"1×"这类无意义标注）。
+func rateRatio(actual, base int64) float64 {
+	if base <= 0 || actual <= 0 || actual >= base {
+		return 0
+	}
+	return math.Round(float64(actual)/float64(base)*1000) / 1000
+}
+
 // modelListEntries 全量模型条目（/v1/models 与 /v1/models/{id} 共用）
 func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 	data := []map[string]any{{
@@ -623,7 +703,8 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		"description": "智能自动路由：每次请求实时选择当前成功率最高、响应最快的模型，快与稳优先，不保证每次命中同一模型",
 	}}
 
-	health := a.computeHealth()
+	// 20260919 站长定稿：不再下发健康评分（health）——前端只展示 FRT/TPS 客观指标。
+	// 内部 model_health 表与 auto 路由候选筛选保持不变（直查 DB，与此无关）。
 	retired := a.retiredUpstreams()
 	// 纯免费分组密钥：收费模型对其不可见不可调（列表同步隐藏，调用端 403 拦截）
 	freeOnly := actx != nil && actx.KeyGrp == "free"
@@ -633,22 +714,24 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		// 统一前缀模式：全部收费线模型合并为 前缀/site_id，groups 标注可用计费分组
 		// （同 ID 在按次/按量线都存在 → 两条分组都列出；计费方式由密钥分组决定）
 		type grpPrice struct {
-			mode  string
-			m     *config.Model
-			p     *billing.PricingInfo // 用户实付价目（vip/agent 分组价；否则 normal 价）
-			base  *billing.PricingInfo // 原价（normal）——仅 vip/agent 分组价存在时携带，供前端划线对比
-			agent bool                 // 代理拿货价视角（前端渲染「代理拿货价」徽标与注释）
+			mode    string
+			lineID  string // 来源线 ID（20260923：常态倍率与外模分组的判定依据）
+			m       *config.Model
+			p       *billing.PricingInfo // 用户实付价目（vip/agent 分组价；否则 normal 价）
+			base    *billing.PricingInfo // 原价（normal）——仅 vip/agent 分组价存在时携带，供前端划线对比
+			agent   bool                 // 代理拿货价视角（前端渲染「代理拿货价」徽标与注释）
+			wallet2 bool                 // 2 号折扣钱包专用模型（20260924）：实收取 wallet2 价目行
 		}
 		merged := map[string][]grpPrice{}
 		var order []string
 		mergedLines := a.linesSnap()
 		for i := range mergedLines {
 			l := &mergedLines[i]
-			if l.Mode == "free" || l.Mode == "official" || l.Mode == "per_token" || l.Mode == "crowd" || l.AuthStyle == "codex" {
-				// official（tlk 官方中转）/ codex（GPT 账号池）/ per_token（按量专线 tlinks 等）/
-				// crowd（acu 众筹专线）线不参与统一前缀合并：均有专属前缀（线 id 即前缀）单独输出（下方）。
-				// crowd 曾漏排除——其 6 模型与 aqua/ 全重叠且价目同为 per_token，合并出 groups 重复双份
-				// （['per_token','per_token']，20260917 站长报告"未正确展示按量计费"根因之一）
+			// 20260919：per_token 线改为**参与统一前缀合并**（站长要求"按量付费也以 aqua/ 前缀展示"）——
+			// 按量专线模型与按次线同名时合并出 groups=['per_call','per_token']，前端两个分组各取所需；
+			// 仅按量的模型（如官方原版中转）groups=['per_token']，由按量分组密钥调用。
+			// 仍排除：official（tlk 独占）/ crowd（acu 免费，前缀独立）/ codex（GPT 账号池，独立前缀）。
+			if l.Mode == "free" || l.Mode == "official" || l.Mode == "crowd" || l.AuthStyle == "codex" {
 				continue
 			}
 			ugrp := ""
@@ -659,6 +742,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			agent := ugrp == "agent" // 代理拿货价视角（20260919 代理体系）
 			for j := range l.Models {
 				m := &l.Models[j]
+				if m.Maintenance {
+					continue // 软下架（20260923）：维护中模型不对外列出；DB 记录保留，清标记即回归
+				}
 				full := config.ModelFullName(l.ID, m.SiteID)
 				p := a.pricingFor(full, "normal")
 				if p == nil {
@@ -672,7 +758,21 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					if _, ok := merged[m.SiteID]; !ok {
 						order = append(order, m.SiteID)
 					}
-					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, m: m, p: p})
+					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, lineID: l.ID, m: m, p: p})
+					continue
+				}
+				// —— 2 号折扣钱包专用模型（20260924 站长指令）——
+				// 判据与 chat.go 完全同源：存在 pricing(model,'wallet2') 行 = 该模型属折扣钱包专用。
+				// 实收价改取 wallet2 行（当前 = 官方原价 × 0.5），normal 行降级为「划线官方原价」；
+				// 折扣倍率由**价目行对比**算出（不再硬编码 chargeRates），加一行价目即开通一个模型。
+				// vip/agent 分组价对该类模型不适用（折扣钱包不区分分组），故此处直接 continue。
+				if w2 := a.pricingFor(full, "wallet2"); w2 != nil {
+					if _, ok := merged[m.SiteID]; !ok {
+						order = append(order, m.SiteID)
+					}
+					merged[m.SiteID] = append(merged[m.SiteID], grpPrice{
+						mode: w2.Mode, lineID: l.ID, m: m, p: w2, base: p, wallet2: true,
+					})
 					continue
 				}
 				if _, ok := merged[m.SiteID]; !ok {
@@ -681,18 +781,18 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				if agent {
 					// 代理拿货价为主价 + normal 原价划线对比；agent 行缺失回退 normal（不 404）
 					if ap := a.pricingFor(full, "agent"); ap != nil {
-						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: ap.Mode, m: m, p: ap, base: p, agent: true})
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: ap.Mode, lineID: l.ID, m: m, p: ap, base: p, agent: true})
 						continue
 					}
 				}
 				if vip {
 					if vp := a.pricingFor(full, "vip"); vp != nil {
 						// VIP 拿货价为主 + 附原价（normal），前端底部展示对比
-						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: vp.Mode, m: m, p: vp, base: p})
+						merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: vp.Mode, lineID: l.ID, m: m, p: vp, base: p})
 						continue
 					}
 				}
-				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, m: m, p: p})
+				merged[m.SiteID] = append(merged[m.SiteID], grpPrice{mode: p.Mode, lineID: l.ID, m: m, p: p})
 			}
 		}
 		for _, site := range order {
@@ -721,8 +821,31 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				item["in_price"] = float64(pt.p.InRate10) / 10000
 				item["cache_price"] = float64(pt.p.CacheRate10) / 10000
 				item["out_price"] = float64(pt.p.OutRate10) / 10000
-				// 原价对照：促销生效时按倍率折算官方原价（所有用户下发，前端划线展示）；非促销期仅 VIP 附 normal 行
-				if pb := a.promoBase(pt.p, pt.base != nil); pb != nil {
+				// 原价对照三档（优先级从高到低）：
+				// ① 常态扣费倍率（20260923 站长指令）：国模卡片**展示官方原价**、右上角标倍率，
+				//    实收 = 官方价 × 倍率 —— 展示价与扣费价刻意不一致。官方原价由实收价反推
+				//    （base = 实收 / 倍率），无需另存价目；前端据 charge_rate 把主价显示为官方原价。
+				// ② 限时促销：价目行带截止时间 → 按 rate_promo 折算官方原价（所有用户下发，前端划线展示）
+				// ③ VIP：附 normal 行原价供前端底部展示对比
+				if pt.wallet2 && pt.base != nil {
+					// 2 号折扣钱包专用（20260924）：实收 = wallet2 价目行；base_* = normal 官方原价。
+					// 折扣倍率由**两行价目对比**算出（不再硬编码 chargeRates）：加一行 wallet2
+					// 价目即开通一个折扣模型，倍率随价目自动变化。
+					if rate := rateRatio(pt.p.InRate10, pt.base.InRate10); rate > 0 {
+						item["charge_rate"] = rate
+					}
+					item["wallet2_only"] = true
+					item["base_floor_micro"] = pt.base.FloorMicro
+					item["base_in_price"] = float64(pt.base.InRate10) / 10000
+					item["base_cache_price"] = float64(pt.base.CacheRate10) / 10000
+					item["base_out_price"] = float64(pt.base.OutRate10) / 10000
+				} else if rate := chargeRates[pt.lineID]; rate > 0 {
+					div := func(v int64) int64 { return int64(math.Round(float64(v) / rate)) }
+					item["charge_rate"] = rate
+					item["base_in_price"] = float64(div(pt.p.InRate10)) / 10000
+					item["base_cache_price"] = float64(div(pt.p.CacheRate10)) / 10000
+					item["base_out_price"] = float64(div(pt.p.OutRate10)) / 10000
+				} else if pb := a.promoBase(pt.p, pt.base != nil); pb != nil {
 					item["base_floor_micro"] = pb.FloorMicro
 					item["base_in_price"] = float64(pb.InRate10) / 10000
 					item["base_cache_price"] = float64(pb.CacheRate10) / 10000
@@ -744,9 +867,14 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 				}
 				// 描述跟随价格来源：双线同模（按次+按量并存）时 price_micro 取按次价，描述也必须按次，
 				// 避免"按次价 + 按量描述"混搭误导；纯按量模型（pc==nil）在下方回落按量描述
-				item["description"] = pricingDescription(pc.m, pc.p)
+				item["description"] = pricingDescription(pc.m, pc.p, chargeRates[pc.lineID])
 			} else if pt != nil {
-				item["description"] = pricingDescription(pt.m, pt.p)
+				desc := pricingDescription(pt.m, pt.p, chargeRates[pt.lineID])
+				if pt.wallet2 {
+					// 折扣钱包专用：必须点明"要用 2 号钱包余额"，否则用户用主钱包调会直接 429
+					desc += "；需使用「折扣钱包」（2 号钱包）余额调用——两钱包资金独立，不支持互转"
+				}
+				item["description"] = desc
 			}
 			for k := range gs {
 				if gs[k].m.Image {
@@ -793,6 +921,14 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					break
 				}
 			}
+			// 外模专线（20260923 站长指令）：外模（Kiro）模型在前端单独成「外模专线」板块。
+			// 仅影响展示分组——密钥分组（用户仍是「免费 + 按量计费」）与调用路由完全不变。
+			for k := range gs {
+				if gs[k].lineID == externalLineID {
+					item["section"] = "external"
+					break
+				}
+			}
 			data = append(data, item)
 		}
 		// tlk 官方中转线：独立前缀（tlk/xxx）单独输出——官方原价 6 折、仅官方中转分组密钥可调
@@ -804,6 +940,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
 			for j := range l.Models {
 				m := &l.Models[j]
+				if m.Maintenance {
+					continue // 软下架（20260923）：维护中模型不对外列出
+				}
 				full := config.ModelFullName(l.ID, m.SiteID)
 				p := a.pricingFor(full, "normal")
 				if p == nil {
@@ -822,7 +961,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"in_price":    float64(p.InRate10) / 10000,
 					"cache_price": float64(p.CacheRate10) / 10000,
 					"out_price":   float64(p.OutRate10) / 10000,
-					"description": pricingDescription(m, p),
+					"description": pricingDescription(m, p, chargeRates[l.ID]),
 				})
 			}
 		}
@@ -832,52 +971,19 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			if l.AuthStyle != "codex" {
 				continue
 			}
-			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
-			for j := range l.Models {
-				m := &l.Models[j]
-				full := config.ModelFullName(l.ID, m.SiteID)
-				p := a.pricingFor(full, "normal")
-				if p == nil {
-					continue
-				}
-				if vip {
-					if vp := a.pricingFor(full, "vip"); vp != nil {
-						p = vp
-					}
-				}
-				// mode/groups 跟价目行走（线内混挂 image 等按次模型时价目 mode=per_call，
-				// 标线 mode=per_token 会让前端按量卡错误展示 0 价三段——20260917 实测修复）
-				item := map[string]any{
-					"id": full, "object": "model",
-					"created": created, "owned_by": l.ID, "paid": true,
-					"type":   "chat",
-					"groups": []string{p.Mode}, "mode": p.Mode,
-				}
-				if p.Mode == "per_token" {
-					item["in_price"] = float64(p.InRate10) / 10000
-					item["cache_price"] = float64(p.CacheRate10) / 10000
-					item["out_price"] = float64(p.OutRate10) / 10000
-				} else if p.Mode == "per_call" {
-					item["price_micro"] = p.PriceMicro
-				}
-				if m.Image {
-					item["type"] = "image"
-					item["image"] = true
-				}
-				item["description"] = pricingDescription(m, p)
-				data = append(data, item)
-			}
-		}
-		// per_token 按量专线（tlinks 等，codex 已单独处理）：专属前缀（线 id/xxx）单独输出——
-		// 按量三段计价，任意登录密钥可调（线前缀显式直连，不经统一分组路由）
-		for i := range mergedLines {
-			l := &mergedLines[i]
-			if l.Mode != "per_token" || l.AuthStyle == "codex" {
+			// 20260919 自动下线：全部账号余量耗尽（used_pct>=99 或已判死）时，
+			// 整个 codex 段跳过——模型从 /v1/models 消失，前端 section 自动不渲染。
+			// 兜底：查询失败/无账号记录时保守**不隐藏**（避免误下线把可用服务摘掉）。
+			if a.codexExhausted(l.ID) {
+				log.Printf("[codex] line=%s 全部账号余量耗尽，已自动下线其模型（补充余量后自动恢复）", l.ID)
 				continue
 			}
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
 			for j := range l.Models {
 				m := &l.Models[j]
+				if m.Maintenance {
+					continue // 软下架（20260923）：维护中模型不对外列出
+				}
 				full := config.ModelFullName(l.ID, m.SiteID)
 				p := a.pricingFor(full, "normal")
 				if p == nil {
@@ -907,10 +1013,13 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					item["type"] = "image"
 					item["image"] = true
 				}
-				item["description"] = pricingDescription(m, p)
+				item["description"] = pricingDescription(m, p, chargeRates[l.ID])
 				data = append(data, item)
 			}
 		}
+		// per_token 按量专线：20260919 起已并入上方统一前缀合并（aqua/ 前缀），
+		// 此处不再单独输出，避免同一模型双份下发（站长要求"按量也以 aqua/ 前缀展示"）。
+		// 保留 codex 独立段（下方）与 official 段（上方）不变。
 	} else {
 		// 线前缀直连模式（统一路由未启用）：按线逐条输出
 		directLines := a.linesSnap()
@@ -922,6 +1031,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			vip := actx != nil && a.userGrpFor(actx.UserID, l.Mode) == "vip"
 			for j := range l.Models {
 				m := &l.Models[j]
+				if m.Maintenance {
+					continue // 软下架（20260923）：维护中模型不对外列出；DB 记录保留，清标记即回归
+				}
 				full := config.ModelFullName(l.ID, m.SiteID)
 				p := a.pricingFor(full, "normal")
 				if p == nil && vip {
@@ -937,7 +1049,7 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 					"type":        "chat",
 					"mode":        p.Mode,
 					"price_micro": p.PriceMicro,
-					"description": pricingDescription(m, p),
+					"description": pricingDescription(m, p, chargeRates[l.ID]),
 				}
 				if p.Mode == "per_token" {
 					item["in_price"] = float64(p.InRate10) / 10000
@@ -968,8 +1080,15 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		for j := range l.Models {
 			m := &l.Models[j]
 			configured[strings.ToLower(m.SiteID)] = true
-			// 固定目录模型一律列出——retired 仅作用于下方动态目录（Dynamic），
-			// 20260919 线路独立规矩：商汤 404 抖动不得隐藏 acu 自营目录模型
+			// 固定目录模型默认一律列出——retired 只作用于动态目录，
+			// 20260919 线路独立规矩：上游 404 抖动不得隐藏自营目录模型。
+			// 例外（20260922）：**dynamic 免费线**（NVIDIA 公益通道）的"配置目录"同样会被上游
+			// 悄悄下架（模型仍在 admin_line_models，但上游 /chat/completions 恒 404/410）；
+			// 这些条目已由每轮目录探针**实测判死**（404/410 → hits>=2），故与动态目录同口径隐藏。
+			// 生产实锤：deepseek-v4-flash-0731 在配置目录里、上游已无 → 目录列着但调用恒 410。
+			if l.Dynamic && m.UpstreamID != "" && retired[m.UpstreamID] {
+				continue
+			}
 			id := m.SiteID
 			if l.Prefixed {
 				// 专属前缀免费线（官方自营品牌框）：acu/ 形式透出；调用侧 NormalizeModel 剥前缀后仍走免费分发
@@ -979,16 +1098,10 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 			if m.Image {
 				item["type"] = "image" // 特殊计费类型下发（免费文生图等），前端零硬编码
 			}
-			if h, ok := health[m.SiteID]; ok {
-				item["health"] = h
-			}
 			data = append(data, item)
 		}
 		if l.Dynamic {
 			for _, item := range a.dynamicModels(l.ID, configured, retired) {
-				if h, ok := health[item["id"].(string)]; ok {
-					item["health"] = h
-				}
 				data = append(data, item)
 			}
 		}
@@ -1004,6 +1117,9 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 		}
 		for j := range l.Models {
 			m := &l.Models[j]
+			if m.Maintenance {
+				continue // 软下架（20260923）：维护中模型不对外列出（众筹池扣费模型同样适用）
+			}
 			full := config.ModelFullName(l.ID, m.SiteID)
 			p := a.pricingFor(full, "normal")
 			if p == nil {
@@ -1032,18 +1148,29 @@ func (a *App) modelListEntries(actx *auth.Ctx, created int64) []map[string]any {
 	return data
 }
 
-// pricingDescription 收费模型对外计费说明（不含成本/通道/折扣率字样）
-func pricingDescription(m *config.Model, p *billing.PricingInfo) string {
+// pricingDescription 价目描述（下发给客户端的 description；不含成本/通道等内部口径）。
+//
+// displayRate 展示倍率（0 或 ≥1 = 无倍率，按实收价描述）：
+// 20260923 展示价与实收价分离——命中线级常态倍率（chargeRates）时，卡片主价显示的是
+// **官方原价**（实收 ÷ 倍率），描述若仍按实收价写会出现「同一模型两个价」的自相矛盾。
+// 故此处按 displayRate 反推官方原价来写，并显式注明实际结算折扣。
+func pricingDescription(m *config.Model, p *billing.PricingInfo, displayRate float64) string {
+	rate, discount := displayRate, ""
+	if rate > 0 && rate < 1 {
+		discount = fmt.Sprintf("；卡片展示官方原价，实际按官方原价 %s 倍结算", trimPrice(rate))
+	} else {
+		rate = 1
+	}
+	perM := func(v int64) string { return trimPrice(float64(v) / rate / 10000) }
 	if p.Mode == "per_token" {
 		return fmt.Sprintf(
-			"按量计费：输入 %s / 缓存命中 %s / 输出 %s 元每百万 tokens（先付后用：余额充足方可调用，可在请求中调小 max_tokens 降低单次预扣）",
-			trimPrice(float64(p.InRate10)/10000), trimPrice(float64(p.CacheRate10)/10000),
-			trimPrice(float64(p.OutRate10)/10000))
+			"按量计费：输入 %s / 缓存命中 %s / 输出 %s 元每百万 tokens（先付后用：余额充足方可调用，可在请求中调小 max_tokens 降低单次预扣）%s",
+			perM(p.InRate10), perM(p.CacheRate10), perM(p.OutRate10), discount)
 	}
 	if m.Image {
-		return fmt.Sprintf("%s 元/张，按张计费（先付后用，n 参数控制张数）", microToYuanStr(p.PriceMicro))
+		return fmt.Sprintf("%s 元/张，按张计费（先付后用，n 参数控制张数）%s", microToYuanStr(int64(float64(p.PriceMicro)/rate)), discount)
 	}
-	return fmt.Sprintf("预充值按次计费：%s 元/次（先付后用：余额充足方可调用）", microToYuanStr(p.PriceMicro))
+	return fmt.Sprintf("预充值按次计费：%s 元/次（先付后用：余额充足方可调用）%s", microToYuanStr(int64(float64(p.PriceMicro)/rate)), discount)
 }
 
 // trimPrice 价格显示：0.0500 → "0.05"（去尾零）

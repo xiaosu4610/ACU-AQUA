@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"acu-aqua/gateway/internal/billing"
 )
 
 // admin 会话有效期（Rust 口径：2 小时绝对过期 + 30 分钟空闲过期）
@@ -49,15 +51,16 @@ func adminLoginGate(r *http.Request) (string, bool) {
 	now := time.Now().Unix()
 	bruteMu.Lock()
 	defer bruteMu.Unlock()
+	// 先查 IP 锁：锁定中直接拒绝且不消耗全局名额（防被锁 IP 的请求刷爆全局 10/min 池，殃及正常登录）
+	if st, ok := bruteIPs[ip]; ok && now < st.lockUntil {
+		return ip, false
+	}
 	if globWinTs != now/60 {
 		globWinTs = now / 60
 		globWinCnt = 0
 	}
 	globWinCnt++
 	if globWinCnt > 10 {
-		return ip, false
-	}
-	if st, ok := bruteIPs[ip]; ok && now < st.lockUntil {
 		return ip, false
 	}
 	return ip, true
@@ -159,20 +162,30 @@ func adminPasswordOk(input string) bool {
 
 // —— 审计（SHA-256 哈希链）——
 
-// auditAppend 写入审计（哈希链：self = sha256("action|target|detail|ip|ts|prev")）
+// auditAppend 写入审计（哈希链：self = sha256("action|target|detail|ip|ts|prev")）。
+// SELECT prev 与 INSERT 必须同事务：并发写入各自读到同一 prev 会导致哈希链分叉。
 func (a *App) auditAppend(action string, target int64, detail, ip string) {
 	ts := time.Now().Unix()
+	tx, err := a.DB.Begin()
+	if err != nil {
+		log.Printf("[admin] 审计写入失败 action=%s: %v", action, err)
+		return
+	}
 	var prev string
-	if err := a.DB.QueryRow("SELECT self_hash FROM admin_audit ORDER BY id DESC LIMIT 1").Scan(&prev); err != nil || prev == "" {
+	if err := tx.QueryRow("SELECT self_hash FROM admin_audit ORDER BY id DESC LIMIT 1").Scan(&prev); err != nil || prev == "" {
 		prev = "GENESIS"
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%s|%d|%s", action, target, detail, ip, ts, prev)))
 	self := hex.EncodeToString(sum[:])
-	_, err := a.DB.Exec(
+	if _, err := tx.Exec(
 		"INSERT INTO admin_audit (action, target, detail, ip, prev_hash, self_hash, ts) VALUES (?,?,?,?,?,?,?)",
-		action, fmt.Sprintf("%d", target), detail, ip, prev, self, ts)
-	if err != nil {
+		action, fmt.Sprintf("%d", target), detail, ip, prev, self, ts); err != nil {
+		_ = tx.Rollback()
 		log.Printf("[admin] 审计写入失败 action=%s: %v", action, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("[admin] 审计提交失败 action=%s: %v", action, err)
 	}
 }
 
@@ -291,10 +304,24 @@ func (a *App) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminLoginOk(ip)
-	// 单点登录：踢掉全部旧会话
-	_, _ = a.DB.Exec("DELETE FROM admin_sessions")
-	tok, err := createAdminSessionFull(a.DB.DB)
+	// 单点登录：踢掉全部旧会话并原子建新会话（同事务，防并发登录互踢竞态）
+	tx, err := a.DB.Begin()
 	if err != nil {
+		errAdmin(w, 500, "internal_error", "会话创建失败")
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM admin_sessions"); err != nil {
+		_ = tx.Rollback()
+		errAdmin(w, 500, "internal_error", "会话创建失败")
+		return
+	}
+	tok, err := createAdminSessionFull(tx)
+	if err != nil {
+		_ = tx.Rollback()
+		errAdmin(w, 500, "internal_error", "会话创建失败")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		errAdmin(w, 500, "internal_error", "会话创建失败")
 		return
 	}
@@ -316,7 +343,10 @@ func (a *App) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // createAdminSessionFull 建管理员会话（复用 auth 包令牌格式：adm_ + 64hex）
-func createAdminSessionFull(d *sql.DB) (string, error) {
+// d 传 *sql.DB 或 *sql.Tx（单点登录踢旧会话须与新会话同事务）
+func createAdminSessionFull(d interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}) (string, error) {
 	b := make([]byte, 32)
 	if _, err := cryptoRandRead(b); err != nil {
 		return "", err
@@ -361,7 +391,7 @@ func (a *App) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.DB.Query(
-		`SELECT u.id, u.username, u.email, u.balance_micro, u.status, u.created_ts, u.last_login_ts,
+		`SELECT u.id, u.username, u.email, u.balance_micro, u.balance2_micro, u.status, u.created_ts, u.last_login_ts,
 		        u.price_grp_call, u.price_grp_token,
 		        COALESCE((SELECT SUM(amount_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type IN ('topup','prehold') AND f.amount_micro>0),0),
 		        COALESCE((SELECT SUM(unit_price_micro) FROM balance_flows f WHERE f.user_id=u.id AND f.type='billed'),0),
@@ -376,12 +406,12 @@ func (a *App) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, balance, status, created, lastLogin, topup, cost, refund, calls int64
+		var id, balance, balance2, status, created, lastLogin, topup, cost, refund, calls int64
 		var username, email, grpCall, grpToken string
-		if rows.Scan(&id, &username, &email, &balance, &status, &created, &lastLogin, &grpCall, &grpToken, &topup, &cost, &refund, &calls) == nil {
+		if rows.Scan(&id, &username, &email, &balance, &balance2, &status, &created, &lastLogin, &grpCall, &grpToken, &topup, &cost, &refund, &calls) == nil {
 			items = append(items, map[string]any{
 				"id": id, "username": username, "email": email,
-				"balance_micro": balance, "status": status,
+				"balance_micro": balance, "balance2_micro": balance2, "status": status,
 				"created_ts": created, "last_login_ts": lastLogin,
 				"price_grp": "normal", "price_grp_call": grpCall, "price_grp_token": grpToken,
 				"topup_micro": topup, "cost_micro": cost, "refund_micro": refund, "calls": calls,
@@ -407,10 +437,10 @@ func (a *App) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, uidS
 	}
 	const pageSize = 20
 	var username, email, grp, grpCall, grpToken string
-	var balance, status, created, lastLogin int64
+	var balance, balance2, status, created, lastLogin int64
 	err = a.DB.QueryRow(
-		"SELECT username, email, balance_micro, status, created_ts, last_login_ts, price_grp, price_grp_call, price_grp_token FROM users WHERE id=?", uid,
-	).Scan(&username, &email, &balance, &status, &created, &lastLogin, &grp, &grpCall, &grpToken)
+		"SELECT username, email, balance_micro, balance2_micro, status, created_ts, last_login_ts, price_grp, price_grp_call, price_grp_token FROM users WHERE id=?", uid,
+	).Scan(&username, &email, &balance, &balance2, &status, &created, &lastLogin, &grp, &grpCall, &grpToken)
 	if err == sql.ErrNoRows {
 		errAdmin(w, 404, "not_found", "用户不存在")
 		return
@@ -455,7 +485,7 @@ func (a *App) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, uidS
 	jsonOut(w, 200, map[string]any{
 		"user": map[string]any{
 			"id": uid, "username": username, "email": email,
-			"balance_micro": balance, "status": status,
+			"balance_micro": balance, "balance2_micro": balance2, "status": status,
 			"created_ts": created, "last_login_ts": lastLogin,
 			"price_grp": grp, "price_grp_call": grpCall, "price_grp_token": grpToken,
 		},
@@ -482,6 +512,7 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 		AmountMicro     int64  `json:"amount_micro"`
 		Note            string `json:"note"`
 		ConfirmPassword string `json:"confirm_password"`
+		Wallet          int    `json:"wallet"` // 1=主钱包（默认）2=2 号折扣钱包（20260924）
 	}
 	if err := adminBody(r, 8192, &req); err != nil {
 		errAdmin(w, 400, "bad_request", "请求体格式错误")
@@ -490,6 +521,14 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 	ip := clientIP(r)
 	if req.AmountMicro == 0 {
 		errAdmin(w, 400, "bad_request", "金额不能为 0")
+		return
+	}
+	// 钱包白名单：未传（0）按主钱包兜底，兼容旧调用；显式传入只认 1/2
+	if req.Wallet == 0 {
+		req.Wallet = billing.WalletMain
+	}
+	if req.Wallet != billing.WalletMain && req.Wallet != billing.WalletDiscount {
+		errAdmin(w, 400, "bad_request", "wallet 须为 1（主钱包）或 2（折扣钱包）")
 		return
 	}
 	if strings.TrimSpace(req.Note) == "" {
@@ -501,25 +540,31 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 		errAdmin(w, 403, "invalid_credentials", "确认密码错误")
 		return
 	}
-	var before int64
-	if err := a.DB.QueryRow("SELECT balance_micro FROM users WHERE id=?", uid).Scan(&before); err == sql.ErrNoRows {
-		errAdmin(w, 404, "not_found", "用户不存在")
-		return
-	} else if err != nil {
-		errAdmin(w, 500, "internal_error", "查询失败")
-		return
-	}
-	after := before + req.AmountMicro
-	if after < 0 {
-		errAdmin(w, 400, "bad_request", "扣减后余额不能为负")
-		return
-	}
 	tx, err := a.DB.Begin() // 诊断 D1：余额变更与流水必须原子（非事务曾致账实分离风险）
 	if err != nil {
 		errAdmin(w, 500, "internal_error", "事务失败")
 		return
 	}
-	if _, err := tx.Exec("UPDATE users SET balance_micro=? WHERE id=?", after, uid); err != nil {
+	// 当前余额在事务内读取；UPDATE 用相对量（绝对值覆盖会冲掉并发扣费/调账，致丢账）
+	// 20260924：按 req.Wallet 选列（1=主钱包 / 2=折扣钱包），流水同步记 wallet
+	col := billing.WalletColumn(req.Wallet)
+	var before int64
+	if err := tx.QueryRow("SELECT "+col+" FROM users WHERE id=?", uid).Scan(&before); err == sql.ErrNoRows {
+		_ = tx.Rollback()
+		errAdmin(w, 404, "not_found", "用户不存在")
+		return
+	} else if err != nil {
+		_ = tx.Rollback()
+		errAdmin(w, 500, "internal_error", "查询失败")
+		return
+	}
+	after := before + req.AmountMicro
+	if after < 0 {
+		_ = tx.Rollback()
+		errAdmin(w, 400, "bad_request", "扣减后余额不能为负")
+		return
+	}
+	if _, err := tx.Exec("UPDATE users SET "+col+"="+col+"+? WHERE id=?", req.AmountMicro, uid); err != nil {
 		_ = tx.Rollback()
 		errAdmin(w, 500, "internal_error", "更新失败")
 		return
@@ -529,9 +574,9 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 		fType = "deduct"
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO balance_flows (user_id, request_id, type, amount_micro, balance_before_micro, balance_after_micro, unit_price_micro, note, operator, ts)
-		 VALUES (?,0,?,?,?,?,0,?,'admin',?)`,
-		uid, fType, req.AmountMicro, before, after, req.Note, time.Now().Unix()); err != nil {
+		`INSERT INTO balance_flows (user_id, request_id, type, amount_micro, balance_before_micro, balance_after_micro, unit_price_micro, note, operator, ts, wallet)
+		 VALUES (?,0,?,?,?,?,0,?,'admin',?,?)`,
+		uid, fType, req.AmountMicro, before, after, req.Note, time.Now().Unix(), req.Wallet); err != nil {
 		_ = tx.Rollback()
 		errAdmin(w, 500, "internal_error", "流水写入失败")
 		return
@@ -540,8 +585,12 @@ func (a *App) handleAdminUserBalance(w http.ResponseWriter, r *http.Request, uid
 		errAdmin(w, 500, "internal_error", "提交失败")
 		return
 	}
-	a.auditAppend("balance_"+fType, uid, fmt.Sprintf("%s：%+d 微元（%d→%d）", req.Note, req.AmountMicro, before, after), ip)
-	jsonOut(w, 200, map[string]any{"ok": true, "before_micro": before, "after_micro": after})
+	walletName := "主钱包"
+	if req.Wallet == billing.WalletDiscount {
+		walletName = "折扣钱包"
+	}
+	a.auditAppend("balance_"+fType, uid, fmt.Sprintf("%s【%s】：%+d 微元（%d→%d）", req.Note, walletName, req.AmountMicro, before, after), ip)
+	jsonOut(w, 200, map[string]any{"ok": true, "before_micro": before, "after_micro": after, "wallet": req.Wallet})
 }
 
 // —— GET /v1/admin/audit?page ——

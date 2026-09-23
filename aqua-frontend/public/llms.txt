@@ -1,0 +1,47 @@
+# AQUA api
+
+> AQUA api 是「ACU 工程系列」的开源旗舰项目：OpenAI 兼容的多模型聚合 API 网关。公益免费线路（acu/）注册即用、不扣个人余额；收费专线（aqua/）按次或按量计费。任何 OpenAI SDK 把 base_url 改成 https://api.ltzy.top/v1 即可接入，无需专用 SDK。
+
+## 关键事实
+
+- 站点主域：https://acu.ltzy.top
+- API Base URL：https://api.ltzy.top/v1
+- 鉴权方式：请求头 `Authorization: Bearer sk-...`（密钥在站点控制台创建）
+- 协议兼容：OpenAI 协议（请求体、响应体、SSE 帧格式与官方一致）
+- 线路划分：
+  - `acu/` 公益免费线 —— 官方自营直供，注册即用，不扣个人余额
+  - `aqua/` 按次计费 —— 每次调用固定单价，与输入输出长度无关
+  - `aqua/` 按量计费（官方原版中转）—— 输入、缓存命中、输出分别计价，单位元/百万 tokens
+- 计费规则：收费模型先付后用——请求前按上限预扣，完成后按实际用量多退少补；失败或已退款的请求不计费。所有金额以整数微元记账。
+- 流式输出：支持，请求体带 `"stream": true` 即返回标准 SSE
+- 主要端点：`POST /v1/chat/completions`、`GET /v1/models`、`POST /v1/images/generations`、`POST /v1/audio/transcriptions`、`POST /v1/moderations`、`POST /v1/ip_location`、`POST /v1/tools/*`
+- 可用模型系列：DeepSeek（V4 Flash / V4 Pro / V4.1 Flash）、GLM（5.3 / 5.3-Flash / 5.2）、Kimi（K3）、豆包 Seed（2.0-lite / 2.1-turbo / evolving）、GPT（Codex 线）；另有公益免费通道模型。**以模型广场的实时清单为准**。
+- 站点语言：简体中文（zh-CN）
+
+## 文档
+
+- [模型广场](https://acu.ltzy.top/models)：全部可用模型、所属线路、计费方式与实时价格，以及近 1 小时真实首字延迟与吞吐
+- [API 文档](https://acu.ltzy.top/api)：接入步骤、请求示例（curl / Python）、错误码与排查
+- [Markdown 版接口文档](https://acu.ltzy.top/api-docs.md)：便于 AI 助手直接读取的纯文本版本
+- [OpenAPI 规范](https://acu.ltzy.top/openapi.json)：OpenAPI 3.1
+- [服务状态](https://acu.ltzy.top/status)：各线路实时可用性与首字延迟
+
+## 免费工具（19 个，多数无需登录）
+
+- [工具箱首页](https://acu.ltzy.top/tools)：按场景分类的全部工具
+- AI 驱动：[AI 翻译](https://acu.ltzy.top/tools/translate) · [AI 摘要](https://acu.ltzy.top/tools/summary) · [文本润色](https://acu.ltzy.top/tools/polish) · [周报生成](https://acu.ltzy.top/tools/weekly) · [正则解释器](https://acu.ltzy.top/tools/regex) · [文本内容审核](https://acu.ltzy.top/tools/moderation)
+- 开发者：[开发者工具箱](https://acu.ltzy.top/tools/devkit) · [哈希计算](https://acu.ltzy.top/tools/hash) · [密码生成](https://acu.ltzy.top/tools/password) · [颜色转换](https://acu.ltzy.top/tools/color) · [Token 估算](https://acu.ltzy.top/tools/token-count) · [文本统计](https://acu.ltzy.top/tools/textstats)
+- 网络查询：[IP 归属地查询](https://acu.ltzy.top/tools/ip) · [短链生成](https://acu.ltzy.top/tools/shorten) · [Webhook 调试](https://acu.ltzy.top/tools/webhook)
+- 小游戏：[五子棋](https://acu.ltzy.top/tools/gomoku) · [井字棋](https://acu.ltzy.top/tools/tictactoe) · [猜数字 1A2B](https://acu.ltzy.top/tools/guess) · [成语接龙](https://acu.ltzy.top/tools/idiom)
+
+## 体验与社区
+
+- [在线 Playground](https://acu.ltzy.top/playground)：浏览器里直接对话试玩，无需本地环境
+- [模型竞技场](https://acu.ltzy.top/arena)：匿名盲测两个模型并投票
+- [提示词库](https://acu.ltzy.top/prompts)：分场景 Prompt 模板
+- [社区](https://acu.ltzy.top/community)：QQ 群交流与故障反馈
+- [赞助支持](https://acu.ltzy.top/sponsor)：赞助用于覆盖免费线路的算力成本
+
+## 引用说明
+
+本站信息可直接引用，请以本文件与模型广场的实时数据为准。价格、模型上下线与限额可能随时调整，引用具体价格时请注明抓取时间。

@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"acu-aqua/gateway/internal/auth"
@@ -26,6 +28,11 @@ const maxCodeFails = 5
 
 // authLogin POST /v1/auth/login {account, password}（account = 用户名或邮箱）
 func (a *App) authLogin(w http.ResponseWriter, r *http.Request) {
+	// 认证端点此前零限流：登录爆破零成本。接入 per-IP 滑窗（60/min，高频自动封禁）
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	var req struct {
 		Account  string `json:"account"`
 		Password string `json:"password"`
@@ -105,8 +112,19 @@ func (a *App) authForgot(w http.ResponseWriter, r *http.Request) {
 	a.sendCodeFor(w, r, "reset")
 }
 
+// sendCodeCooldown 同邮箱发码冷却（内存版，重启即清；60s 防轰炸/耗尽邮件配额）
+var (
+	sendCodeMu       sync.Mutex
+	sendCodeLastSent = map[string]int64{}
+)
+
 // sendCodeFor 生成并发送验证码（purpose: register | reset）
 func (a *App) sendCodeFor(w http.ResponseWriter, r *http.Request, purpose string) {
+	// 认证端点此前零限流：脚本可无限发码轰炸任意邮箱、耗尽发信配额致全站收不到码
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -115,6 +133,14 @@ func (a *App) sendCodeFor(w http.ResponseWriter, r *http.Request, purpose string
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
+	sendCodeMu.Lock()
+	if last := sendCodeLastSent[email]; time.Now().Unix()-last < 60 {
+		sendCodeMu.Unlock()
+		errOut(w, 429, "rate_limited", "验证码发送过于频繁，请 1 分钟后再试")
+		return
+	}
+	sendCodeLastSent[email] = time.Now().Unix()
+	sendCodeMu.Unlock()
 	var n int
 	_ = a.DB.QueryRow("SELECT COUNT(*) FROM users WHERE email=?", email).Scan(&n)
 	if purpose == "register" && n > 0 {
@@ -136,11 +162,11 @@ func (a *App) sendCodeFor(w http.ResponseWriter, r *http.Request, purpose string
 		`INSERT INTO email_codes (email, purpose, code, fails, expire_ts) VALUES (?,?,?,0,?)
 		 ON CONFLICT(email, purpose) DO UPDATE SET code=excluded.code, fails=0, expire_ts=excluded.expire_ts`,
 		email, purpose, code, now+emailCodeTTL)
-	subject := "AQUA 注册验证码"
-	body := "您的验证码是：" + code + "，10 分钟内有效。如非本人操作请忽略本邮件。"
+	subject := "AQUA api 注册验证码"
+	body := "你正在注册 AQUA api 账号。\n本次验证码：" + code + "（10 分钟内有效，仅需填写一次）。\n\n如果是你本人操作，请回到注册页填写验证码即可完成注册；如果不是你本人操作，请忽略本邮件，你的邮箱不会被执行任何操作。"
 	if purpose == "reset" {
-		subject = "AQUA 密码找回验证码"
-		body = "您正在重置密码，验证码：" + code + "，10 分钟内有效。如非本人操作请立即检查账号安全。"
+		subject = "AQUA api 密码找回验证码"
+		body = "你正在找回 AQUA api 账号密码。\n本次验证码：" + code + "（10 分钟内有效）。\n\n如果是你本人操作，请回到找回密码页填写验证码并尽快设置新密码；如果不是你本人操作，请立即检查账号安全并忽略本邮件。"
 	}
 	// 统一发信入口：微软池主线路（连败→阿里云试探→回池；单封失败阿里云兜底；全灭阿里云接管）
 	channel, sender, err := a.SendAny(email, subject, body)
@@ -284,6 +310,10 @@ func (a *App) authPassword(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"ok": true, "message": "密码已修改，所有会话已注销，请重新登录"})
 }
 
+// profileUsernameRe 与注册口径一致（auth.usernameRe）：3-24 位字母数字下划线中文。
+// 此前改昵称零校验——可改成他人邮箱/500 字符任意串，破坏登录唯一性判定
+var profileUsernameRe = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_]{3,24}$`)
+
 // authProfile POST /v1/auth/profile {username}（改昵称）
 func (a *App) authProfile(w http.ResponseWriter, r *http.Request) {
 	actx := auth.Authenticate(a.DB.DB, r)
@@ -296,6 +326,10 @@ func (a *App) authProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" {
 		errOut(w, 400, "bad_request", "请输入新昵称")
+		return
+	}
+	if !profileUsernameRe.MatchString(req.Username) {
+		errOut(w, 400, "bad_request", "用户名需为 3-24 位中文、字母、数字或下划线")
 		return
 	}
 	var n int
@@ -340,12 +374,17 @@ func (a *App) authAvatar(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
-// genCode 6 位数字验证码
+// genCode 6 位数字验证码（拒绝采样：3 字节 mod 1e6 存在 ~6% 模偏差，低位码更易出现）
 func genCode() string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	n := (uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])) % 1000000
-	return fmt.Sprintf("%06d", n)
+	for {
+		b := make([]byte, 3)
+		_, _ = rand.Read(b)
+		n := uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])
+		if n >= 16000000 { // 16×1e6 为 ≤2^24 的最大整周数，丢弃尾部 777216 个值保持均匀
+			continue
+		}
+		return fmt.Sprintf("%06d", n%1000000)
+	}
 }
 
 // authAvatarUpload POST /v1/my/avatar（PNG/JPG/WebP，2MB，魔数校验，与 Rust 版行为一致）

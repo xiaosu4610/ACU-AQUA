@@ -406,7 +406,7 @@ func (a *App) dynamicLine() *config.Line {
 
 // freeResolve 站点模型 → (线, 上游真实 ID)：配置目录优先，动态目录次之
 func (a *App) freeResolve(siteID string) (*config.Line, string, bool) {
-	if l, m := a.Cfg.FindFreeModel(siteID); l != nil {
+	if l, m := config.FindFreeModel(a.linesSnap(), siteID); l != nil {
 		return l, m.UpstreamID, true
 	}
 	if up, ok := a.dynamicUpstreamID(siteID); ok {
@@ -424,34 +424,53 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 	start := time.Now()
 	retired := a.retiredUpstreams()
 
-	// 指定模型：目录/动态表反查，retired 直接 410（不打上游烧密钥）
+	// 指定模型：目录/动态表反查（auto 由下方候选路由；先解析线供限速闸判定）
+	var line *config.Line
+	var upID string
 	if model != "auto" {
-		line, upID, ok := a.freeResolve(model)
+		var ok bool
+		line, upID, ok = a.freeResolve(model)
 		if !ok {
 			errOut(w, 404, "model_not_found",
 				"模型不存在：目录与动态模型表均未收录，请 GET /v1/models 查看可用模型列表")
 			return
 		}
-		// 官方自营免费体验线（prefixed）用户级限速：RPM + 单并发——体验定位，满速与旗舰走收费线
-		if line.Prefixed && uid > 0 {
-			if !guard.freeAllow(uid) {
-				a.failRequest0(uid, keyHash, model, req.Stream, "free_rate_limited", 429)
-				errOut(w, 429, "free_rate_limited",
-					"免费体验专线限速中（每用户每分钟 10 次、单并发）：请等待在途请求完成或稍后再试；升级 aqua/ 收费模型享受满速不限次")
-				return
-			}
-			rel, ok := guard.freeEnter(uid)
-			if !ok {
-				a.failRequest0(uid, keyHash, model, req.Stream, "free_busy", 429)
-				errOut(w, 429, "free_busy",
-					"免费体验专线单用户同时仅 1 路请求：请等待当前请求完成；升级 aqua/ 收费模型支持多路并发")
-				return
-			}
-			defer rel()
+	}
+	// 官方自营免费体验线（prefixed）限速：宽松闸门（防滥用）+ 低优先级排队（真实降级）。
+	// 20260919 站长指令：闸门放宽（10→30 RPM、1→2 并发），"慢/卡"改由**真实降级**体现——
+	// 免费请求转发前做一次低优先级等待（并发越高等待越久），高峰时自然排在付费请求之后；
+	// 这是真实排队而非人为注入故障，不污染错误统计与模型健康度。
+	if model == "auto" || line.Prefixed {
+		if !guard.freeAllow(uid, clientIP(r)) {
+			a.failRequest0(uid, keyHash, model, req.Stream, "free_rate_limited", 429)
+			errOut(w, 429, "free_rate_limited",
+				"免费通道当前请求过于密集（每用户每分钟上限 30 次）：请稍后重试；aqua/ 按量专线不限次、官方原版直连")
+			return
 		}
+		rel, ok := guard.freeEnter(uid, clientIP(r))
+		if !ok {
+			a.failRequest0(uid, keyHash, model, req.Stream, "free_busy", 429)
+			errOut(w, 429, "free_busy",
+				"免费通道并发已满（每用户同时 2 路）：请等待当前请求完成；aqua/ 按量专线支持更高并发")
+			return
+		}
+		defer rel() // 覆盖流式转发全程，函数返回即释放
+		// 低优先级排队：让免费请求在拥挤时自然排在付费请求之后（真实降级，非人为故障）
+		if d := guard.freePriorityDelay(uid, clientIP(r)); d > 0 {
+			select {
+			case <-time.After(d):
+			case <-r.Context().Done():
+				a.failRequest0(uid, keyHash, model, req.Stream, "client_cancel", 499)
+				return
+			}
+		}
+	}
+	// 指定模型：retired 直接 410（不打上游烧密钥）
+	if model != "auto" {
 		// retired 仅作用于动态目录线（英伟达）；固定目录线（acu 商汤自营等）绝不联动——
 		// 20260919 站长规矩：各线路完全独立，商汤 404 抖动不得隐藏 acu 自营目录模型
 		if line.Dynamic && retired[upID] {
+			a.failRequest0(uid, keyHash, model, req.Stream, "model_retired", 410) // 410 拒绝落 requests（此前盲区）
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
@@ -485,6 +504,7 @@ func (a *App) handleFreeChat(w http.ResponseWriter, r *http.Request, body []byte
 			if line.Dynamic { // 仅动态目录登记 retired；固定目录线不登记（线路独立，20260919）
 				a.markRetired(upID)
 			}
+			a.failRequest0(uid, keyHash, model, req.Stream, "model_retired", 410) // 410 拒绝落 requests（此前盲区）
 			errOut(w, 410, "model_retired",
 				"模型 "+model+" 暂时不可用（上游异常或已下线），通常数小时内自动恢复；GET /v1/models 可查其他可用模型")
 			return
@@ -739,6 +759,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 	var firstByte time.Time // 首帧到达时间：tps 按生成阶段（首字之后）计
 	headersSent := false
 	retried := false
+	sawDone := false // 上游是否已发 [DONE]（精确判定；正常完成依据——usage 缺失不再误判 stream_incomplete）
 	sendHeaders := func() {
 		if headersSent {
 			return
@@ -762,7 +783,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 	for {
 		select {
 		case <-r.Context().Done():
-			a.finishFreeStream(rid, model, u, start, firstByte, true)
+			a.finishFreeStream(rid, model, u, start, firstByte, true, sawDone)
 			return
 		default:
 		}
@@ -772,6 +793,14 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 				firstByte = time.Now()
 			}
 			buf = append(buf, tmp[:n]...)
+			if len(buf) > 8<<20 {
+				// 上游持续发无换行数据：熔断防内存撑爆（恶意/异常上游），与收费线同口径
+				a.recordHealth(model, false, "upstream_error", 0, time.Since(start).Milliseconds())
+				curResp.Body.Close()
+				curCancel()
+				a.finishFreeStream(rid, model, u, start, firstByte, true, sawDone)
+				return
+			}
 			if !headersSent {
 				// 首帧闸门（20260919）：响应头延迟到首个真实内容帧才发——
 				// ①上游秒断（0 字节内容）→ 整体重试一次；②首个 data 帧即错误事件
@@ -790,9 +819,10 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 							sawErr = d
 							return false
 						}
-						if len(bytes.TrimSpace(lineBytes)) > 0 {
-							held = append(held, lineBytes) // 非空非错误行：暂扣，发头后补发
+						if isSSEDone(lineBytes) {
+							sawDone = true
 						}
+						held = append(held, lineBytes) // 非错误行整行暂扣（含空行）：发头后补发
 					}
 				}
 				if !gate() {
@@ -810,6 +840,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 							curResp, curCancel = r2, c2
 							firstByte = time.Time{}
 							buf = buf[:0]
+							sawDone = false // 重试重新计数：旧响应的暂扣行已整体废弃
 							continue
 						}
 					}
@@ -820,6 +851,10 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 				if len(held) > 0 {
 					sendHeaders()
 					for _, hb := range held {
+						if len(bytes.TrimSpace(hb)) == 0 {
+							_, _ = w.Write([]byte("\n")) // 空行=事件边界，原样还原（防相邻事件重放被合并成坏帧）
+							continue
+						}
 						out := sanitizeStreamLine(hb, &u)
 						_, _ = w.Write(out)
 						_, _ = w.Write([]byte("\n"))
@@ -835,6 +870,9 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 					}
 					lineBytes := buf[:i]
 					buf = buf[i+1:]
+					if isSSEDone(lineBytes) {
+						sawDone = true
+					}
 					out := sanitizeStreamLine(lineBytes, &u)
 					_, _ = w.Write(out)
 					_, _ = w.Write([]byte("\n"))
@@ -857,7 +895,7 @@ func (a *App) serveFreeStreamChat(w http.ResponseWriter, r *http.Request, resp *
 				errOut(w, 503, "line_busy", "上游连接刚建立即中断（已自动重试仍失败），请稍后重试")
 				return
 			}
-			a.finishFreeStream(rid, model, u, start, firstByte, r.Context().Err() != nil)
+			a.finishFreeStream(rid, model, u, start, firstByte, r.Context().Err() != nil, sawDone)
 			return
 		}
 	}
@@ -900,13 +938,27 @@ func rateLimitedPayload(payload string) bool {
 }
 
 // finishFreeStream 流结束：健康记录 + usage 落库（免费口径：billed=0）；
-// clientGone=客户端主动断开 → 499 client_cancel（不污染 502 统计，20260919）
-func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time, firstByte time.Time, clientGone bool) {
+// clientGone=客户端主动断开 → 499 client_cancel（不污染 502 统计，20260919）；
+// sawDone=上游已发 [DONE]（精确判定）→ 视为正常完成：recordHealth 成功 + 正常入账
+// （usage 缺失按保底口径 estimated 落库），不再误判 stream_incomplete 502
+func (a *App) finishFreeStream(rid int64, model string, u billing.Usage, start time.Time, firstByte time.Time, clientGone bool, sawDone bool) {
 	lat := time.Since(start).Milliseconds()
-	ok := u.PromptTokens > 0 || u.CompletionTokens > 0
+	// 首字延迟（TTFT）：请求起点 → 首帧到达；无首帧（未产出/客户端提前断开）记 0
+	// ——与收费路径 okRequestGen 的 ttftMs 同口径，保证两条线的"首字"可比
+	ttft := int64(0)
+	if !firstByte.IsZero() {
+		if d := firstByte.Sub(start).Milliseconds(); d > 0 {
+			ttft = d
+		}
+	}
+	ok := sawDone || u.PromptTokens > 0 || u.CompletionTokens > 0
 	a.recordHealth(model, ok, healthResultType(ok, 200), 200, lat)
 	if ok {
-		a.okFreeRequestGen(rid, u, 200, "actual", lat, genMs(firstByte))
+		src := "estimated"
+		if u.PromptTokens > 0 || u.CompletionTokens > 0 {
+			src = "actual"
+		}
+		a.okFreeRequestGen(rid, u, 200, src, lat, genMs(firstByte), ttft)
 	} else if clientGone {
 		a.failRequest(rid, "client_cancel", 499)
 	} else {
@@ -924,11 +976,15 @@ func healthResultType(ok bool, code int) string {
 
 // okFreeRequest 免费模型成功回写（usage 照记，不计费；src=usage 来源口径；tps=输出 tokens/秒）
 func (a *App) okFreeRequest(rid int64, u billing.Usage, statusCode int, src string, latMs int64) {
-	a.okFreeRequestGen(rid, u, statusCode, src, latMs, latMs)
+	// 非流式：无首帧概念，ttft 记 0（与收费路径 okRequest → okRequestGen(..., ttftMs=0) 同口径）
+	a.okFreeRequestGen(rid, u, statusCode, src, latMs, latMs, 0)
 }
 
-// okFreeRequestGen 免费模型成功回写（生成阶段口径）：genMs=生成阶段耗时（≤0 回退总耗时）
-func (a *App) okFreeRequestGen(rid int64, u billing.Usage, statusCode int, src string, latMs int64, genMs int64) {
+// okFreeRequestGen 免费模型成功回写（生成阶段口径）：genMs=生成阶段耗时（≤0 回退总耗时）；
+// ttftMs=首字延迟（请求起点→首帧到达，非流式/无首帧记 0）。
+// 20260921 补：此前只写 tps，**latency_ms / first_ms 恒为 0** → 免费模型在 /v1/models/status
+// 里永远没有首字与总耗时（前端模型卡片只能显示"--"）。补齐后免费模型与收费模型同口径可比。
+func (a *App) okFreeRequestGen(rid int64, u billing.Usage, statusCode int, src string, latMs int64, genMs int64, ttftMs int64) {
 	tpsMs := genMs
 	if tpsMs <= 0 {
 		tpsMs = latMs
@@ -938,6 +994,6 @@ func (a *App) okFreeRequestGen(rid int64, u billing.Usage, statusCode int, src s
 		tps = float64(u.CompletionTokens) * 1000 / float64(tpsMs)
 	}
 	_, _ = a.DB.Exec(
-		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=?, tps=? WHERE rowid=?",
-		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, src, tps, rid)
+		"UPDATE requests SET ok=1, status_code=?, prompt_tokens=?, completion_tokens=?, cached_tokens=?, total_tokens=?, billed=0, bill_amount_micro=0, bill_state='free', usage_source=?, tps=?, latency_ms=?, first_ms=? WHERE rowid=?",
+		statusCode, u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.PromptTokens+u.CompletionTokens, src, tps, latMs, ttftMs, rid)
 }

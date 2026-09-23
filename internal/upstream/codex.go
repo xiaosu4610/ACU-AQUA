@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,16 @@ const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 // codexUserAgent 模拟 Codex CLI UA（chatgpt.com 的 Cloudflare 防护放行该指纹）
 const codexUserAgent = "codex_cli_rs/0.55.0"
+
+// ErrCodexTruncated 上游 SSE 已产出部分内容但未收到 completed（流被截断）：
+// 已转换的内容有效（finish_reason=length 帧已发给客户端），调用方按
+// "部分内容+截断"收尾——不重试上游、不退款，按保底计费（serveStreamChat 判定）
+var ErrCodexTruncated = errors.New("codex stream truncated")
+
+// errCodexRTDead 账号 refresh_token 链已确定性失效（invalid_grant/invalid_client/
+// unauthorized_client/400 请求被拒）：该账号永远不会再成功，必须判死换号，
+// 绝不能按瞬态错误原地重试（20260919 生产 15 连轮询→502 的根因之一）
+var errCodexRTDead = errors.New("codex RT 链已失效")
 
 // codexTok 一个账号的令牌态
 type codexTok struct {
@@ -132,18 +143,48 @@ func refreshCodexToken(ctx context.Context, hc *http.Client, rt string) (*codexT
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// error 字段双形态容错（20260919 生产根因修复）：OAuth 标准返回 string
+	//（"invalid_grant"），但部分网关/代理返回对象 {"error":{"message","code"}}——
+	// 按 string 解析对象直接 unmarshal 报错，真实错误被"刷新响应解析失败"掩埋，
+	// 导致死账号被当作瞬态故障 15 连轮询。RawMessage 兼容两种形态并提取错误码。
 	var out struct {
-		AccessToken      string `json:"access_token"`
-		RefreshToken     string `json:"refresh_token"`
-		ExpiresIn        int64  `json:"expires_in"`
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
+		AccessToken      string          `json:"access_token"`
+		RefreshToken     string          `json:"refresh_token"`
+		ExpiresIn        int64           `json:"expires_in"`
+		Error            json.RawMessage `json:"error"`
+		ErrorDescription string          `json:"error_description"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("刷新响应解析失败: %w", err)
+		return nil, fmt.Errorf("刷新响应解析失败(状态%d): %w", resp.StatusCode, err)
 	}
-	if out.Error != "" || resp.StatusCode != 200 {
-		return nil, fmt.Errorf("RT 刷新失败(%d): %s %s", resp.StatusCode, out.Error, out.ErrorDescription)
+	errCode := ""
+	if len(out.Error) > 0 && string(out.Error) != "null" {
+		var es string
+		if json.Unmarshal(out.Error, &es) == nil {
+			errCode = es
+		} else {
+			var eo struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			}
+			if json.Unmarshal(out.Error, &eo) == nil {
+				if eo.Code != "" {
+					errCode = eo.Code
+				} else {
+					errCode = eo.Message
+				}
+			} else {
+				errCode = string(out.Error)
+			}
+		}
+	}
+	if errCode != "" || resp.StatusCode != 200 {
+		err := fmt.Errorf("RT 刷新失败(%d): %s %s", resp.StatusCode, errCode, out.ErrorDescription)
+		// 确定性失效分型：令牌链已死（换号是唯一解），与其余瞬态失败（网络/5xx）严格区分
+		if errCode == "invalid_grant" || errCode == "invalid_client" || errCode == "unauthorized_client" || resp.StatusCode == 400 {
+			return nil, fmt.Errorf("%w: %v", errCodexRTDead, err)
+		}
+		return nil, err
 	}
 	expSec := out.ExpiresIn
 	if expSec <= 0 {
@@ -159,6 +200,10 @@ func refreshCodexToken(ctx context.Context, hc *http.Client, rt string) (*codexT
 // getAT 取账号 access_token：内存缓存 → 持久化新 RT（仅同链轮换）→ 原始 RT，逐级回退。
 // 缓存/持久化 RT 均携带令牌链锚点（origin = 取号时的 DB RT）：管理台换钥（k.Key 变化）后
 // 旧链缓存即刻作废，绝不再用旧账号的 AT/RT 冒充新钥——否则新账号零用量、旧账号持续被调。
+// 并发刷新互斥：RT 一次性轮换，同账号并发过期各刷一次必有一个 invalid_grant → 503。
+// 进程级锁 + 拿锁后 double-check（已被并发请求刷新则直接复用新 AT）。
+var codexRefreshMu sync.Mutex
+
 func (c *Client) getAT(ctx context.Context, k *KeyState) (string, error) {
 	cacheKey := fmt.Sprintf("%s/%d", c.Line.ID, k.Idx)
 	if v, ok := codexToks.Load(cacheKey); ok {
@@ -167,6 +212,15 @@ func (c *Client) getAT(ctx context.Context, k *KeyState) (string, error) {
 			return t.at, nil
 		}
 		codexToks.Delete(cacheKey) // 钥已更换（管理台换号）或已过期：作废
+	}
+	codexRefreshMu.Lock()
+	defer codexRefreshMu.Unlock()
+	// double-check：并发请求可能已抢先完成刷新（RT 已轮换，再刷旧 RT 必失败）
+	if v, ok := codexToks.Load(cacheKey); ok {
+		t := v.(*codexTok)
+		if t.origin == k.Key && time.Now().Before(t.exp) {
+			return t.at, nil
+		}
 	}
 	saved, savedOrigin := codexLoadSavedRT(c.Line.ID, k.Idx)
 	if saved != "" && saved != k.Key && (savedOrigin == k.Key || savedOrigin == "") {
@@ -279,6 +333,9 @@ func chatToResponses(body []byte) ([]byte, error) {
 	if in.Temperature != nil {
 		out["temperature"] = *in.Temperature
 	}
+	if len(in.Stop) > 0 && string(in.Stop) != "null" {
+		out["stop"] = in.Stop // 停止序列透传（string 或 string[]，原样保真）
+	}
 	return json.Marshal(out)
 }
 
@@ -351,10 +408,14 @@ func (s *sseLineScanner) next() bool {
 	}
 	s.line = bytes.TrimRight(line, "\r\n")
 	s.data = nil
-	if bytes.HasPrefix(s.line, []byte("data: ")) {
-		s.data = bytes.TrimSpace(bytes.TrimPrefix(s.line, []byte("data: ")))
-	} else if bytes.Equal(bytes.TrimSpace(s.line), []byte("data:[DONE]")) {
-		s.data = []byte("[DONE]")
+	if bytes.HasPrefix(s.line, []byte("data:")) {
+		// 前缀后兼容有无空格两种写法（"data: {...}" / "data:{...}"，部分上游不发空格）
+		payload := bytes.TrimLeft(bytes.TrimPrefix(s.line, []byte("data:")), " \t")
+		if bytes.Equal(bytes.TrimSpace(payload), []byte("[DONE]")) {
+			s.data = []byte("[DONE]")
+		} else {
+			s.data = bytes.TrimSpace(payload)
+		}
 	}
 	if err != nil {
 		s.done = true // EOF 前最后一行也返回
@@ -466,9 +527,11 @@ func codexPipeStream(r io.Reader, w io.Writer) (string, *codexUsage, error) {
 		}})
 		return finish(fmt.Errorf("codex_stream_incomplete"))
 	}
-	// 已有部分内容但没收到 completed：补 finish 帧 + [DONE]
-	emit(codexChatChunk(respID, model, "", "", "stop", usage))
-	return finish(nil)
+	// 已有部分内容但没收到 completed：不伪装成功——finish_reason 用 "length"（OpenAI
+	// 标准截断语义）照常补帧收尾，但返回截断哨兵错误（经 pipe 传给 serveStreamChat：
+	// 不重试、不退款，按保底计费）。[DONE] 由调用方补发
+	emit(codexChatChunk(respID, model, "", "", "length", usage))
+	return finish(ErrCodexTruncated)
 }
 
 // codexAggregate 非流式：直接解析上游 Responses SSE，聚合为 chat.completion JSON
@@ -532,6 +595,10 @@ func (c *Client) codexSend(ctx context.Context, k *KeyState, body []byte, stream
 	at, err := c.getAT(ctx, k)
 	if err != nil {
 		log.Printf("[codex] line=%s key=%d 取 AT 失败: %v", c.Line.ID, k.Idx, err)
+		if errors.Is(err, errCodexRTDead) {
+			// 确定性失效：标记 codex_auth_dead，上层 Do 识别后立即判死换号（绝不原地重试）
+			return codexFakeResp(503, `{"error":{"message":"codex 账号令牌已失效","type":"upstream_error","code":"codex_auth_dead"}}`), nil
+		}
 		return codexFakeResp(503, `{"error":{"message":"codex 账号令牌刷新失败，请稍后重试","type":"upstream_error","code":"codex_auth"}}`), nil
 	}
 	upBody, err := chatToResponses(body)

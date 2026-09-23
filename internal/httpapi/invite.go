@@ -69,17 +69,24 @@ func (a *App) inviteCodeOf(uid int64) (string, error) {
 	if err != sql.ErrNoRows {
 		return "", err
 	}
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	// 碰撞重试：code 是 PRIMARY KEY，INSERT OR IGNORE 撞码会静默吞错并返回
+	// 属于他人的码——必须检查 RowsAffected，撞码重新生成（2^32 空间，5 次内必成）
+	for i := 0; i < 5; i++ {
+		b := make([]byte, 4)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		code = strings.ToUpper(hex.EncodeToString(b))
+		res, err := a.DB.Exec("INSERT OR IGNORE INTO invite_codes (code, user_id, created_ts) VALUES (?,?,?)",
+			code, uid, time.Now().Unix())
+		if err != nil {
+			return "", err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			return code, nil
+		}
 	}
-	code = strings.ToUpper(hex.EncodeToString(b))
-	_, err = a.DB.Exec("INSERT OR IGNORE INTO invite_codes (code, user_id, created_ts) VALUES (?,?,?)",
-		code, uid, time.Now().Unix())
-	if err != nil {
-		return "", err
-	}
-	return code, nil
+	return "", fmt.Errorf("invite code collision exceeded retries")
 }
 
 // inviteBind 注册后绑定关系（静默失败：不阻断注册）
@@ -108,9 +115,10 @@ func (a *App) inviteBind(uid int64, code, ip string) {
 // ———————— 用户 API ————————
 
 // handleInviteMe GET /v1/invite/me：我的邀请码/链接/统计/明细
+// 仅登录会话可见：sk- 密钥（Via=key）此前可读全部被邀请人 email+username（PII 泄露面）
 func (a *App) handleInviteMe(w http.ResponseWriter, r *http.Request) {
 	actx := auth.Authenticate(a.DB.DB, r)
-	if actx == nil || actx.UserID == 0 {
+	if actx == nil || actx.Via != "session" || actx.UserID == 0 {
 		errOut(w, 401, "unauthorized", "请先登录")
 		return
 	}
@@ -167,19 +175,28 @@ func (a *App) handleInviteRotate(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "unauthorized", "请先登录")
 		return
 	}
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		errOut(w, 500, "internal_error", "生成失败")
-		return
+	// 碰撞重试：code PRIMARY KEY 冲突（撞他人码）时报错而非 500——重新生成再试
+	for i := 0; i < 5; i++ {
+		b := make([]byte, 4)
+		if _, err := rand.Read(b); err != nil {
+			errOut(w, 500, "internal_error", "生成失败")
+			return
+		}
+		code := strings.ToUpper(hex.EncodeToString(b))
+		// upsert：用户可能从未打开过邀请页（无码记录），纯 UPDATE 会 0 行假成功
+		res, err := a.DB.Exec(`INSERT INTO invite_codes (code, user_id, created_ts) VALUES (?,?,?)
+			ON CONFLICT(user_id) DO UPDATE SET code=excluded.code`, code, actx.UserID, time.Now().Unix())
+		if err == nil {
+			jsonOut(w, 200, map[string]any{"ok": true, "code": code})
+			return
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "unique") && !strings.Contains(strings.ToLower(err.Error()), "constraint") {
+			errAdmin(w, 500, "internal_error", "重置失败")
+			return
+		}
+		_ = res
 	}
-	code := strings.ToUpper(hex.EncodeToString(b))
-	// upsert：用户可能从未打开过邀请页（无码记录），纯 UPDATE 会 0 行假成功
-	if _, err := a.DB.Exec(`INSERT INTO invite_codes (code, user_id, created_ts) VALUES (?,?,?)
-		ON CONFLICT(user_id) DO UPDATE SET code=excluded.code`, code, actx.UserID, time.Now().Unix()); err != nil {
-		errAdmin(w, 500, "internal_error", "重置失败")
-		return
-	}
-	jsonOut(w, 200, map[string]any{"ok": true, "code": code})
+	errAdmin(w, 500, "internal_error", "重置失败，请稍后重试")
 }
 
 // ———————— 首充钩子（epaySettle balance 分支成功后调用） ————————
@@ -204,27 +221,39 @@ func (a *App) inviteOnFirstPay(uid, amountMicro int64) {
 	}
 	now := time.Now().Unix()
 	bonus := amountMicro * invBonusPct / 100
+	// 先原子认领资格（WHERE reward_ts=0 + RowsAffected）：并发回调重放只有一个能
+	// 认领成功，杜绝双发；发放失败则回滚认领，下一笔达标金额可重试
+	res, err := a.DB.Exec("UPDATE invite_relations SET first_pay_ts=?, reward_ts=? WHERE id=? AND reward_ts=0", now, now, relID)
+	if err != nil {
+		log.Printf("[invite] 首充认领失败 uid=%d: %v", uid, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return // 已被并发请求认领
+	}
 	// 邀请奖 ¥2 → 邀请人
-	if err := a.inviteCredit(inviter, invRewardMicro, "invite_reward",
+	if err := a.inviteCredit(inviter, 0, invRewardMicro, "invite_reward",
 		fmt.Sprintf("邀请奖:被邀请人#%d", uid)); err != nil {
 		log.Printf("[invite] 邀请奖发放失败 inviter=%d: %v", inviter, err)
+		_, _ = a.DB.Exec("UPDATE invite_relations SET reward_ts=0 WHERE id=? AND reward_ts=?", relID, now)
 		return
 	}
 	// 被邀请人首充加赠 10% → 被邀请人
 	if bonus > 0 {
-		if err := a.inviteCredit(uid, bonus, "invite_bonus",
+		if err := a.inviteCredit(uid, 0, bonus, "invite_bonus",
 			fmt.Sprintf("受邀首充加赠:%d%%", invBonusPct)); err != nil {
 			log.Printf("[invite] 首充加赠失败 uid=%d: %v", uid, err)
 		}
 	}
-	_, _ = a.DB.Exec("UPDATE invite_relations SET first_pay_ts=?, reward_ts=? WHERE id=?", now, now, relID)
 	a.auditAppend("invite_reward", inviter, fmt.Sprintf("invitee=%d reward=%d bonus=%d", uid, invRewardMicro, bonus), "")
 	log.Printf("[invite] 邀请奖已发 inviter=%d invitee=%d reward=%d bonus=%d", inviter, uid, invRewardMicro, bonus)
 }
 
 // ———————— 消费返利（异步结算） ————————
 
-// inviteSettleRebate 单笔计费成功 → 邀请人返 10%（幂等由 balance_flows request_id 唯一性兜底）
+// inviteSettleRebate 单笔计费成功 → 邀请人返 10%
+// 幂等：balance_flows 按 (request_id, type='invite_rebate') 唯一索引兜底（启动期建），
+// 且写入真实 rid + 事前 COUNT 双保险。
 func (a *App) inviteSettleRebate(rid int64) {
 	var uid, amount int64
 	var line string
@@ -232,8 +261,10 @@ func (a *App) inviteSettleRebate(rid int64) {
 		Scan(&uid, &amount, &line); err != nil {
 		return
 	}
-	if uid <= 0 || amount <= 0 || line == "acu" || line == "codex" || strings.HasPrefix(line, "tide") {
-		return // crowd 池/免费线不计返利（精算定稿：仅 aqua/ 个人实付）
+	// 白名单口径（与文件头承诺一致）：仅 aqua/ 个人实付计费计入返利基数。
+	// 原排除法（!acu/!codex/!tide）会让未来新增线名与空线名默认计入——方向对站方不利
+	if uid <= 0 || amount <= 0 || !strings.HasPrefix(line, "aqua") {
+		return
 	}
 	var inviter int64
 	var relID int64
@@ -266,17 +297,21 @@ func (a *App) inviteSettleRebate(rid int64) {
 		log.Printf("[invite] 月度总闸已满，返利跳过 rid=%d", rid)
 		return
 	}
-	if err := a.inviteCredit(inviter, rebate, "invite_rebate",
+	if err := a.inviteCredit(inviter, rid, rebate, "invite_rebate",
 		fmt.Sprintf("消费返利:被邀请人#%d:req=%d", uid, rid)); err != nil {
 		log.Printf("[invite] 返利发放失败 rid=%d: %v", rid, err)
 		return
 	}
-	_, _ = a.DB.Exec("UPDATE invite_relations SET rebate_month=?, rebate_month_micro=? WHERE id=?",
-		rebateMonth, rebateMicro+rebate, relID)
+	if _, err := a.DB.Exec("UPDATE invite_relations SET rebate_month=?, rebate_month_micro=? WHERE id=?",
+		rebateMonth, rebateMicro+rebate, relID); err != nil {
+		// 月帽累计丢失会导致超发，必须留痕（发放已成功，无法回滚，仅告警）
+		log.Printf("[invite] 警告：月帽累计更新失败 rel=%d rebate=%d: %v", relID, rebate, err)
+	}
 }
 
-// inviteCredit 入余额 + 流水（事务）
-func (a *App) inviteCredit(uid, amount int64, typ, note string) error {
+// inviteCredit 入余额 + 流水（事务）。requestID>0 时写入真实 rid：
+// invite_rebate 的幂等查询按 rid 匹配，写 0 会使幂等完全失效（历史缺陷）
+func (a *App) inviteCredit(uid, requestID, amount int64, typ, note string) error {
 	tx, err := a.DB.DB.Begin()
 	if err != nil {
 		return err
@@ -292,7 +327,7 @@ func (a *App) inviteCredit(uid, amount int64, typ, note string) error {
 	}
 	if _, err := tx.Exec(`INSERT INTO balance_flows (user_id, request_id, type, amount_micro,
 		balance_before_micro, balance_after_micro, unit_price_micro, note, operator, ts)
-		VALUES (?,0,?,?,?,?,0,?,'system',?)`, uid, typ, amount, balance-amount, balance, note, time.Now().Unix()); err != nil {
+		VALUES (?,?,?,?,?,?,0,?,'system',?)`, uid, requestID, typ, amount, balance-amount, balance, note, time.Now().Unix()); err != nil {
 		_ = tx.Rollback()
 		return err
 	}

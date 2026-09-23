@@ -42,6 +42,9 @@ func (a *App) handleAdminNotifyMail(w http.ResponseWriter, r *http.Request) {
 		Body            string `json:"body"`
 		ConfirmPassword string `json:"confirm_password"`
 		ThrottleMs      int64  `json:"throttle_ms"`
+		// UserIDs 定向收件人（可空=全员）。用于事故补偿等**只通知受影响用户**的场景——
+		// 20260922 免费模型误扣退款只涉及 22 人，不该为少数人给全站 1500+ 用户发信。
+		UserIDs []int64 `json:"user_ids"`
 	}
 	if err := adminBody(r, 64<<10, &req); err != nil {
 		errAdmin(w, 400, "bad_request", "请求体格式错误")
@@ -64,8 +67,24 @@ func (a *App) handleAdminNotifyMail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 收件人：全部正常状态用户（email 唯一非空列，双重过滤防御）
-	rows, err := a.DB.Query("SELECT email FROM users WHERE status=1 AND email LIKE '%@%'")
+	// 收件人：默认全部正常状态用户；传了 user_ids 则只发给指定用户
+	// （email 唯一非空列，双重过滤防御）
+	rcptSQL := "SELECT email FROM users WHERE status=1 AND email LIKE '%@%'"
+	var rcptArgs []any
+	if len(req.UserIDs) > 0 {
+		if len(req.UserIDs) > 5000 {
+			notifyJob.running.Store(false)
+			errAdmin(w, 400, "bad_request", "user_ids 上限 5000 个")
+			return
+		}
+		ph := make([]string, 0, len(req.UserIDs))
+		for _, id := range req.UserIDs {
+			ph = append(ph, "?")
+			rcptArgs = append(rcptArgs, id)
+		}
+		rcptSQL += " AND id IN (" + strings.Join(ph, ",") + ")"
+	}
+	rows, err := a.DB.Query(rcptSQL, rcptArgs...)
 	if err != nil {
 		notifyJob.running.Store(false)
 		errAdmin(w, 500, "internal_error", "收件人查询失败")

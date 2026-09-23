@@ -63,9 +63,7 @@ func (a *App) handleModelDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item := map[string]any{"id": id, "object": "model", "created": created, "owned_by": line.ID}
-		if h, ok := a.computeHealth()[id]; ok {
-			item["health"] = h
-		}
+		// 20260919：不再下发健康评分（前端只展示 FRT/TPS 客观指标）
 		jsonOut(w, 200, item)
 		return
 	}

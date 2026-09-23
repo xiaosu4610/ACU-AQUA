@@ -1,18 +1,18 @@
 <script setup lang="ts">
-/* 状态大屏：顶部 KPI 行 + 线路健康表（/v1/models/status）+ 模型健康热区（/v1/models health.score）
+/* 状态大屏：顶部 KPI 行 + 线路健康表（/v1/models/status）+ 模型性能热区（TPS 着色）
  * 网关信息与近 1h 聚合来自 /v1/status；30 秒轮询（interval 在 onUnmounted 清理，请求可中断） */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { apiJson, fmt } from '@/composables/useApi'
 import { useModels } from '@/composables/useModels'
 import AqIcon from '@/components/AqIcon.vue'
 
-interface StatusModel { model: string; success_rate: number; calls_1h: number; avg_latency_ms: number; avg_first_ms?: number }
-interface LiveRow { model: string; samples: number; ok: number; ok_rate: number; status: string; avg_latency_ms?: number; last_ts: number }
+interface StatusModel { model: string; calls_1h: number; avg_latency_ms: number; avg_first_ms?: number }
+interface LiveRow { model: string; samples: number; avg_latency_ms?: number; avg_first_ms?: number; avg_tps?: number; last_ts: number }
 
 const { models, loading: modelsLoading, load: loadModels } = useModels()
 
 const meta = ref<{ version: string; uptime: string; window: string } | null>(null)
-const kpi = ref({ calls: '--', rate: '--', lat: '--' })
+const kpi = ref({ calls: '--', lat: '--' })
 const firstLoading = ref(true)
 const lineRows = ref<LiveRow[]>([])
 const lineMsg = ref('加载中…')
@@ -22,34 +22,34 @@ const updatedAt = ref('')
 const onlineCount = computed(() => models.value.filter(m => m.id !== 'auto').length)
 const onlineShow = computed(() => (modelsLoading.value && !models.value.length ? '--' : String(onlineCount.value)))
 
-/* 模型健康热区：health.score 着色（后端近 100 次调用评分，0-100） */
-const heat = computed(() => models.value
-  .filter(m => m.id !== 'auto' && m.health && m.health.total)
-  .map(m => {
-    const h = m.health!
-    const score = h.score != null ? h.score | 0 : 0
-    const rate = Math.round(((h.ok || 0) / (h.total || 1)) * 100)
-    const lat = h.avg_latency_ms != null ? (h.avg_latency_ms / 1000).toFixed(1) + 's' : '-'
-    return { id: m.id, score, rate, lat, color: scoreColor(score), tip: `近 ${h.total} 次调用的健康评分：${score}/100（成功率 ${rate}%，平均延迟 ${lat}）` }
+/* 模型性能热区：TPS 着色（后端不再下发健康评分，仅按客观吞吐着色） */
+const heat = computed(() => lineRows.value
+  .filter(r => r.avg_tps != null || r.avg_first_ms != null || r.avg_latency_ms != null)
+  .map(r => {
+    const tps = r.avg_tps || 0
+    const frt = r.avg_first_ms || r.avg_latency_ms || 0
+    return { id: r.model, tps, frt, samples: r.samples, color: tpsColor(tps), tip: `近 ${r.samples} 次采样：首字 ${fmtMs(frt)} · 速度 ${tps ? tps.toFixed(1) + ' tok/s' : '--'}` }
   })
-  .sort((a, b) => b.score - a.score))
-function scoreColor(s: number): string {
-  if (s >= 90) return 'var(--ok)'
-  if (s >= 70) return 'var(--acc)'
-  if (s >= 50) return 'var(--warn)'
+  .sort((a, b) => b.tps - a.tps))
+function tpsColor(tps: number): string {
+  if (tps >= 60) return 'var(--ok)'
+  if (tps >= 30) return 'var(--acc)'
+  if (tps >= 10) return 'var(--warn)'
   return 'var(--bad)'
 }
-
-/* 线路状态 → 状态点/文案（great 极佳 / ok 正常 / degraded 部分异常 / down 故障） */
-function lineStatus(s: string): { dot: string; text: string } {
-  if (s === 'great' || s === 'ok') return { dot: 'ok', text: s === 'great' ? '状态极佳' : '运行正常' }
-  if (s === 'degraded') return { dot: 'warn', text: '部分异常' }
-  if (s === 'down') return { dot: 'bad', text: '故障' }
-  return { dot: 'warn', text: '暂无有效样本' }
+function fmtMs(ms?: number): string {
+  if (!ms) return '--'
+  return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'
 }
+/* 展示口径：优先首字延迟（用户感知的响应速度），旧数据无首字段时回退总耗时 */
+function latOf(r?: LiveRow): number {
+  if (!r) return 0
+  return r.avg_first_ms || r.avg_latency_ms || 0
+}
+
 const lineRowsView = computed(() => lineRows.value.slice().sort((a, b) => b.samples - a.samples))
 
-/* /v1/status：网关信息 + 近 1h 健康度 → 聚合出 KPI（总调用/加权成功率/加权平均延迟） */
+/* /v1/status：网关信息 + 近 1h 聚合 → KPI（总调用 / 加权平均首字延迟） */
 async function loadStatus(ac: AbortController) {
   try {
     const j = await apiJson<any>('/status', { signal: ac.signal })
@@ -61,25 +61,23 @@ async function loadStatus(ac: AbortController) {
     meta.value = { version: j.version || '--', uptime: d + ' 天 ' + h + ' 时 ' + mnt + ' 分', window: j.window || '1h' }
     const list: StatusModel[] = j.models || []
     if (!list.length) {
-      kpi.value = { calls: '--', rate: '--', lat: '--' }
+      kpi.value = { calls: '--', lat: '--' }
     } else {
-      let tc = 0, wRate = 0, wLat = 0
+      let tc = 0, wLat = 0
       list.forEach(m => {
         const c = m.calls_1h || 0
         tc += c
-        wRate += (m.success_rate || 0) * c
         wLat += (m.avg_first_ms || m.avg_latency_ms || 0) * c // 展示口径：优先首字延迟（用户感知），回退总耗时
       })
       kpi.value = {
         calls: tc ? fmt(tc) : '0',
-        rate: tc ? (wRate / tc).toFixed(1) + '%' : '--',
         lat: tc ? (wLat / tc / 1000).toFixed(2) + 's' : '--',
       }
     }
   } catch {
     if (ac.signal.aborted) return
     meta.value = null
-    kpi.value = { calls: '--', rate: '--', lat: '--' }
+    kpi.value = { calls: '--', lat: '--' }
   }
 }
 
@@ -142,39 +140,34 @@ onUnmounted(() => {
 
     <!-- 顶部 KPI 行 -->
     <div v-if="firstLoading" class="kpis kpis-xl">
-      <div v-for="i in 4" :key="i" class="kpi">
+      <div v-for="i in 3" :key="i" class="kpi">
         <span class="skeleton" style="width: 72px; display: inline-block;"></span>
         <div class="skeleton" style="width: 110px; height: 28px; margin-top: 8px;"></div>
       </div>
     </div>
     <div v-else class="kpis kpis-xl">
       <div class="kpi"><span>近 1h 总调用</span><b>{{ kpi.calls }}</b></div>
-      <div class="kpi"><span>近 1h 成功率</span><b>{{ kpi.rate }}</b></div>
       <div class="kpi"><span>近 1h 平均首字延迟</span><b>{{ kpi.lat }}</b></div>
       <div class="kpi"><span>目录模型数（非可用性保证）</span><b>{{ onlineShow }}</b></div>
     </div>
 
-    <!-- 线路健康表 -->
+    <!-- 线路实时采样表 -->
     <div class="grp-head mt24">
-      <AqIcon name="server" :size="15" />线路健康
+      <AqIcon name="server" :size="15" />线路性能
       <span class="grp-n">最近 200 次请求采样 · 实时推断</span>
     </div>
     <p v-if="lineMsg && lineRowsView.length" class="msg bad" role="status">{{ lineMsg }}</p>
     <div v-if="lineRowsView.length" class="tbl-wrap">
       <table class="table">
         <thead>
-          <tr><th>线路</th><th>状态</th><th class="num">调用数</th><th class="num">采样成功率</th></tr>
+          <tr><th>线路</th><th class="num">调用数</th><th class="num">首字延迟</th><th class="num">速度</th></tr>
         </thead>
         <tbody>
           <tr v-for="r in lineRowsView" :key="r.model">
             <td class="mono" :title="r.model">{{ r.model }}</td>
-            <td>
-              <span class="row" style="gap: 7px; white-space: nowrap;">
-                <span class="dot" :class="lineStatus(r.status).dot"></span>{{ lineStatus(r.status).text }}
-              </span>
-            </td>
             <td class="num">{{ fmt(r.samples) }}</td>
-            <td class="num" :style="{ color: scoreColor(Math.round(r.ok_rate * 100)) }">{{ (r.ok_rate * 100).toFixed(1) }}%</td>
+            <td class="num">{{ fmtMs(latOf(r)) }}</td>
+            <td class="num" :style="{ color: tpsColor(r.avg_tps || 0) }">{{ r.avg_tps ? r.avg_tps.toFixed(1) + ' tok/s' : '--' }}</td>
           </tr>
         </tbody>
       </table>
@@ -184,23 +177,23 @@ onUnmounted(() => {
       <b>{{ lineMsg }}</b>
     </div>
 
-    <!-- 模型健康热区 -->
+    <!-- 模型性能热区 -->
     <div class="grp-head mt24">
-      <AqIcon name="gauge" :size="15" />模型健康热区
-      <span class="grp-n">后端近 100 次调用评分（0-100）</span>
+      <AqIcon name="gauge" :size="15" />模型性能热区
+      <span class="grp-n">最近 200 次采样 · 按速度（tok/s）着色</span>
     </div>
     <div v-if="heat.length" class="grid3">
       <div v-for="h in heat" :key="h.id" class="card heat-card" :title="h.tip">
         <div class="row between">
           <span class="mono model-id" :title="h.id">{{ h.id }}</span>
-          <b class="score" :style="{ color: h.color }">{{ h.score }}</b>
+          <b class="score" :style="{ color: h.color }">{{ h.tps ? h.tps.toFixed(1) : '--' }}</b>
         </div>
-        <div class="dim mt8" style="font-size: 12px;">成功率 {{ h.rate }}% · 延迟 {{ h.lat }}</div>
+        <div class="dim mt8" style="font-size: 12px;">首字延迟 {{ fmtMs(h.frt) }} · 速度 {{ h.tps ? h.tps.toFixed(1) + ' tok/s' : '--' }}</div>
       </div>
     </div>
     <div v-else class="empty">
       <div class="big"><AqIcon name="gauge" :size="32" /></div>
-      <b>{{ modelsLoading ? '模型健康数据加载中…' : '暂无模型健康评分' }}</b>
+      <b>{{ modelsLoading ? '模型性能数据加载中…' : '暂无模型性能采样' }}</b>
     </div>
   </div>
 </template>

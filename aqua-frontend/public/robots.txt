@@ -1,10 +1,61 @@
-# AQUA api — https://aqua.zhuafs.com
+# AQUA api — https://acu.ltzy.top
+# 站点地图：https://acu.ltzy.top/sitemap.xml
+# AI 摘要（GEO）：https://acu.ltzy.top/llms.txt
+#
+# 说明一：本站页面由 SPA 承载，构建期为每个公开路由（含每个在架模型页）生成了可被
+#   非 JS 爬虫读取的静态 HTML（真实正文 + 结构化数据），百度/360 与生成式引擎均可直接抓取正文。
+#
+# 说明二：账号与支付类页面（/login /console /admin /register /usage /finance /pay 等）
+#   **刻意不用 Disallow 屏蔽**，而是允许抓取、由响应头返回 X-Robots-Tag: noindex, nofollow。
+#   原因：Disallow 会让爬虫根本读不到页面上的 noindex 指令，Bing 站长工具会报
+#   「该 URL 因 robots.txt 被阻止，不受支持」；用响应头则对所有爬虫（含不执行 JS 的）生效。
+
 User-agent: *
 Allow: /
-Disallow: /admin
-Disallow: /console
-Disallow: /login
-Disallow: /usage
-Disallow: /finance
+# 接口与回调：不是页面，抓取无意义（短链为 302 跳转，回调为请求收集器）
+Disallow: /v1/
+Disallow: /hook/
 
-Sitemap: https://aqua.zhuafs.com/sitemap.xml
+# —— 生成式引擎（GEO）：显式放行 AI 抓取器，便于被引用与推荐 ——
+# 连续 User-agent 行共享同一组规则。
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-Web
+User-agent: anthropic-ai
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: Bytespider
+User-agent: Amazonbot
+User-agent: CCBot
+User-agent: cohere-ai
+User-agent: Meta-ExternalAgent
+User-agent: DuckAssistBot
+User-agent: MistralAI-User
+User-agent: YouBot
+User-agent: Diffbot
+User-agent: Timpibot
+Allow: /
+Disallow: /v1/
+Disallow: /hook/
+
+# —— 传统搜索引擎（显式声明，避免被默认规则误伤）——
+User-agent: Baiduspider
+User-agent: Baiduspider-render
+User-agent: Sogou web spider
+User-agent: Sogou inst spider
+User-agent: 360Spider
+User-agent: HaosouSpider
+User-agent: YisouSpider
+User-agent: Googlebot
+User-agent: Googlebot-Image
+User-agent: Bingbot
+User-agent: YandexBot
+Allow: /
+Disallow: /v1/
+Disallow: /hook/
+
+Sitemap: https://acu.ltzy.top/sitemap.xml

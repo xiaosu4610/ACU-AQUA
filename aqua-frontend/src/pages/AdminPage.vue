@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /* 站长管理控制台：单密码登录（独立 adm_ 会话，与用户体系隔离）
- * 视图：仪表盘 / 客户管理 / 上游管理 / 上游额度 / 众筹池 / 额度监管 / 审计日志 / 对账 / 系统更新 / 站点设置
+ * 视图：仪表盘 / 客户管理 / 上游管理 / 上游额度 / 额度监管 / 审计日志 / 对账 / 系统更新 / 站点设置
  * 资金红线：高危操作二次密码；金额全程微元整数；任一接口 401 → 清 token 回登录视图。 */
 import { computed, onMounted, ref } from 'vue'
 import { apiJson as apiJsonRaw, errText, fmt } from '@/composables/useApi'
@@ -22,13 +22,12 @@ async function apiJson<T = any>(path: string, opts: Parameters<typeof apiJsonRaw
   }
 }
 
-type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'pool' | 'supervision' | 'audit' | 'reconcile' | 'update' | 'settings'
+type View = 'dashboard' | 'users' | 'lines' | 'quota' | 'supervision' | 'audit' | 'reconcile' | 'update' | 'settings'
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: '仪表盘', icon: 'chart' },
   { id: 'users', label: '客户管理', icon: 'user' },
   { id: 'lines', label: '上游管理', icon: 'puzzle' },
   { id: 'quota', label: '上游额度', icon: 'bolt' },
-  { id: 'pool', label: '众筹池', icon: 'coin' },
   { id: 'supervision', label: '额度监管', icon: 'gauge' },
   { id: 'audit', label: '审计日志', icon: 'list' },
   { id: 'reconcile', label: '对账', icon: 'shield' },
@@ -82,7 +81,6 @@ function go(v: View) {
   if (v === 'users') loadUsers()
   if (v === 'lines') { loadLines(); loadCodex() }
   if (v === 'quota') loadQuota()
-  if (v === 'pool') loadPool()
   if (v === 'supervision') loadSupervision()
   if (v === 'audit') loadAudit()
   if (v === 'reconcile') loadReconcile()
@@ -109,6 +107,9 @@ const SETTINGS_FIELDS: { key: string; label: string; ph: string; hint?: string }
   { key: 'qq_group_url', label: 'QQ 一群加群链接', ph: 'https://qm.qq.com/…' },
   { key: 'qq_group2', label: 'QQ 二群号', ph: '' },
   { key: 'qq_group_url2', label: 'QQ 二群加群链接', ph: '' },
+  { key: 'ad_image', label: '推广位图片路径', ph: '/ads/metaso.png' },
+  { key: 'ad_link', label: '推广位跳转链接', ph: 'https://…/?s=AQUA' },
+  { key: 'ad_label', label: '推广位文案', ph: '合作伙伴一句话介绍' },
   { key: 'rate_promo', label: '活动倍率', ph: '0.1', hint: '收费模型活动期计费倍率' },
   { key: 'rate_normal', label: '常规倍率', ph: '0.5', hint: '活动期结束后回落的常规倍率' },
   { key: 'rate_promo_vip', label: 'VIP 倍率', ph: '0.05' },
@@ -137,38 +138,6 @@ async function saveSettings() {
   settingsBusy.value = false
 }
 
-/* ===== 众筹池（acu/ 公共算力池）：状态 + 官方注入 ===== */
-const poolStatus = ref<any>(null)
-const poolFlows = ref<any[]>([])
-const seedAmt = ref<number>(10)
-const seedPw = ref('')
-const seeding = ref(false)
-const poolMsg = ref('')
-const poolMsgOk = ref(false)
-async function loadPool() {
-  try { poolStatus.value = await apiJson<any>('/pool/status') } catch { poolStatus.value = null }
-  try {
-    const j = await apiJson<{ items?: any[] }>('/pool/flows?limit=50')
-    poolFlows.value = j.items || []
-  } catch { poolFlows.value = [] }
-}
-async function doSeed() {
-  const micro = Math.round((Number(seedAmt.value) || 0) * 1_000_000)
-  if (micro <= 0) { poolMsg.value = '注入金额须大于 0'; poolMsgOk.value = false; return }
-  seeding.value = true
-  poolMsg.value = ''
-  try {
-    const j = await apiJson<{ balance_micro: number }>('/admin/pool/seed', {
-      method: 'POST', key: token.value, body: { amount_micro: micro, confirm_password: seedPw.value },
-    })
-    poolMsg.value = `注入成功，池子当前 ¥${yuan(j.balance_micro)}`
-    poolMsgOk.value = true
-    seedPw.value = ''
-    loadPool()
-  } catch (e: any) { poolMsg.value = e?.message || String(e); poolMsgOk.value = false }
-  seeding.value = false
-}
-
 /* ===== 仪表盘 ===== */
 const stats = ref<{
   top?: { user_id: number; username: string; cost_micro: number; calls: number }[]
@@ -188,6 +157,22 @@ const quotaPct = computed(() => {
   if (!stats.value?.upstream) return 0
   const { total_micro, used_micro } = stats.value.upstream
   return total_micro > 0 ? Math.min(100, Math.round((used_micro / total_micro) * 100)) : 0
+})
+/** 在役计费模式（后端 /v1/admin/stats 的 billing_modes）。
+ *  20260923 修：此前此处硬编码「按次计费」——系统切到按量计费后管理台仍显示按次，站长据此误判计费口径。
+ *  口径由后端给（已排除"模型全部维护"的线），前端只负责展示。 */
+const billingModeText = computed(() => {
+  const modes: string[] = stats.value?.billing_modes || []
+  if (!modes.length) return '暂无在役收费线'
+  return modes.map((m: string) => (m === 'per_token' ? '按量计费' : m === 'per_call' ? '按次计费' : m)).join(' + ')
+})
+const billingModeDesc = computed(() => {
+  const modes: string[] = stats.value?.billing_modes || []
+  const parts: string[] = []
+  if (modes.includes('per_call')) parts.push('按次：每次成功请求扣一次，与生成长度无关')
+  if (modes.includes('per_token')) parts.push('按量：输入 / 缓存命中 / 输出按 tokens 分段计价')
+  if (!parts.length) return '当前无在役收费线（收费模型全部维护中或已下架）'
+  return parts.join('；') + '；acu/ 官方自营线纯免费（不扣站点额度与个人余额）'
 })
 const rate = (c: number, ok: number) => (c > 0 ? Math.round((ok / c) * 1000) / 10 : 100)
 /** 近 8 日收入（div 条形图） */
@@ -953,8 +938,8 @@ async function doUserKeyRevoke(kid: number) {
             <div class="kpis">
               <div class="kpi">
                 <span>计费模式</span>
-                <b style="font-size: 19px;">按次计费</b>
-                <span class="trend">每次成功请求扣一次，与生成长度无关；acu/ 众筹线按次扣站点公共额度（拿货价 +40~50%，含支付宝 5% / 微信 6% 通道费）</span>
+                <b style="font-size: 19px;">{{ billingModeText }}</b>
+                <span class="trend">{{ billingModeDesc }}</span>
               </div>
               <div class="kpi"><span>通道手续费（本站承担）</span><b>¥{{ yuan(stats.upstream.fee_micro || 0) }}</b><span class="trend">实付费率 {{ ((stats.upstream.fee_rate ?? 0) * 100).toFixed(2) }}%</span></div>
             </div>
@@ -1322,48 +1307,6 @@ async function doUserKeyRevoke(kid: number) {
                       <template v-else>{{ fmt(t.total_before) }} → {{ fmt(t.total_after) }} 次</template>
                     </td>
                     <td>{{ t.note || '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- ▼ 众筹池 ▼ -->
-        <div v-else-if="view === 'pool'" style="display: grid; gap: 16px;">
-          <div class="kpis">
-            <div class="kpi" :style="poolStatus && poolStatus.balance_micro <= 0 ? 'border-color: var(--bad);' : ''">
-              <span>池子余额</span><b>¥{{ yuan(poolStatus?.balance_micro) }}</b>
-              <span class="trend">{{ poolStatus ? (poolStatus.balance_micro > 0 ? '供血中' : '已熔断 · acu/ 调用被拒') : '加载中…' }}</span>
-            </div>
-            <div class="kpi"><span>累计充值（净到手）</span><b>¥{{ yuan(poolStatus?.charged_micro) }}</b><span class="trend">用户充值 {{ poolStatus ? poolStatus.consumers : 0 }} 人共用消耗</span></div>
-            <div class="kpi"><span>累计消耗</span><b>¥{{ yuan(poolStatus?.used_micro) }}</b><span class="trend">今日消耗 ¥{{ yuan(poolStatus?.today_used_micro) }} · 按普通渠道零售价扣池</span></div>
-          </div>
-          <div class="card accent">
-            <b><AqIcon name="plus" :size="16" /> 官方注入（写 seed 流水，二次密码确认）</b>
-            <div class="form-grid mt12" style="max-width: 640px;">
-              <div class="field"><label>金额（元）</label><input v-model.number="seedAmt" class="input" type="number" min="0.01" max="1000" step="0.01" placeholder="如 10" /></div>
-              <div class="field"><label>管理员二次密码</label><input v-model="seedPw" class="input" type="password" placeholder="管理密码" autocomplete="off" /></div>
-              <div class="field"><label>&nbsp;</label><button class="btn primary" :disabled="seeding" @click="doSeed">{{ seeding ? '注入中…' : '注入池子' }}</button></div>
-            </div>
-            <p v-if="poolMsg" class="msg" :class="poolMsgOk ? 'ok' : 'bad'">{{ poolMsg }}</p>
-          </div>
-          <div class="card">
-            <b><AqIcon name="list" :size="16" /> 最近流水（公开账本同源 · 脱敏展示）</b>
-            <div class="tbl-wrap mt12">
-              <table class="table">
-                <thead><tr><th>时间</th><th>类型</th><th>用户</th><th class="num">变动（¥）</th><th class="num">池余（¥）</th></tr></thead>
-                <tbody>
-                  <tr v-if="!poolFlows.length"><td colspan="5" class="empty">暂无流水</td></tr>
-                  <tr v-for="f in poolFlows" :key="f.id">
-                    <td class="dim">{{ fmtTime(f.ts) }}</td>
-                    <td>
-                      <span class="tag" :class="f.type === 'charge' || f.type === 'seed' ? 'acc' : ''">{{ f.type === 'charge' ? '充值' : f.type === 'consume' ? '扣费' : f.type === 'seed' ? '注入' : '调整' }}</span>
-                      <span v-if="f.revival" class="tag warn" style="margin-left: 4px;">救场</span>
-                    </td>
-                    <td>{{ f.user }}</td>
-                    <td class="num" :class="f.amount_micro > 0 ? 'pos' : 'dim'">{{ f.amount_micro > 0 ? '+' : '' }}{{ yuan(f.amount_micro) }}</td>
-                    <td class="num dim">¥{{ yuan(f.balance_after_micro) }}</td>
                   </tr>
                 </tbody>
               </table>

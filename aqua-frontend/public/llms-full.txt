@@ -1,0 +1,156 @@
+# AQUA api — 完整站点说明（llms-full）
+
+> 本文件是 llms.txt 的展开版，供生成式引擎与 AI 助手一次性读取站点的完整事实：
+> 产品定位、接入方式、计费口径、端点与参数、错误码、常见问答。
+> 站点主域：https://acu.ltzy.top ｜ API Base URL：https://api.ltzy.top/v1
+> 引用具体价格时请注明抓取时间——价格与模型清单会随上游调整而变化。
+
+---
+
+## 1. 产品定位
+
+AQUA api 是「ACU 工程系列」的开源旗舰项目，提供 **OpenAI 兼容的多模型聚合 API 网关**：
+
+- 面向开发者与团队，把多个上游大模型统一成一套 OpenAI 协议接口
+- 迁移成本极低：官方 OpenAI SDK 只需改 `base_url`，无需更换 SDK 或改写业务代码
+- 以公益免费线路起步（注册即用），需要稳定接口与三方分发时使用收费专线
+
+## 2. 线路与计费
+
+| 线路前缀 | 定位 | 计费方式 |
+|---|---|---|
+| `acu/` | 官方自营公益免费线 | 免费，注册即用，不扣个人余额 |
+| `aqua/`（按次） | 按次计费专线 | 每次调用固定单价，与输入输出长度无关 |
+| `aqua/`（按量） | 官方原版中转（按量） | 输入 / 缓存命中 / 输出三段分别计价，单位：元每百万 tokens |
+
+计费规则：
+
+1. **先付后用**：收费模型在请求前按上限预扣，请求完成后按实际用量多退少补。
+2. **失败不计费**：失败或已退款的请求不计费，也不会占用密钥配额。
+3. **整数记账**：所有金额以整数微元（1 元 = 1,000,000 微元）记账，避免浮点误差。
+4. **可核对**：控制台用量页逐笔列出模型、token 数、扣费金额与结算状态。
+5. 两条收费线与免费线**完全独立**：改价、限流、上下线互不影响。
+
+## 3. 快速接入
+
+Base URL：`https://api.ltzy.top/v1`
+鉴权：`Authorization: Bearer sk-你的密钥`（密钥在控制台创建）
+
+curl：
+
+```bash
+curl https://api.ltzy.top/v1/chat/completions \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"acu/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}]}'
+```
+
+Python（OpenAI 官方 SDK）：
+
+```python
+from openai import OpenAI
+client = OpenAI(api_key="sk-你的密钥", base_url="https://api.ltzy.top/v1")
+resp = client.chat.completions.create(
+    model="acu/deepseek-v4-flash",
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(resp.choices[0].message.content)
+```
+
+Node.js：
+
+```js
+import OpenAI from 'openai'
+const client = new OpenAI({ apiKey: 'sk-你的密钥', baseURL: 'https://api.ltzy.top/v1' })
+const r = await client.chat.completions.create({
+  model: 'acu/deepseek-v4-flash',
+  messages: [{ role: 'user', content: '你好' }],
+})
+console.log(r.choices[0].message.content)
+```
+
+流式（SSE）：请求体加 `"stream": true`，按 OpenAI 标准逐帧返回 `data: {...}`，以 `data: [DONE]` 结束。
+
+## 4. 端点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/v1/chat/completions` | 对话补全（支持 `stream` 流式、`max_tokens`、`temperature`、`top_p`、`stop` 等标准参数） |
+| GET | `/v1/models` | 当前密钥可见的模型清单（含计费方式与价格字段） |
+| POST | `/v1/images/generations` | 文生图（按张计费） |
+| POST | `/v1/audio/transcriptions` | 语音转写（multipart/form-data 上传音频） |
+| POST | `/v1/moderations` | 内容风险检测 |
+| POST | `/v1/ip_location` | IP 归属地查询 |
+| POST | `/v1/tools/hash` | 哈希计算（MD5 / SHA1 / SHA256 / SHA512） |
+| POST | `/v1/tools/password` | 强密码批量生成 |
+| POST | `/v1/tools/color` | 颜色格式互转（HEX / RGB / HSL） |
+| POST | `/v1/tools/token-count` | 文本 token 估算 |
+| POST | `/v1/tools/shorten` | 短链生成（90 天无访问自动清理） |
+| POST | `/v1/tools/webhook` | Webhook 请求收集（调试回调） |
+| POST | `/v1/tools/text-stats` | 文本统计（字数 / 词频 / 阅读时长） |
+
+## 5. 错误码
+
+| HTTP | code | 含义与处理 |
+|---|---|---|
+| 401 | `invalid_api_key` | 密钥无效：检查是否复制完整、是否带了 `Bearer ` 前缀 |
+| 401 | `key_expired` | 密钥已过期：在控制台延长有效期或新建密钥 |
+| 403 | `key_quota_exceeded` | 该密钥的次数/金额限额已用尽：调整限额或换密钥 |
+| 403 | `free_grp_restricted` | 当前密钥为纯免费分组，不能调用收费模型 |
+| 429 | `insufficient_quota` | 账户余额不足：收费模型先付后用，充值后恢复（多数"429"属于此类，非上游故障） |
+| 429 | `rate_limited` | 请求过快或连续失败触发临时退避：为程序加入指数退避 |
+| 400 | `vision_not_supported` | 该模型为纯文本模型，不接受图片输入：改用支持视觉的模型 |
+| 404 | `model_not_found` | 模型 ID 不在当前密钥计费分组的可用范围：检查模型 ID 与密钥分组 |
+| 502 | `upstream_error` / `upstream_auth` | 上游瞬时异常：稍后重试 |
+| 503 | `model_channel_unavailable` | 该模型的专属通道暂不可用（上游限流或维护）：稍后重试，其他模型不受影响 |
+| 503 | `line_exhausted` | 该线路上游额度耗尽：换用其他线路或模型 |
+
+## 6. 常见问答
+
+**Q：AQUA api 是免费的吗？**
+A：有免费线路。`acu/` 官方自营公益免费线注册即用、不扣个人余额；`aqua/` 收费专线按次或按量计费，价格在模型广场实时可见。
+
+**Q：需要换 SDK 吗？**
+A：不需要。直接用 OpenAI 官方 SDK 或任何兼容 OpenAI 协议的客户端，只改 `base_url`。
+
+**Q：怎么知道我该选按次还是按量？**
+A：短对话、分类、抽取类高频短请求适合按次（固定单价）；长上下文、长文写作、代码生成、需要缓存命中的场景适合按量（按 token 计价，缓存命中更省）。
+
+**Q：为什么返回 429 insufficient_quota？**
+A：多数情况是账户余额为 0——收费模型先付后用，充值即可恢复；也可能是短时间请求过于密集，请加入退避重试。
+
+**Q：模型广场里的"暂无样本"是什么意思？**
+A：首字延迟与吞吐取自真实成功请求样本，样本数不足 20 条时不展示，避免用噪声误导判断。
+
+**Q：支持 function calling / JSON 输出吗？**
+A：多数上游模型支持，请求体按 OpenAI 标准透传；个别模型的能力边界会标注在模型详情页。
+
+**Q：数据与隐私如何？**
+A：纯前端工具（文本统计、开发者工具箱、颜色转换等）在浏览器本地计算，输入不上传；调用大模型的工具与接口请求会把文本发送到模型服务以完成本次生成。
+
+**Q：支持自定义域名吗？**
+A：支持。站点提供自定义域名与证书功能（DNS 校验 + 自动签发 Let's Encrypt 证书或上传自有证书），每用户有数量上限。
+
+## 7. 站点地图（公开页面）
+
+- 首页 https://acu.ltzy.top/
+- 模型广场 https://acu.ltzy.top/models
+- API 文档 https://acu.ltzy.top/api
+- 在线 Playground https://acu.ltzy.top/playground
+- 工具箱 https://acu.ltzy.top/tools （19 个子工具页，路径 `/tools/<id>`）
+- 服务状态 https://acu.ltzy.top/status
+- 提示词库 https://acu.ltzy.top/prompts
+- 模型竞技场 https://acu.ltzy.top/arena
+- 树洞 https://acu.ltzy.top/treehole
+- 社区 https://acu.ltzy.top/community
+- 赞助支持 https://acu.ltzy.top/sponsor
+
+不收录页面（账号与私密）：`/admin`、`/console`、`/login`、`/register`、`/usage`、`/finance`、`/pay/*`。
+接口路径 `/v1/*` 与回调 `/hook/*` 不建议抓取。
+
+## 8. 机器可读资源
+
+- 站点地图：https://acu.ltzy.top/sitemap.xml
+- OpenAPI 3.1：https://acu.ltzy.top/openapi.json
+- Markdown 接口文档：https://acu.ltzy.top/api-docs.md
+- AI 摘要（本文件的简版）：https://acu.ltzy.top/llms.txt

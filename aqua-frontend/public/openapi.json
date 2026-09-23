@@ -1,0 +1,466 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AQUA api",
+    "version": "1.0.0",
+    "summary": "OpenAI 兼容的多模型聚合 API 网关",
+    "description": "AQUA api 是「ACU 工程系列」的开源旗舰项目，把多个上游大模型统一成一套 OpenAI 协议接口。\n\n- 公益免费线路（acu/）注册即用、不扣个人余额\n- 收费专线（aqua/）按次或按量计费，先付后用、失败不计费\n- 任何 OpenAI SDK 只需把 base_url 改为 https://api.ltzy.top/v1\n\n模型清单与实时价格以 GET /v1/models 为准。",
+    "contact": { "name": "AQUA api", "url": "https://acu.ltzy.top/community" },
+    "license": { "name": "见站点说明", "url": "https://acu.ltzy.top/api" }
+  },
+  "servers": [
+    { "url": "https://api.ltzy.top", "description": "生产环境（推荐）" },
+    { "url": "https://acu.ltzy.top", "description": "站点主域（同一网关）" }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "tags": [
+    { "name": "对话", "description": "OpenAI 兼容的对话补全接口" },
+    { "name": "模型", "description": "模型清单与详情" },
+    { "name": "多模态", "description": "图像、语音、视频等生成与理解接口" },
+    { "name": "工具", "description": "免费的开发者与文本处理工具接口" },
+    { "name": "站点", "description": "站点元信息与状态" }
+  ],
+  "paths": {
+    "/v1/chat/completions": {
+      "post": {
+        "tags": ["对话"],
+        "summary": "对话补全",
+        "description": "OpenAI 兼容的对话补全接口，支持 SSE 流式输出。model 填模型广场展示的完整 ID（形如 acu/deepseek-v4-flash）。",
+        "operationId": "createChatCompletion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatRequest" },
+              "examples": {
+                "基础调用": {
+                  "value": {
+                    "model": "acu/deepseek-v4-flash",
+                    "messages": [{ "role": "user", "content": "你好" }]
+                  }
+                },
+                "流式": {
+                  "value": {
+                    "model": "acu/deepseek-v4-flash",
+                    "messages": [{ "role": "user", "content": "写一首关于秋天的短诗" }],
+                    "stream": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "补全结果；stream=true 时返回 text/event-stream，逐帧 data: {...}，以 data: [DONE] 结束",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ChatResponse" } },
+              "text/event-stream": { "schema": { "type": "string" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "429": { "$ref": "#/components/responses/Error" },
+          "502": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": ["模型"],
+        "summary": "模型清单",
+        "description": "返回当前密钥计费分组下可见的模型列表，含计费方式与价格字段。",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "模型列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": { "type": "string", "const": "list" },
+                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/Model" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models/status": {
+      "get": {
+        "tags": ["模型"],
+        "summary": "模型实时指标",
+        "description": "返回各模型近一小时的实时首字延迟（FRT）与吞吐（TPS）样本；样本不足 20 条时不展示。",
+        "operationId": "listModelsStatus",
+        "responses": { "200": { "description": "指标列表" } }
+      }
+    },
+    "/v1/models/{id}": {
+      "get": {
+        "tags": ["模型"],
+        "summary": "模型详情",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "完整模型 ID，含线路前缀（如 acu/deepseek-v4-flash）" }
+        ],
+        "responses": { "200": { "description": "模型详情与价格" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "tags": ["多模态"],
+        "summary": "文生图",
+        "description": "按张计费。",
+        "operationId": "createImage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["model", "prompt"],
+                "properties": {
+                  "model": { "type": "string" },
+                  "prompt": { "type": "string" },
+                  "size": { "type": "string", "examples": ["1024x1024"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "生成结果" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": ["多模态"],
+        "summary": "语音转写",
+        "operationId": "createTranscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "model"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "音频文件" },
+                  "model": { "type": "string" },
+                  "language": { "type": "string" },
+                  "response_format": { "type": "string", "enum": ["json", "text", "verbose_json"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "转写结果" } }
+      }
+    },
+    "/v1/moderations": {
+      "post": {
+        "tags": ["多模态"],
+        "summary": "内容风险检测",
+        "operationId": "createModeration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["input"],
+                "properties": { "input": { "type": "string" }, "model": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "风险判定" } }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "tags": ["多模态"],
+        "summary": "文本向量化",
+        "operationId": "createEmbedding",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["input"],
+                "properties": {
+                  "input": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+                  "model": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "向量结果" } }
+      }
+    },
+    "/v1/ip_location": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "IP 归属地查询",
+        "operationId": "ipLocation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": { "ip": { "type": "string", "description": "留空则查询调用方 IP" } } }
+            }
+          }
+        },
+        "responses": { "200": { "description": "归属地与运营商" } }
+      }
+    },
+    "/v1/tools/hash": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "哈希计算（MD5 / SHA1 / SHA256 / SHA512）",
+        "operationId": "toolHash",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "text": { "type": "string" }, "algo": { "type": "string", "enum": ["md5", "sha1", "sha256", "sha512"] } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "摘要值" } }
+      }
+    },
+    "/v1/tools/password": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "强密码生成",
+        "operationId": "toolPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "length": { "type": "integer", "minimum": 4, "maximum": 128 },
+                  "count": { "type": "integer", "minimum": 1, "maximum": 50 },
+                  "digits": { "type": "boolean" },
+                  "symbols": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "生成的密码列表" } }
+      }
+    },
+    "/v1/tools/color": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "颜色格式互转（HEX / RGB / HSL）",
+        "operationId": "toolColor",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object", "properties": { "value": { "type": "string", "examples": ["#0b63c5"] } } } }
+          }
+        },
+        "responses": { "200": { "description": "三种格式的换算结果" } }
+      }
+    },
+    "/v1/tools/token-count": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "文本 token 估算",
+        "operationId": "toolTokenCount",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } } } }
+          }
+        },
+        "responses": { "200": { "description": "token 估算结果" } }
+      }
+    },
+    "/v1/tools/text-stats": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "文本统计（字数 / 词频 / 阅读时长）",
+        "operationId": "toolTextStats",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } } } }
+          }
+        },
+        "responses": { "200": { "description": "统计结果" } }
+      }
+    },
+    "/v1/tools/shorten": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "短链生成",
+        "description": "生成短链，302 跳转直达原地址；90 天无访问自动清理。",
+        "operationId": "toolShorten",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object", "properties": { "url": { "type": "string", "format": "uri" } } } }
+          }
+        },
+        "responses": { "200": { "description": "短链与短码" } }
+      }
+    },
+    "/v1/tools/webhook": {
+      "post": {
+        "tags": ["工具"],
+        "summary": "Webhook 请求收集（调试回调）",
+        "description": "action=create 生成收集地址；action=list 查看记录（保留 24 小时）；action=clear 清空。",
+        "operationId": "toolWebhook",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                  "action": { "type": "string", "enum": ["create", "list", "clear"] },
+                  "id": { "type": "string", "description": "action=list/clear 时必填" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "收集地址或记录列表" } }
+      }
+    },
+    "/v1/meta": {
+      "get": {
+        "tags": ["站点"],
+        "summary": "站点元信息",
+        "description": "站点名称、主域、QQ 群、费率倍率与公告等展示层配置。",
+        "operationId": "getMeta",
+        "security": [],
+        "responses": { "200": { "description": "站点元信息" } }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "tags": ["站点"],
+        "summary": "线路与模型状态",
+        "description": "各线路近一小时的调用量与平均首字延迟。",
+        "operationId": "getStatus",
+        "security": [],
+        "responses": { "200": { "description": "状态数据" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sk-...",
+        "description": "在站点控制台创建 API 密钥后，按 Authorization: Bearer sk-xxx 传入。"
+      }
+    },
+    "schemas": {
+      "ChatRequest": {
+        "type": "object",
+        "required": ["model", "messages"],
+        "properties": {
+          "model": { "type": "string", "description": "完整模型 ID（含线路前缀）", "examples": ["acu/deepseek-v4-flash", "aqua/glm-5.3"] },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {
+                "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+                "content": { "description": "纯文本字符串，或内容块数组（文本 / 图片）" }
+              }
+            }
+          },
+          "stream": { "type": "boolean", "default": false, "description": "开启 SSE 流式输出" },
+          "max_tokens": { "type": "integer", "description": "本次最大输出 token 数（受模型上限约束；个别模型会被网关钳制到其官方上限）" },
+          "temperature": { "type": "number", "default": 1.0 },
+          "top_p": { "type": "number", "default": 1.0 },
+          "stop": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+          "frequency_penalty": { "type": "number" },
+          "presence_penalty": { "type": "number" },
+          "seed": { "type": "integer" }
+        }
+      },
+      "ChatResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string", "const": "chat.completion" },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "finish_reason": { "type": "string", "examples": ["stop", "length"] },
+                "message": {
+                  "type": "object",
+                  "properties": { "role": { "type": "string" }, "content": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": { "type": "integer" },
+              "completion_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "完整模型 ID" },
+          "object": { "type": "string", "const": "model" },
+          "mode": { "type": "string", "enum": ["per_call", "per_token", "free"], "description": "计费模式" },
+          "price_micro": { "type": "integer", "description": "按次线路的单次价格（微元，1 元 = 1,000,000 微元）" },
+          "in_price": { "type": "number", "description": "按量线路的输入价（元/百万 tokens）" },
+          "out_price": { "type": "number", "description": "按量线路的输出价（元/百万 tokens）" },
+          "cache_price": { "type": "number", "description": "按量线路的缓存命中价（元/百万 tokens）" },
+          "description": { "type": "string" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string", "examples": ["invalid_api_key", "insufficient_quota", "model_not_found"] },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "错误响应；常见 code 见 llms-full.txt 的错误码表",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    }
+  }
+}

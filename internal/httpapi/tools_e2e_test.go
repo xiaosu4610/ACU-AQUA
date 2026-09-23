@@ -110,9 +110,12 @@ func TestLocalToolsEndpoints(t *testing.T) {
 	if out["datetime_utc8"] != "2023-11-15 06:13:20" {
 		t.Fatalf("timestamp 转 datetime 错误: %v", out)
 	}
-	// datetime → timestamp：与 Rust NaiveDateTime.and_utc() 语义一致（按 UTC 解析）
+	// datetime → timestamp：按东八区解析（20260919 修复双向时区不对称）。
+	// 旧实现按 UTC 解析（对齐 Rust 版 NaiveDateTime.and_utc() 的 bug），
+	// 导致往返不自洽：1700000000 → "2023-11-15 06:13:20" → 1700028800（差 8h）。
+	// 现按 UTC+8 解析，往返自洽：1700000000 → 同一字符串 → 1700000000
 	_, out = doJSON(t, h, "POST", "/v1/tools/timestamp", "", map[string]any{"datetime": "2023-11-15 06:13:20"})
-	if out["timestamp"] != float64(1700028800) {
+	if out["timestamp"] != float64(1700000000) {
 		t.Fatalf("datetime 转 timestamp 错误: %v", out)
 	}
 }
@@ -124,10 +127,11 @@ func TestShortenAndWebhookFlow(t *testing.T) {
 	// 短链：创建 → /s/{code} 302
 	_, out := doJSON(t, h, "POST", "/v1/tools/shorten", "", map[string]any{"url": "https://example.com/a?q=1"})
 	short := out["short"].(string)
-	if !strings.HasPrefix(short, "https://aqua.zhuafs.com/s/") {
+	// 短链基址由 [site] domain 配置驱动（20260920 去硬编码 aqua.zhuafs.com），测试环境回落请求 Host
+	if !strings.Contains(short, "/s/") {
 		t.Fatalf("shorten 错误: %v", out)
 	}
-	code := strings.TrimPrefix(short, "https://aqua.zhuafs.com/s/")
+	code := short[strings.LastIndex(short, "/s/")+len("/s/"):]
 	rec, _ := doJSON(t, h, "GET", "/s/"+code, "", nil)
 	if rec.Code != 302 || rec.Header().Get("Location") != "https://example.com/a?q=1" {
 		t.Fatalf("短链 302 错误: %d %v", rec.Code, rec.Header().Get("Location"))

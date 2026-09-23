@@ -63,7 +63,12 @@ func (a *App) proxyChat(w http.ResponseWriter, r *http.Request, body []byte) {
 		errOut(w, 404, "model_not_found", "模型不存在：" + readModelName(body))
 		return
 	}
-	u, _ := url.Parse(a.Cfg.Server.LegacyUpstreamURL)
+	u, err := url.Parse(a.Cfg.Server.LegacyUpstreamURL)
+	if err != nil {
+		// 解析失败不再吞错（nil u 后续使用不可靠）：按本函数现有错误出口返回
+		errOut(w, 502, "upstream_error", "转发失败，请稍后重试")
+		return
+	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String()+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		errOut(w, 502, "upstream_error", "转发失败，请稍后重试")

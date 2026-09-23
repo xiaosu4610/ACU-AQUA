@@ -8,7 +8,7 @@ const output = join(tmpdir(), 'aqua-visual-qa')
 const base = process.env.QA_URL || 'http://127.0.0.1:5173'
 mkdirSync(output, { recursive: true })
 const errors = []
-const routes = ['/home', '/api', '/models?view=paid', '/model/aqua%2Fdeepseek-v4-1-flash', '/tools', '/login', '/status', '/playground', '/treehole', '/prompts', '/arena', '/community', '/sponsor', '/pool', '/console', '/finance', '/usage']
+const routes = ['/home', '/api', '/models?view=paid', '/model/aqua%2Fdeepseek-v4-1-flash', '/tools', '/login', '/status', '/playground', '/treehole', '/prompts', '/arena', '/community', '/sponsor', '/console', '/finance', '/usage']
 const fixture = [{ id:'acu/deepseek-v4-flash',paid:false },{id:'aqua/deepseek-v4-1-flash',paid:true,mode:'per_call',price_micro:3480,base_price_micro:4280,price_view:'agent'},{id:'codex/gpt-5',paid:true,mode:'per_token',in_price:2,cache_price:0.2,out_price:10}]
 const checks = []
 const authenticatedChecks = []
@@ -43,7 +43,6 @@ async function authenticatedQA(theme, width) {
     else if (path === '/models') body = {data:fixture.map(m => m.price_view ? {...m,price_micro:agent ? 3480 : 4280,price_view:agent ? 'agent' : 'normal',base_price_micro:agent ? 4280 : undefined} : m)}
     else if (path === '/models/status') body = {data:[],generated_ts:ts}
     else if (path === '/meta') body = {name:'AQUA QA',announcement_enabled:false}
-    else if (path === '/pool/status') body = {balance_micro:10000000,today_used_micro:0,used_micro:0}
     else if (path === '/my/keys') body = {keys:[{id:1,name:'Synthetic QA key',prefix:'sk-qa-masked',created_ts:ts,revoked:false,can_reveal:false,billing_grp:group}]}
     else if (path === '/my/keys/1/group') { group = request.postDataJSON().billing_grp; body = {ok:true} }
     else if (path === '/my/usage') body = {today:{calls:4,ok_rate:75},week:{calls:40,ok_rate:95},by_model:[{model:history[0].model,calls:20},{model:history[1].model,calls:10}],recent:history}
@@ -166,7 +165,7 @@ try {
         if (url.pathname.startsWith('/v1/')) {
           let body = {}
           if (url.pathname === '/v1/models') body = {data:fixture}
-          else if (url.pathname === '/v1/status') body = {version:'synthetic-qa',window:'1h',models:[{model:'aqua/deepseek-v4-1-flash',calls_1h:10,success_rate:90,avg_latency_ms:1000}]}
+          else if (url.pathname === '/v1/status') body = {version:'synthetic-qa',window:'1h',models:[{model:'aqua/deepseek-v4-1-flash',calls_1h:10,avg_latency_ms:1000,avg_first_ms:800}]}
           else if (url.pathname === '/v1/models/status') body = {data:[],generated_ts:0}
           else if (url.pathname.includes('prompts')) body = {data:[],prompts:[],categories:[]}
           await route.fulfill({json:body})

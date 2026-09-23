@@ -4,7 +4,6 @@ package httpapi
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -320,7 +319,7 @@ func parseUID(w http.ResponseWriter, uidStr string) (int64, bool) {
 	return uid, true
 }
 
-// randomPassword 管理员重置密码用随机口令（16 位无歧义字符集）
+// randomPassword 管理员重置密码用随机口令（16 位无歧义字符集；crypto/rand 读 16 字节按字符集取模映射）
 func randomPassword() string {
 	const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
 	b := make([]byte, 16)
@@ -329,5 +328,5 @@ func randomPassword() string {
 	for i := range b {
 		out[i] = chars[int(b[i])%len(chars)]
 	}
-	return hex.EncodeToString([]byte{}) + string(out)
+	return string(out)
 }

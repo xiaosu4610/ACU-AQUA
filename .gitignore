@@ -41,6 +41,7 @@ gpt_email_account.txt
 aqua-linux
 aqua-linux-new
 aqua-gateway-go-linux
+/aqua-gateway-go-*
 assets/*
 !assets/aqua-gateway-go-linux-amd64
 /bin/
@@ -66,4 +67,18 @@ config.toml
 *.db-wal
 aqua-gateway-go-new
 
+# Trae 项目记忆（含运维拓扑，不入库）
+/.trae/
+
 accounts_MS*.txt
+
+# Kiro 上游账号凭证（真实凭据，绝不入库；20260922）
+/kiro.md
+/kiro-accounts.json
+/kiro-credentials.json
+
+# 根目录杂物（浏览器另存的 robots、素材图、临时文件夹——均非源码；20260924 清理）
+/robots (1).txt
+/秘塔AI图片素材.png
+/新建文件夹/
+**/kiro-credentials.json

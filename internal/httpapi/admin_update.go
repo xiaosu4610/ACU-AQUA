@@ -17,13 +17,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,6 +54,16 @@ func (a *App) updateAPIBase() string {
 		return b
 	}
 	return giteeAPIBase
+}
+
+// isGiteeURL URL 主机是否为 gitee.com 官方域名（含子域）。
+// token/access_token 只允许发给 gitee，避免私有仓库令牌泄露给镜像源或跳板反代。
+func isGiteeURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return u.Host == "gitee.com" || strings.HasSuffix(u.Host, ".gitee.com")
 }
 
 // updateCfg 归一化更新配置（默认值兜底）
@@ -112,7 +125,7 @@ func (a *App) fetchGiteeReleases(repo, token string) []giteeRelease {
 		return nil
 	}
 	u := fmt.Sprintf("%s/repos/%s/releases?per_page=10", a.updateAPIBase(), repo)
-	if token != "" {
+	if token != "" && isGiteeURL(u) {
 		u += "&access_token=" + token
 	}
 	resp, err := a.updateHTTPClient(4 * time.Second).Get(u) // 海外被拦时 TLS 挂死，4 秒足以断定
@@ -290,14 +303,26 @@ func (a *App) assetRawURLs(mirrorRepo, repo, tag, assetDir, asset string) []stri
 	return out
 }
 
+// updateApplyMu apply 全程互斥：重试/并发触发时保护"备份→替换→清理"关键段，
+// 防止第二请求在第一请求替换中途 Rename 同一二进制或误删其回滚副本
+var updateApplyMu sync.Mutex
+
 // —— POST /v1/admin/update/apply ——（高危：二次密码）
 func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAdmin(w, r); !ok {
 		return
 	}
+	updateApplyMu.Lock()
+	defer updateApplyMu.Unlock()
 	repo, mirrorRepo, token, asset, assetDir, service, enabled := a.updateCfg()
 	if !enabled {
 		errAdmin(w, 403, "invalid_request", "在线更新未启用（config [update] enabled=true 且配置仓库）")
+		return
+	}
+	// Windows 上 systemd 重启链路不存在（detachStart 静默不重启），
+	// 置换文件只会白白备份/替换却无法生效——任何实质动作前直接拒绝
+	if runtime.GOOS != "linux" {
+		errAdmin(w, 400, "bad_request", "在线更新仅支持 Linux 生产环境")
 		return
 	}
 	var req struct {
@@ -342,7 +367,7 @@ func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 	var lastErr error
 	downloaded := false
 	for _, dl := range candidates {
-		if err := downloadAsset(dl, token, tmpPath); err != nil {
+		if err := a.downloadAsset(dl, token, tmpPath); err != nil {
 			lastErr = err
 			_ = os.Remove(tmpPath)
 			continue
@@ -360,15 +385,17 @@ func (a *App) handleAdminUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 备份 + 原子替换
+	// 备份 + 原子替换。备份名带秒级时间戳：重试/并发（互斥锁兜底）下每次备份
+	// 都唯一，绝不覆盖/删除既有的回滚副本（旧实现按版本号命名且先 Remove，
+	// 一次误触发即可销毁唯一备份）。
 	exe := exePath()
-	bakPath := exe + ".bak." + gatewayVersion
-	_ = os.Remove(bakPath)
+	bakPath := exe + ".bak." + time.Now().UTC().Format("20060102T150405Z")
 	if err := os.Rename(exe, bakPath); err != nil {
 		_ = os.Remove(tmpPath)
 		errAdmin(w, 500, "internal_error", "备份当前二进制失败："+shortErr(err))
 		return
 	}
+	pruneOldBackups(exe)
 	if err := os.Rename(tmpPath, exe); err != nil {
 		_ = os.Rename(bakPath, exe) // 回滚
 		errAdmin(w, 500, "internal_error", "替换二进制失败（已回滚）："+shortErr(err))
@@ -420,17 +447,54 @@ func exePath() string {
 	return p
 }
 
-// downloadAsset 流式下载附件
-func downloadAsset(url, token, dest string) error {
+// pruneOldBackups 按前缀 <exe>.bak. 清理历史备份：按修改时间保留最近 3 个，
+// 更旧的删除。清理失败仅记日志不阻断更新（备份堆积无害，删除备份失败更不该卡住主流程）。
+func pruneOldBackups(exe string) {
+	dir := filepath.Dir(exe)
+	prefix := filepath.Base(exe) + ".bak."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		log.Printf("[update] 清理旧备份：列目录失败: %v", err)
+		return
+	}
+	var baks []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
+			baks = append(baks, e)
+		}
+	}
+	if len(baks) <= 3 {
+		return
+	}
+	sort.Slice(baks, func(i, j int) bool {
+		ti, ei := baks[i].Info()
+		tj, ej := baks[j].Info()
+		if ei != nil || ej != nil {
+			return ej != nil // 取不到 ModTime 的条目排后面
+		}
+		return ti.ModTime().After(tj.ModTime())
+	})
+	for _, e := range baks[3:] {
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			log.Printf("[update] 清理旧备份 %s 失败: %v", e.Name(), err)
+		}
+	}
+}
+
+// maxAssetBytes 附件体积上限 200MB（防呆上限，正常 linux/amd64 网关二进制远小于此）
+const maxAssetBytes = 200 << 20
+
+// downloadAsset 流式下载附件（App 方法：复用 updateHTTPClient 的代理出口配置）
+func (a *App) downloadAsset(url, token, dest string) error {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	if token != "" {
+	// Authorization 是 gitee 私有仓凭据，只发给 gitee 官方域名
+	if token != "" && isGiteeURL(url) {
 		req.Header.Set("Authorization", "token "+token)
 	}
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := a.updateHTTPClient(300 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}
@@ -438,17 +502,29 @@ func downloadAsset(url, token, dest string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxAssetBytes {
+		return fmt.Errorf("附件超过 200MB 上限（Content-Length %d）", resp.ContentLength)
+	}
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	n, err := io.Copy(f, io.LimitReader(resp.Body, 200<<20))
+	// LimitReader 多读 1 字节：恰好 200MB 的附件读完 err==nil 时，
+	// n>上限 才能识别"被截断/超限"，避免把截断文件误判为下载成功
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxAssetBytes+1))
 	if err != nil {
 		return err
 	}
+	if n > maxAssetBytes {
+		return fmt.Errorf("附件超过 200MB 上限")
+	}
 	if n < 1<<20 {
 		return fmt.Errorf("附件过小（%d 字节），疑似损坏", n)
+	}
+	// 声明长度可得时校验落盘大小一致（完整性兜底；上游元数据无可解析 sha256）
+	if resp.ContentLength > 0 && n != resp.ContentLength {
+		return fmt.Errorf("附件不完整（已下载 %d / 声明 %d 字节）", n, resp.ContentLength)
 	}
 	return nil
 }

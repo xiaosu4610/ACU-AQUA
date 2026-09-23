@@ -15,6 +15,9 @@ export interface SiteMeta {
   rate_promo_vip: string
   announcement: string
   announcement_enabled: boolean
+  ad_image: string
+  ad_link: string
+  ad_label: string
 }
 
 const meta = ref<SiteMeta | null>(null)

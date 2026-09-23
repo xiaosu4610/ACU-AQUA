@@ -80,6 +80,11 @@ func (a *App) battleOneArena(model, prompt string, maxTokens int64) (string, map
 
 // handleArena POST /v1/arena —— 发起盲测对决
 func (a *App) handleArena(w http.ResponseWriter, r *http.Request) {
+	// 无鉴权公开接口：写操作按 IP 限频（与 chat/images 共享防刷滑窗；uid 不可得，投票另有 battle_id 唯一约束兜底）
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	v, ok := readToolJSON(w, r)
 	if !ok {
 		return
@@ -137,6 +142,11 @@ func (a *App) handleArena(w http.ResponseWriter, r *http.Request) {
 
 // handleVote POST /v1/arena/vote —— 盲测投票并揭晓身份
 func (a *App) handleVote(w http.ResponseWriter, r *http.Request) {
+	// 无鉴权公开接口：写操作按 IP 限频（battle_id 唯一约束只防重复票，防不了刷票脚本）
+	if !guard.allow(clientIP(r)) {
+		guardReject(w)
+		return
+	}
 	v, ok := readToolJSON(w, r)
 	if !ok {
 		return

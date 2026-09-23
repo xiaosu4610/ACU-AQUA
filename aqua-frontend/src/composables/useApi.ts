@@ -2,7 +2,8 @@
 export function detectGateway(): string {
   // 前台与网关同级约定：acu.* → api.*（主机名推导，acu.ltzy.top → api.ltzy.top）
   if (location.hostname.startsWith('acu.')) return 'https://api.' + location.hostname.slice(4) + '/v1'
-  // ltzy.top 主站（aqua.ltzy.top）：接口域名按惯例固定 api.ltzy.top（20260919 站长指定）
+  // ltzy.top 系域名（站点主域 acu.ltzy.top 及防呆域 aqua.ltzy.top）：接口固定 api.ltzy.top
+  // （20260920 域名统一后主域改为 acu.ltzy.top；api.ltzy.top 作为接口域长期保留）
   if (location.hostname.endsWith('.ltzy.top')) return 'https://api.ltzy.top/v1'
   // 局域网部署：前端 8788 / API 8787
   if (location.port === '8788') return `${location.protocol}//${location.hostname}:8787/v1`

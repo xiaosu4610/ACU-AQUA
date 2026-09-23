@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"acu-aqua/gateway/internal/config"
 	"acu-aqua/gateway/internal/db"
@@ -54,7 +56,102 @@ func New(c *config.Cfg, d *db.DBx) *App {
 	app.StartMailProbe()
 	// 邀请返利结算器（消费计费成功队列，invite.go）
 	app.StartInviteRebater()
+	// 数据保留清理（管理端承诺 90 天自动清理，admin_stats.go 文案）：requests/error_events 留 90 天，arena_battles 留 7 天
+	app.startRetentionCleaner()
+	// 支付订单对账（漏单自愈）：回调丢失/回调域名不可达时主动向上游查单补账，20260919
+	app.startPayReconciler()
 	return app
+}
+
+// startPayReconciler 支付订单对账：启动 2 分钟后首跑，此后每 10 分钟一轮。
+// 背景（20260919 生产实锤）：notify_base 曾配置到不可达域名，回调收不到 → 订单滞留 pending，
+// 用户已付款但余额不到账（仅靠前端轮询 /pay/status 的 10 秒查单自愈，用户关页面即漏单）。
+func (a *App) startPayReconciler() {
+	// 任一通道配好就要跑对账：自挂平台回调**只发一次不重试**，对账是硬兜底
+	if (a.Cfg.EPay.Gateway == "" || a.Cfg.EPay.PID == "" || a.Cfg.EPay.Key == "") &&
+		(a.Cfg.Pay.Xiaofeng.Gateway == "" || a.Cfg.Pay.Xiaofeng.PID == "" || a.Cfg.Pay.Xiaofeng.Key == "") {
+		return // 两条通道都没配置，无需对账
+	}
+	go func() {
+		time.Sleep(2 * time.Minute)
+		for {
+			a.payReconcileOnce()
+			time.Sleep(10 * time.Minute)
+		}
+	}()
+}
+
+// payReconcileOnce 扫描 2 分钟~7 天内仍 pending 的订单，逐笔向上游查单：
+// 已支付则补账（epaySettle 幂等），未支付保持 pending。单轮上限 50 笔（防上游限流）。
+// ⚠️ 排序必须 ASC（20260922 修）：原为 `ORDER BY id DESC` 只取**最新** 50 笔，而 pending 长期
+// 有数百笔 → 新订单不断挤占窗口，**旧 pending 永远轮不到**，回调一旦丢失即永久漏账。
+// 本函数只是**兜底**（正常路径靠回调 + 用户点"我已支付立即查询"），故取最旧的先补，
+// 保证任何 pending 订单都在有限轮次内被覆盖，不会饿死。
+func (a *App) payReconcileOnce() {
+	now := time.Now().Unix()
+	rows, err := a.DB.Query(`SELECT out_trade_no, amount_micro, COALESCE(provider,'epay') FROM payments
+		WHERE status='pending' AND created_ts < ? AND created_ts > ? ORDER BY created_ts ASC LIMIT 50`,
+		now-120, now-7*86400)
+	if err != nil {
+		log.Printf("[pay] 对账查询失败: %v", err)
+		return
+	}
+	type item struct {
+		no       string
+		amount   int64
+		provider string
+	}
+	var list []item
+	for rows.Next() {
+		var it item
+		if rows.Scan(&it.no, &it.amount, &it.provider) == nil {
+			list = append(list, it)
+		}
+	}
+	rows.Close()
+	settled := 0
+	for _, it := range list {
+		if a.payQueryAndSettle(it.provider, it.no, it.amount) {
+			settled++
+		}
+	}
+	if settled > 0 {
+		log.Printf("[pay] 对账补账完成：扫描 %d 笔，补账 %d 笔", len(list), settled)
+		a.auditAppend("pay_reconcile", 0, fmt.Sprintf("scanned=%d settled=%d", len(list), settled), "")
+	}
+}
+
+// startRetentionCleaner 数据保留清理：启动即跑一次，此后每 24h 一轮
+func (a *App) startRetentionCleaner() {
+	go func() {
+		time.Sleep(time.Minute) // 等服务就绪
+		for {
+			a.retentionCleanOnce()
+			time.Sleep(24 * time.Hour)
+		}
+	}()
+}
+
+// retentionCleanOnce 按 retention 承诺清理过期台账（清理失败仅记日志，不阻断其余表）
+func (a *App) retentionCleanOnce() {
+	now := time.Now().Unix()
+	for _, j := range []struct {
+		table  string
+		cutoff int64
+	}{
+		{"requests", now - 90*86400},
+		{"error_events", now - 90*86400},
+		{"arena_battles", now - 7*86400},
+	} {
+		res, err := a.DB.Exec("DELETE FROM "+j.table+" WHERE ts < ?", j.cutoff)
+		if err != nil {
+			log.Printf("[retention] %s 清理失败: %v", j.table, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[retention] %s 已清理 %d 行（%d 天前）", j.table, n, (now-j.cutoff)/86400)
+		}
+	}
 }
 
 // lineByID 线查找（读锁）

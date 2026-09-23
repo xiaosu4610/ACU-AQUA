@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -56,6 +57,18 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 401, "invalid_api_key", "请先登录或提供有效的 API 密钥")
 		return
 	}
+	// 密钥有效期 + 分发配额（P4，与 chat 同口径）
+	if actx.KeyExpired {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, false, "key_expired", 401)
+		errOut(w, 401, "key_expired", "该 API 密钥已过期：请在控制台延长有效期或新建一把密钥")
+		return
+	}
+	keyQ, _ := a.keyQuotaGet(actx.KeyID)
+	if code, msg := keyQuotaCheck(keyQ); code != "" {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, false, code, 403)
+		errOut(w, 403, code, msg)
+		return
+	}
 	lineID, siteID, hasPrefix := config.SplitModel(req.Model)
 	unified := hasPrefix && a.Cfg.Billing.UnifiedPrefix != "" && lineID == a.Cfg.Billing.UnifiedPrefix
 	var line *config.Line
@@ -77,7 +90,11 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 			errOut(w, 403, "free_grp_restricted", "当前密钥为纯免费分组，仅可调用免费模型；收费模型请到控制台切换密钥分组")
 			return
 		}
-		line = a.lineForMode(grp)
+		// 模型感知选线（与 chat 同一机制，20260919 计费审计修复）：
+		// 原用 lineForMode(grp) 取"配置顺序首条同模式线"——per_token 组首条是 codex（GPT 账号池），
+		// 图片模型挂在 tide/prime 上时会 404「模型不存在或不支持图片生成」，
+		// 用户明明在列表里看得到却调不通。改用 lineForModel 在同模式各线里按模型定位。
+		line = a.lineForModel(grp, siteID)
 		if line == nil {
 			if grp == "per_call" {
 				// 按次线临时下架（admin_lines.enabled=0）：明确告知并引导切换按量分组
@@ -104,6 +121,13 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fullID := config.ModelFullName(line.ID, siteID)
+	// 软下架（20260923）：图片模型标记维护 → 503（与 chat 同一口径；DB 记录保留，清标记即恢复）
+	if model.Maintenance {
+		a.failRequest0(actx.UserID, actx.KeyHash, req.Model, false, "model_maintenance", 503)
+		errOut(w, 503, "model_maintenance",
+			"模型 "+req.Model+" 维护中，暂不可用（配置与数据已保留，恢复后即可继续调用）；其他模型不受影响")
+		return
+	}
 	// 生效单价（价格组 + 活动价；pricing 键 = 目标线全名）
 	grp := billing.UserPriceGrp(a.DB.DB, actx.UserID, "per_call")
 	pricing := a.pricingFor(fullID, grp)
@@ -111,18 +135,55 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 404, "model_not_found", "该模型已下架或暂不可用")
 		return
 	}
+	// 按张成本保本校验（20260919 计费审计）：售价 < 成本×1/0.97 时每卖一张亏一张。
+	// 事前防线（管理台保存时告警）+ 此处运行期兜底（覆盖直接改 DB / 活动价配错）。
+	a.warnIfBelowCost(line, pricing, model, pricing.PriceMicro)
+	// crowd 线（acu/ 众筹线，20260921 恢复）：请求前过**池子闸门**，不预扣个人余额
+	// （池子是共享钱包；扣池在 settleFor 的 crowd 分支完成）
+	isCrowd := line.Mode == "crowd"
+	if isCrowd {
+		if st, code, msg := a.poolGate(actx.UserID); st != 0 {
+			a.failRequest0(actx.UserID, actx.KeyHash, req.Model, false, code, st)
+			errOut(w, st, code, msg)
+			return
+		}
+		// 防刷：每用户在途并发上限（无并发闸会让单用户无限打上游）
+		rel, ok := guard.crowdEnter(actx.UserID)
+		if !ok {
+			a.failRequest0(actx.UserID, actx.KeyHash, req.Model, false, "crowd_busy", 429)
+			errOut(w, 429, "crowd_busy", "当前调用过于频繁（众筹模型每用户同时最多 3 路请求），请等待在途请求完成后再试")
+			return
+		}
+		defer rel()
+	}
 	rid := a.insertRequestLine(actx.UserID, actx.KeyHash, "images", req.Model, false, line.ID)
-	prehold := pricing.PriceMicro * req.N
-	if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid); err != nil {
-		a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写
-		errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
+	if rid == 0 {
+		// 落库失败必须终止：rid=0 的预扣流水永远不会被补偿任务兜底（悬空查询带 request_id>0）
+		errOut(w, 500, "internal_error", "请求记录失败")
 		return
+	}
+	// 密钥配额消耗（P4，与 chat 同口径）：结算完成后统一累加（失败/退款不占配额）
+	defer a.keyQuotaSettle(rid, actx.KeyID, keyQ)
+	prehold := int64(0)
+	if !isCrowd {
+		prehold = pricing.PriceMicro * req.N
+		// 图片模型一律按次计费 → 恒主钱包（2 号折扣钱包只服务按量线的白名单模型）
+		if err := billing.Prehold(a.DB.DB, actx.UserID, prehold, rid, billing.WalletMain); err != nil {
+			if errors.Is(err, billing.ErrAccountDisabled) {
+				a.failRequest(rid, "account_disabled", 403)
+				errOut(w, 403, "account_disabled", "账户已被禁用，请联系站长处理")
+				return
+			}
+			a.failRequest(rid, "insufficient_quota", 429) // 诊断 D2：Prehold 失败路径必须回写
+			errOut(w, 429, "insufficient_quota", "余额不足：使用收费模型须保持账户 0 元以上余额，请先到控制台充值（先付后用，绝不透支）")
+			return
+		}
 	}
 
 	// 上游
 	upBody, err := replaceModel(body, model.UpstreamID)
 	if err != nil {
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "internal")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "internal")
 		a.failRequest(rid, "internal_error", 500)
 		errOut(w, 500, "internal_error", "请求处理失败")
 		return
@@ -130,7 +191,7 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	client, cerr := a.clientFor(line.ID)
 	if cerr != nil {
 		// 线刚被热重载停用/删除：预扣全额退回（旧实现此处 panic）
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "line_removed")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "line_removed")
 		a.failRequest(rid, "line_removed", 503)
 		errOut(w, 503, "service_unavailable", "线路配置刚刚更新，请稍后重试")
 		return
@@ -141,28 +202,28 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if ctxDone(r.Context()) || errors.Is(err, context.Canceled) {
 			// 客户端在等待上游响应期间主动断开：与模型健康无关
-			a.settleSafely(actx.UserID, prehold, 0, rid, 0, "client_cancel")
+			a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "client_cancel")
 			a.failRequest(rid, "client_cancel", 499)
 			return
 		}
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_error")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_error")
 		a.failRequest(rid, "upstream_error", 502)
-		errOut(w, 502, "upstream_error", "线路繁忙：已自动换线重试仍失败，请稍后重试")
+		errOut(w, 502, "upstream_error", "绘图通道暂时没有响应，请稍后重试")
 		return
 	}
 	defer resp.Body.Close()
 	if key != nil {
-		a.setRequestKeyIdx(rid, key.Idx)
+		a.setRequestKeyIdx(rid, key.RawIdx)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_status")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_status")
 		a.failRequest(rid, "read_error", 502)
 		errOut(w, 502, "upstream_error", "上游服务错误，请稍后重试")
 		return
 	}
 	if resp.StatusCode != 200 {
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "upstream_status")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "upstream_status")
 		a.failRequest(rid, "upstream_status", resp.StatusCode)
 		// 信息隔离：上游报错转译为站点标准错误码，不透传原文
 		upstreamErrOut(w, resp.StatusCode, raw)
@@ -177,13 +238,14 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if err := jsonUnmarshal(raw, &jr); err != nil || len(jr.Data) == 0 {
-		a.settleSafely(actx.UserID, prehold, 0, rid, 0, "bad_response")
+		a.settleFor(line, actx.UserID, prehold, 0, rid, 0, "bad_response")
 		a.failRequest(rid, "bad_response", 502)
 		errOut(w, 502, "upstream_error", "上游响应异常，请稍后重试")
 		return
 	}
-	// 实际张数计费（n=3 但上游只回 2 张 → 只收 2 张）
-	count := int64(0)
+	// URL 重写 + 防泄露：缓存失败的条目整体剔除（上游原始 URL/B64JSON 绝不残留在响应里），
+	// count 只统计实际交付张数（计费按交付计）
+	kept := jr.Data[:0]
 	for i := range jr.Data {
 		d := &jr.Data[i]
 		localID, err := a.cacheImage(d.URL, d.B64JSON)
@@ -192,18 +254,20 @@ func (a *App) handleImages(w http.ResponseWriter, r *http.Request) {
 		}
 		d.URL = "/v1/images/file/" + localID
 		d.B64JSON = ""
-		count++
+		kept = append(kept, *d)
 	}
+	jr.Data = kept
+	count := int64(len(kept))
 	final := pricing.PriceMicro * count
 	face := int64(0)
 	if count > 0 {
 		face = model.PerImageCost * count
 	}
-	a.settleSafely(actx.UserID, prehold, final, rid, final, "billed_images")
+	a.settleFor(line, actx.UserID, prehold, final, rid, final, "billed_images")
 	// 面值台账（按张成本）
 	if face > 0 && key != nil {
 		client.Pool.ReportFace(key, face)
-		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.Idx, key.InitialMicro, face, rid)
+		_ = billing.LineKeyReport(a.DB.DB, line.ID, key.RawIdx, key.InitialMicro, face, rid)
 	}
 	// 按张计费不看 token，usage_source 记 estimated（token 口径无上游 usage）
 	a.okRequest(rid, billing.Usage{}, final, face, "estimated", time.Since(start).Milliseconds(), 200)
@@ -221,9 +285,9 @@ func (a *App) handleFreeImages(w http.ResponseWriter, r *http.Request, body []by
 }, uid int64, keyHash string) {
 	start := time.Now()
 	model := config.NormalizeModel(req.Model)
-	fline, fm := a.Cfg.FindFreeModel(model)
+	fline, fm := config.FindFreeModel(a.linesSnap(), model)
 	if fm == nil || !fm.Image {
-		errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成：" + model)
+		errOut(w, 404, "model_not_found", "模型不存在或不支持图片生成："+model)
 		return
 	}
 	upBody, err := replaceModel(body, fm.UpstreamID)
@@ -289,8 +353,12 @@ func (a *App) cacheImage(url, b64 string) (string, error) {
 		return "", err
 	}
 	if b64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return "", err // 非合法 base64：交给调用方剔除该条目，绝不把编码文本当图片落盘
+		}
 		p := filepath.Join(dir, id+".png")
-		if err := os.WriteFile(p, []byte(b64), 0o644); err != nil {
+		if err := os.WriteFile(p, raw, 0o644); err != nil {
 			return "", err
 		}
 		imageMu.Lock()

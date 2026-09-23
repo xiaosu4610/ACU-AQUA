@@ -49,6 +49,9 @@ var settingsKeys = map[string]bool{
 	"qq_group2": true, "qq_group_url2": true,
 	"rate_promo": true, "rate_normal": true, "rate_promo_vip": true,
 	"announcement": true, "announcement_enabled": true,
+	"docs_url": true,
+	// 合作推广位（20260919：秘塔 AI 等广告后台可管，空=不展示）
+	"ad_image": true, "ad_link": true, "ad_label": true,
 }
 
 // handleMeta 公开元信息：site 字段支持 DB 覆盖 + 公告直达前端（免再发请求）
@@ -66,6 +69,10 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"rate_promo_vip":       a.siteOverride("rate_promo_vip", a.Cfg.Site.RatePromoVip),
 		"announcement":         a.settingsGet("announcement"),
 		"announcement_enabled": a.settingsGet("announcement_enabled") == "1",
+		// 合作推广位（后台 settings 可改；链接/图/文案三键齐备才展示）
+		"ad_image": a.settingsGet("ad_image"),
+		"ad_link":  a.settingsGet("ad_link"),
+		"ad_label": a.settingsGet("ad_label"),
 	})
 }
 
