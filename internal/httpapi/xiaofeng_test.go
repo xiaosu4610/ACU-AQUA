@@ -410,3 +410,95 @@ func TestPayNotify_RejectsCrossProviderCallback(t *testing.T) {
 		t.Fatalf("跨通道回调不得入账，余额应为 0，得 %d", got)
 	}
 }
+
+// —— 在线充值总开关（20260924 站长指令：关闭支付接口）——
+//
+// 红线：**只拦新单**。已下单待支付的用户付了钱必须照常到账，
+// 否则就是"收了钱不发货"——比停售本身严重得多。
+func TestPayEnabled_SwitchBlocksNewOrdersOnly(t *testing.T) {
+	app, _, _ := newTestApp(t)
+	xfTestSetup(t, app)
+	uid, tok := seedPoolUser(t, app, 0)
+	// settings 建表走包级 sync.Once（绑定首个 testApp 的 DB），同进程后续测试的
+	// 新内存库不会自动建表 → 这里显式建，否则直接 INSERT 会撞 "no such table: settings"。
+	if _, err := app.DB.Exec(settingsSchema); err != nil {
+		t.Fatal(err)
+	}
+
+	// ① 无 pay_enabled 键 → 默认开放（加开关这个动作本身不得把支付关掉）
+	if !app.payEnabled() {
+		t.Fatal("settings 无 pay_enabled 键时应默认开放")
+	}
+	rec, out := doJSON(t, app.Routes(), "POST", "/v1/pay/create", tok, map[string]any{
+		"amount_micro": 1_000_000, "channel": "wxpay", "product": "balance",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("默认应可下单，得 %d：%v", rec.Code, out)
+	}
+
+	// ② 显式 "0" → 新单 503 pay_disabled，且**不落单**
+	if _, err := app.DB.Exec(`INSERT INTO settings (key,value,updated_ts) VALUES ('pay_enabled','0',?)
+		ON CONFLICT(key) DO UPDATE SET value='0'`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if app.payEnabled() {
+		t.Fatal("pay_enabled=0 应判定为已停售")
+	}
+	before := countRows(t, app, "SELECT COUNT(*) FROM payments")
+	rec, out = doJSON(t, app.Routes(), "POST", "/v1/pay/create", tok, map[string]any{
+		"amount_micro": 2_000_000, "channel": "wxpay", "product": "balance",
+	})
+	if rec.Code != 503 {
+		t.Fatalf("停售后下单应 503，得 %d：%v", rec.Code, out)
+	}
+	if out["error"] == nil {
+		t.Fatalf("应返回错误对象，得 %v", out)
+	}
+	if after := countRows(t, app, "SELECT COUNT(*) FROM payments"); after != before {
+		t.Fatalf("停售后不得落单，订单数 %d → %d", before, after)
+	}
+
+	// ③ 停售**不影响**已下单待支付订单的回调入账（核心红线）
+	if _, err := app.DB.Exec(`INSERT INTO payments
+		(out_trade_no, user_id, amount_micro, channel, product, provider, expire_ts, status, ip, created_ts)
+		VALUES ('PAYOFF1',?,3000000,'wxpay','balance','xiaofeng',0,'pending','',?)`,
+		uid, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{}
+	form.Set("pid", "XFPID")
+	form.Set("type", "wxpay")
+	form.Set("out_trade_no", "PAYOFF1")
+	form.Set("trade_no", "TOFF1")
+	form.Set("money", "3.00")
+	form.Set("trade_status", "TRADE_SUCCESS")
+	form.Set("sign_type", "MD5")
+	params := map[string]string{}
+	for k := range form {
+		params[k] = form.Get(k)
+	}
+	form.Set("sign", payMD5Sign(app.Cfg.Pay.Xiaofeng.Key, params))
+
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/pay/notify?"+form.Encode(), nil))
+	if rec.Code != 200 || rec.Body.String() != "success" {
+		t.Fatalf("停售期间回调仍须 200 success，得 %d %q", rec.Code, rec.Body.String())
+	}
+	if got := userBalanceOf(t, app, uid); got != 3_000_000 {
+		t.Fatalf("停售后已支付订单必须照常入账 3000000，得 %d", got)
+	}
+
+	// ④ 开关可逆：改回 "1" 即恢复开放（无需改配置/重启）
+	if _, err := app.DB.Exec("UPDATE settings SET value='1' WHERE key='pay_enabled'"); err != nil {
+		t.Fatal(err)
+	}
+	if !app.payEnabled() {
+		t.Fatal("pay_enabled=1 应恢复开放")
+	}
+	rec, out = doJSON(t, app.Routes(), "POST", "/v1/pay/create", tok, map[string]any{
+		"amount_micro": 3_000_000, "channel": "wxpay", "product": "balance",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("恢复开关后应可下单，得 %d：%v", rec.Code, out)
+	}
+}

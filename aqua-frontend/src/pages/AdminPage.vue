@@ -115,6 +115,7 @@ const SETTINGS_FIELDS: { key: string; label: string; ph: string; hint?: string }
   { key: 'rate_promo_vip', label: 'VIP 倍率', ph: '0.05' },
   { key: 'announcement', label: '全站公告内容', ph: '（支持一句自然文案，空=不展示）' },
   { key: 'announcement_enabled', label: '公告开关', ph: '1 开 / 0 关', hint: '仅 1 时前端展示公告' },
+  { key: 'pay_enabled', label: '在线充值开关', ph: '留空=开放 / 0=停售', hint: '填 0 停售：新单返回 503 且前端置灰，已下单待支付的回调入账不受影响。清空即恢复开放（无需重启）' },
 ]
 const settingsForm = ref<Record<string, string>>({})
 const settingsMsg = ref('')

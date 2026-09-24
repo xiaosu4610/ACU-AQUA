@@ -50,9 +50,16 @@ var settingsKeys = map[string]bool{
 	"rate_promo": true, "rate_normal": true, "rate_promo_vip": true,
 	"announcement": true, "announcement_enabled": true,
 	"docs_url": true,
+	// 在线充值总开关（20260924）：显式 "0" = 停售（新单 503），空/其他值 = 正常开放。
+	// 语义上用"仅 0 关闭"而非"仅 1 开启"——保证历史库无此键时行为不变（默认开放），
+	// 避免"加开关"这个动作本身把支付关掉。**已下单待支付的回调入账不受影响**。
+	"pay_enabled": true,
 	// 合作推广位（20260919：秘塔 AI 等广告后台可管，空=不展示）
 	"ad_image": true, "ad_link": true, "ad_label": true,
 }
+
+// payEnabled 在线充值是否开放（settings 显式 "0" 才关闭；无键=开放，保证默认行为不变）
+func (a *App) payEnabled() bool { return a.settingsGet("pay_enabled") != "0" }
 
 // handleMeta 公开元信息：site 字段支持 DB 覆盖 + 公告直达前端（免再发请求）
 func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +76,9 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"rate_promo_vip":       a.siteOverride("rate_promo_vip", a.Cfg.Site.RatePromoVip),
 		"announcement":         a.settingsGet("announcement"),
 		"announcement_enabled": a.settingsGet("announcement_enabled") == "1",
+		// 在线充值开关（20260924）：前端据此把「去支付」置灰并显示停售文案，
+		// 而不是让用户填完金额点下去才吃 503
+		"pay_enabled": a.payEnabled(),
 		// 合作推广位（后台 settings 可改；链接/图/文案三键齐备才展示）
 		"ad_image": a.settingsGet("ad_image"),
 		"ad_link":  a.settingsGet("ad_link"),

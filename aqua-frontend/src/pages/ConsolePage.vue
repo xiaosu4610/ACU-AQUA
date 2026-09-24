@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AqIcon from '@/components/AqIcon.vue'
 import CopyBtn from '@/components/CopyBtn.vue'
 import { apiJson, copyText, errText, fmt } from '@/composables/useApi'
+import { useMeta } from '@/composables/useMeta'
 import {
   avatarUrl, changeKeyGroup, changePassword, createKey, fetchBalanceAlert, fetchCheckup, isLoggedIn, listKeys, loadMe, logout,
   me, revealKey, revokeKey, setBalanceAlert, setKeyQuota, resetKeyQuota, uploadAvatar,
@@ -16,10 +17,18 @@ const router = useRouter()
 const route = useRoute()
 
 /* ===== 守卫 + 首屏加载 ===== */
+/* 站点元信息（20260924）：控制台需读 announcement（余额使用期限提醒）与 pay_enabled（停售置灰）。
+   与首页共用同一份 /v1/meta 单例，公告文案后台改完两处同时生效。 */
+const { meta, loadMeta } = useMeta()
+const announcementText = computed(() => (meta.value?.announcement_enabled ? meta.value?.announcement || '' : ''))
+/* pay_enabled 语义：后端显式 false 才停售；undefined（老后端/未加载）一律按开放，
+   避免前端先于后端上线时把充值入口误置灰。 */
+const payDisabled = computed(() => meta.value?.pay_enabled === false)
+
 onMounted(async () => {
   if (!isLoggedIn()) { router.replace('/login'); return }
   await loadMe()
-  await Promise.all([loadKeys(), loadUsage(), loadCheckup(), loadHistory(), loadBalance(), loadPayOrders(), loadBalanceAlert(), loadInvite(), loadDomains(), loadPool()])
+  await Promise.all([loadKeys(), loadUsage(), loadCheckup(), loadHistory(), loadBalance(), loadPayOrders(), loadBalanceAlert(), loadInvite(), loadDomains(), loadPool(), loadMeta()])
   // 从支付平台回跳（return_url → /pay/return → /console）时恢复待支付订单并继续轮询到账
   restorePendingPay()
 })
@@ -981,6 +990,13 @@ function fmtTime(ts: number): string {
         <p v-if="usageMsg" class="msg bad">{{ usageMsg }}</p>
         <p v-if="balanceMsg" class="msg bad">{{ balanceMsg }}</p>
 
+        <!-- 余额使用期限提醒（20260924 站长指令：关闭充值 + 通知用户尽快用完余额）。
+             文案与首页公告同源（/v1/meta 的 announcement），后台改一处两处同时生效。 -->
+        <div v-if="announcementText" class="banner warn">
+          <AqIcon name="info" :size="14" />
+          <span>{{ announcementText }}</span>
+        </div>
+
         <!-- KPI 行 -->
         <div class="kpis">
           <div class="kpi">
@@ -1439,7 +1455,16 @@ function fmtTime(ts: number): string {
 
       <!-- ▼▼▼ 余额充值 ▼▼▼ -->
       <div v-show="view === 'topup'">
-        <div class="banner warn">
+        <!-- 停售总提示（20260924）：置顶显示，明确"不要再支付"与"已付款仍到账"，
+             避免用户看到下面的充值卡以为还能充（后端已 503 拦截，这里只是别让人白填） -->
+        <div v-if="payDisabled" class="banner warn">
+          <AqIcon name="alert" :size="14" />
+          <span>
+            <b>在线充值已停止开放</b>——请勿再下单支付。已支付但未到账的订单仍会正常入账，如有疑问请联系站长。
+            <template v-if="announcementText"><br />{{ announcementText }}</template>
+          </span>
+        </div>
+        <div v-else class="banner warn">
           <AqIcon name="info" :size="14" />
           <span>在线充值支付金额 <b>100% 全额到账</b>（渠道手续费由本站承担）；本次充值进入您的个人余额，用于收费模型调用，与赞助等其它资金用途相互独立。</span>
         </div>
@@ -1467,7 +1492,7 @@ function fmtTime(ts: number): string {
             <!-- ⚠️ 必须带括号：写成 @click="createTopup" 时 Vue 会把 MouseEvent 当第一个实参传入，
                  于是 product 变成对象 → 请求体 product={"isTrusted":true,...} → 后端按 string
                  反序列化直接 400「请求体格式错误」，**余额充值整条链路不可用**（20260922 事故）。 -->
-            <button class="btn primary" :disabled="paying || !topupAmt" @click="createTopup()">
+            <button class="btn primary" :disabled="payDisabled || paying || !topupAmt" @click="createTopup()">
               {{ paying ? (queueInfo ? '排队中…' : '创建中…') : '去支付' }}
             </button>
             <!-- 排队时的逃生口：保证用户任何时候都能退出等待，绝不会"点了没反应又退不出来" -->
@@ -1514,7 +1539,7 @@ function fmtTime(ts: number): string {
             </div>
           </div>
           <div class="row wrap mt12">
-            <button class="btn primary" :disabled="wallet2Paying || !wallet2Amt" @click="createTopup('wallet2')">
+            <button class="btn primary" :disabled="payDisabled || wallet2Paying || !wallet2Amt" @click="createTopup('wallet2')">
               {{ wallet2Paying ? (queueInfo ? '排队中…' : '创建中…') : '充值到折扣钱包' }}
             </button>
             <button v-if="queueInfo && queueInfo.product === 'wallet2'" class="btn ghost" @click="cancelQueue()">取消排队</button>
@@ -1591,7 +1616,7 @@ function fmtTime(ts: number): string {
             </div>
           </div>
           <div class="row wrap mt12">
-            <button class="btn primary" :disabled="poolPaying || !poolAmt" @click="createTopup('pool')">{{ poolPaying ? (queueInfo ? '排队中…' : '创建中…') : '充值到池子' }}</button>
+            <button class="btn primary" :disabled="payDisabled || poolPaying || !poolAmt" @click="createTopup('pool')">{{ poolPaying ? (queueInfo ? '排队中…' : '创建中…') : '充值到池子' }}</button>
             <button v-if="queueInfo && queueInfo.product === 'pool'" class="btn ghost" @click="cancelQueue()">取消排队</button>
             <span v-if="poolMsg" class="dim">{{ poolMsg }}</span>
           </div>

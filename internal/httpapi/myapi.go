@@ -860,6 +860,13 @@ func (a *App) payCreate(w http.ResponseWriter, r *http.Request) {
 		errOut(w, 400, "bad_request", "请求体格式错误")
 		return
 	}
+	// 在线充值总开关（20260924 站长指令：关闭支付接口）。
+	// **只拦新单**——payNotify / payStatus / epaySettle 一律不动：已下单待支付的用户
+	// 付了钱必须照常到账，否则就是收了钱不发货。
+	if !a.payEnabled() {
+		errOut(w, 503, "pay_disabled", "在线充值已停止开放：请勿再下单支付。已支付但未到账的订单仍会正常入账，如有疑问请联系站长")
+		return
+	}
 	if req.Product == "" {
 		req.Product = "balance"
 	}

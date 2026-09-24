@@ -15,6 +15,8 @@ export interface SiteMeta {
   rate_promo_vip: string
   announcement: string
   announcement_enabled: boolean
+  /** 在线充值开关（20260924）：false = 已停售，前端应置灰充值入口并显示停售文案 */
+  pay_enabled: boolean
   ad_image: string
   ad_link: string
   ad_label: string
